@@ -1,0 +1,97 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.branch.remote",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.branch.remote",
+    "description": "Branching DSL flow driven by a previous sub-response and terminating on either a local or remote wrapper-backed capacity."
+  },
+  "functional": {
+    "#root": {
+      "role": "Read local state, branch on the returned context id, and choose a local or remote wrapper-backed terminal call.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_engine_route": "A local engine-native state read is awaited.",
+        "branch_terminal_route": "The chosen terminal route invokes either a local or a remote wrapper-backed capacity."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific wrapper terminal response selected from a previous local engine-native sub-response.",
+        "invariants": [
+          "The branch condition is evaluated only after a successful local read.state result is available.",
+          "Exactly one terminal wrapper route is selected between the remote and local branches.",
+          "Branching is driven only by local_state.payload.context.context_id."
+        ],
+        "success": [
+          "On success, the terminal payload comes from either the remote or local sandbox.echo route selected by the branch.",
+          "When the context id matches /root/alpha_child, the successful branch is the remote wrapper route."
+        ],
+        "failure": [
+          "The flow fails if the local read.state precondition step cannot complete.",
+          "The flow also fails if the selected terminal branch route cannot execute."
+        ],
+        "notes": [
+          "This scenario is the simplest proof that DSL branch decisions can switch between local and remote wrapper terminals.",
+          "Only the selected branch is executed."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "local_state"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$local_state.payload.context.context_id",
+                  "op": "eq",
+                  "right": "/root/alpha_child"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                    "with": {
+                      "message": "branched-remote"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "branched-local"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

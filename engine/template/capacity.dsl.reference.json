@@ -1,0 +1,293 @@
+{
+  "_comment": "DSL operator reference for kind='dsl' capacities. Every executable node the engine supports, with all fields, constraints, and runtime semantics. Read this when writing or debugging a resolution plan. All _note fields are documentation-only.",
+
+  "_resolution_rules": {
+    "one_node_per_object": "Each resolution object must contain exactly one runtime node key (invoke, output, >sequence, >parallel, >if, >switch, >for_each, >while, >race) or one sub-section key (#name). Having two runtime nodes in the same object is invalid.",
+    "runtime_ref_syntax": "Values starting with '$' are resolved at execution time. Forms: '$input.<field>' (root input param), '$<alias>' (full response of a prior invoke), '$<alias>.payload.<field>' (field from a prior invoke payload), '$<alias>.payload.<field>.<nested>' (nested path). Literal values (strings, numbers, booleans) are passed as-is.",
+    "capacity_ref_forms": "The @capacity field in invoke accepts: absolute Brique path ('/root/ctx/cap.name'), external ref ('@ext_<pubkey>:/ctx/cap'), runtime ref ('$input.<field>' or '$alias'). Relative refs ('./cap') are forbidden for kind='dsl'. @capacity only supplies the (context, cap_name) pair — it never implies which family the target belongs to. It works identically for a user capacity (e.g. '/root/ctx/my_cap') and for an engine-native capacity (e.g. '/root/ctx/matter.create', '/root/ctx/context.start') as long as 'to_type' (see invoke.to_type below) is set to the matching family.",
+    "sub_sections": "A key starting with '#' is a named sub-section. The engine evaluates its resolution. Sub-sections without resolution return empty OK."
+  },
+
+  "_architecture": {
+    "_comment": "The architectural model these operators serve. Read this once before writing your first resolution of a session — every rule below constrains what a valid capacity looks like, not just how it runs.",
+
+    "purity": "A capacity holds no state between two invocations — each run starts from nothing but the incoming intention. Everything a resolution uses must come from $input, from the responses of its own invokes, or from literals. If the behavior you are writing needs memory across invocations, that memory is a matter: read it, decide, write it. If it needs heavy or native computation, that computation is a wrapper-backed capacity: invoke it. Never simulate state through clever flow.",
+
+    "stratification": "Three layers, never mixed: transformation (the plans in this file — pure, composable, replayable), state (matter, contracted by schema), computation (wrapper code). A resolution orchestrates and specifies; it never computes and never stores.",
+
+    "sections_and_grain": "A section (#name) is a contract — role, inputs, outputs, transformation_contract — with an OPTIONAL resolution. A section without resolution is a complete architectural statement: the behavior is deliberately left open, framed by the contract and by the context's intention documents. Never fill an open section unless the architect asks. Conversely, when the architect gives an explicit flow, translate it exactly — do not restructure it into your preferred shape. The grain of formalization is the architect's decision, branch by branch.",
+
+    "fractality": "One gesture at every depth: establish the responsibility (role + contract), then — if and only if decided — organize the behavior (resolution of flow, invokes, further sections). When a resolution grows complex, decompose it into sections along responsibility lines before reaching for deeper nesting of raw control nodes: a named contract at each level is what keeps complexity legible.",
+
+    "coupling": "Every '$alias.payload.<field>' you write declares a dependency on that exact field of the invoked capacity's contract. Reference only fields the retrieved contract actually declares in its outputs — a reference to an undeclared field is a latent breakage that no one will see until runtime. These refs are the machine-readable record of who depends on what: keep them honest.",
+
+    "decomposition_patterns": {
+      "_comment": "Behaviors you will instinctively look for that are deliberately NOT operators. Decompose them:",
+      "state_over_time": "Read a matter, decide, write the matter. The feedback loop runs through the world, never inside the capacity.",
+      "state_machine": "The state lives in a matter; each transition is a pure capacity invoked on it.",
+      "wait_for_event": "No blocking node exists. A matter subscription routes the event to a capacity that resumes the work — long-running behavior is several pure capacities connected through matters.",
+      "conversation": "Multi-turn exchange state lives in a matter (its schema contracts the turns); the protocol, when worth formalizing, is its own orchestrating capacity.",
+      "transform_data": "The DSL never reshapes business data. Counting, filtering, extracting, merging results is a transformation — express it as a capacity and invoke it, however trivial. Do not rebuild data structures inside 'output'.",
+      "compensation": "No automatic rollback. Effectful capacities may declare 'compensated_by' in their contract; your flow honors those declarations explicitly on its failure path, in reverse completion order (see _common_patterns.compensating_sequence)."
+    },
+
+    "when_stuck": "If a behavior seems impossible to express with these operators, do not invent a node, do not abuse an existing one, and do not move logic into output reshaping. Decompose across capacity, matter, and wrapper — or bring the question back to the architect."
+  },
+
+  "invoke": {
+    "_comment": "Execute one Brique capacity and optionally bind the response to an alias.",
+    "@capacity": "/root/ctx/cap.name | @ext_<pubkey>:/ctx/cap | $input.<field> | $alias",
+    "_capacity_note": "Required.",
+    "to_type": "user",
+    "_to_type_note": "Optional. The family the target capacity belongs to. Defaults to 'user' when absent — omit this field entirely when invoking a user-defined capacity (one that appears under a context's capacity/ directory). Set explicitly to 'reflexive', 'matter', 'execution', or 'control' to invoke an engine-native capacity by the same @capacity address form, e.g. @capacity: '/root/ctx/matter.create' with to_type: 'matter', or @capacity: '/root/ctx/context.start' with to_type: 'control'. The engine performs no other lookup to guess the family — an engine capacity invoked with the wrong or default to_type resolves to a nonexistent user capacity and fails with unknown_cap.",
+    "with": {
+      "_comment": "Optional. All values are resolved as runtime refs or passed as literals. Supported keys:",
+      "<param_name>": "$input.<field> | $alias.payload.<field> | <literal>",
+      "@matter": {
+        "<repr_name>": "$input.<matter_slot> | /root/ctx/matter_id",
+        "_note": "Binds a matter ref to the named repr slot declared in the target capacity inputs."
+      },
+      "@schema": "/root/schema/name | $alias.path",
+      "@structure": "/root/structure/name",
+      "@document": "/root/document/name",
+      "@capacity": "/root/ctx/other.cap | $input.<capacity_slot>",
+      "_note": "@schema/@structure/@document/@capacity in 'with' pass element refs to the invoked capacity, not invocation targets."
+    },
+    "as": "alias_name",
+    "_as_note": "Optional. Binds the full response to this alias. Reference later as '$alias', '$alias.payload.field', '$alias.status'. Forbidden when await_response=false.",
+    "await_response": true,
+    "_await_response_note": "Optional boolean. Default true. When false: fire-and-forget — response not awaited, 'as' and 'retry' are forbidden.",
+    "timeout": { "ms": 5000 },
+    "_timeout_note": "Optional. Milliseconds to wait for response. ms must be >= 0. When absent, uses default_invoke_timeout_ms from context.json execution config, or no timeout if that is also absent.",
+    "retry": { "max": 2, "delay_ms": 200 },
+    "_retry_note": "Optional. Retry on error. max=number of additional attempts (>= 0). delay_ms=wait between attempts (>= 0). Forbidden when await_response=false.",
+    "on_error": "fail",
+    "_on_error_note": "Optional. What to do when the invoked capacity returns status='error'. Accepted values: 'fail' (default — propagates the error, stops the current branch), 'continue' (treats error as empty OK payload, continues), 'collect' (treats error as OK with payload { collected_error: <error object> }, continues)."
+  },
+
+  "output": {
+    "_comment": "Produce an explicit payload and terminate the current section. Each key becomes a payload field. Values are resolved as runtime refs or literals.",
+    "<field_name>": "$alias | $alias.payload.<path> | $input.<field> | <literal>"
+  },
+
+  ">sequence": {
+    "_comment": "Execute items one after another. Stops on the first error (unless the failing item used on_error=continue/collect). Returns the last item's response.",
+    "items": [
+      { "_comment": "Each item is a DSL node object. Accepted: invoke, output, >if, >switch, >parallel, >for_each, >sequence, or { '#section_name': {} }." }
+    ]
+  },
+
+  ">parallel": {
+    "_comment": "Execute all items concurrently. All branches share the parent alias scope at start. Aliases produced by successful branches are merged back into the parent scope after all branches complete. Returns { items: [ { status, payload, error }, ... ] } — one entry per branch in order. Fails on the first branch that returns an error (other branches still run to completion).",
+    "limit": 4,
+    "_limit_note": "Optional. Maximum concurrent branches. Must be >= 0. When 0 or absent, all branches run fully concurrently.",
+    "items": [
+      { "_comment": "Each item is a DSL node object." }
+    ]
+  },
+
+  ">if": {
+    "_comment": "Conditional branch. Evaluates 'when'; executes >then when true, >else when false. >else is optional — omitting it produces empty OK when condition is false.",
+    "when": {
+      "_comment": "Required. Condition expression. Two forms: simple (left/op/right) or compound (and/or arrays).",
+      "_simple_form": {
+        "left": "$alias.payload.field | $input.field | <literal>",
+        "op": "eq",
+        "_op_note": "Required. Accepted values: 'eq' (equal), 'neq' (not equal), 'exists' (left is non-nil, right ignored), 'gt' (left > right), 'gte' (left >= right), 'lt' (left < right), 'lte' (left <= right), 'in' (left is in right array). Numeric comparisons use float64 within 1e-9 tolerance.",
+        "right": "<literal> | $ref",
+        "_right_note": "Not used when op='exists'."
+      },
+      "_compound_and_form": {
+        "and": [
+          { "left": "$x", "op": "eq", "right": true },
+          { "left": "$y", "op": "gt", "right": 0 }
+        ],
+        "_note": "All conditions must be true."
+      },
+      "_compound_or_form": {
+        "or": [
+          { "left": "$x", "op": "eq", "right": "a" },
+          { "left": "$x", "op": "eq", "right": "b" }
+        ],
+        "_note": "At least one condition must be true."
+      }
+    },
+    ">then": { "_comment": "Required. A single DSL node object executed when condition is true." },
+    ">else": { "_comment": "Optional. A single DSL node object executed when condition is false. When absent, produces empty OK on false." }
+  },
+
+  ">switch": {
+    "_comment": "Multi-branch routing on a single value. Evaluates 'on'; executes the first case whose value matches. Falls through to >default when no case matches. Matching uses float64 equality for numbers (within 1e-9), string equality for everything else.",
+    "on": "$input.field | $alias.payload.field | <literal>",
+    "_on_note": "Required. The value to switch on.",
+    "cases": [
+      {
+        "value": "<literal>",
+        "_value_note": "The value to match against 'on'.",
+        "then": { "_comment": "Required per case. Note: key is 'then' (no > prefix) inside a case object. A single DSL node object." }
+      }
+    ],
+    ">default": { "_comment": "Optional. A single DSL node object executed when no case matches. When absent, produces empty OK on no match." }
+  },
+
+  ">for_each": {
+    "_comment": "Iterate over a collection with bounded concurrency. Each item runs >do in its own child scope. The current item is accessible as $<as> and its zero-based index as $<as>_index inside >do. Returns { items: [ <payload>, ... ] } aggregating successful iteration payloads.",
+    "collection": "$input.items | $alias.payload.list",
+    "_collection_note": "Required. Must resolve to a JSON array.",
+    "as": "item",
+    "_as_note": "Required. Alias name for the current element. Inside >do: '$item' is the element, '$item_index' is its zero-based index.",
+    "limit": 3,
+    "_limit_note": "Optional. Maximum concurrent iterations. Must be >= 0. When 0 or absent, all items run concurrently.",
+    "on_error": "fail",
+    "_on_error_note": "Optional. Accepted values: 'fail' (default — stops on first iteration error), 'continue' (skips failed iterations, continues with remaining items).",
+    ">do": { "_comment": "Required. A single DSL node object executed for each item." }
+  },
+
+  ">while": {
+    "_comment": "Repeat >do sequentially while 'when' holds, evaluated before each iteration (classic while, not do-while — 'when' false on the first check means >do never runs). Unlike >for_each, iterations run one after another (never concurrent) because each 'when' check may depend on state produced by the previous iteration. Inside >do and inside 'when': '$index' is the zero-based iteration count, available before >do runs (so 'when' can reference it). Aliases set via invoke's 'as' inside >do persist across iterations in the same scope as the rest of the plan — the next iteration's 'when' or >do can reference the previous iteration's '$alias'. Returns { items: [ <payload>, ... ], iterations: <int> } aggregating successful iteration payloads.",
+    "when": { "_comment": "Required. Same condition form as >if.when (simple left/op/right, or and/or compound)." },
+    "max_iterations": 20,
+    "_max_iterations_note": "Required, must be a positive integer — there is no unbounded/default form. This is a hard safety cap, not a suggestion: if 'when' is still true after max_iterations completed iterations, the capacity fails with an error instead of looping further. Pick a value with real headroom over what you expect, and design 'when' to become false on its own — max_iterations is the backstop, not the intended exit condition.",
+    "on_error": "fail",
+    "_on_error_note": "Optional. Accepted values: 'fail' (default — stops on first iteration error), 'continue' (skips the failed iteration's payload, continues looping).",
+    ">do": { "_comment": "Required. A single DSL node object executed for each iteration while 'when' holds." },
+    "_when_to_use_vs_for_each": "Use >for_each when you already have the full collection to iterate (bounded by data known up front). Use >while when the number of iterations is not known ahead of time and depends on a runtime condition — e.g. paging through an external API until it reports no next page, or polling a capacity's state until it reports ready. The condition itself must come from a value already produced by a prior invoke/output in scope (via 'when' left/right refs) — >while does not let you compute or transform that value inline; whatever decides when to stop must be computed by an invoked capacity, not by the DSL."
+  },
+
+  ">race": {
+    "_comment": "Launch all items concurrently and return the FIRST branch that completes with status 'ok'. Only the winning branch's aliases are merged into the parent scope. When no branch succeeds, the race fails with the first error observed. All branches always start concurrently — there is no 'limit' field: a race wants every competitor running.",
+    "items": [
+      { "_comment": "Each item is a DSL node object, raced against the others." }
+    ],
+    "_no_cancellation_note": "There is NO cancellation. Losing branches keep running to completion; their responses are discarded, but any effects they perform still happen. A race is therefore only safe between effect-free branches (reads, observations, lookups). Check the 'effects' section of every capacity invoked inside a >race: racing branches that write matter produces orphaned effects the winner knows nothing about.",
+    "_when_to_use": "Resilience patterns over effect-free work: hedged requests (invoke the same read twice against different providers, take the first answer), fallback racing (primary and fallback sources queried together), latency capping combined with per-invoke timeout. For 'first event decides' behavior over long-running state, do not race — use a matter subscription (see decomposition patterns)."
+  },
+
+  "_element_refs_in_inputs": {
+    "_comment": "A capacity section can declare @capacity, @schema, @structure, @document slots in inputs alongside @matter and params. These are bound by the caller at invocation time via element_refs in the intention wire.",
+    "@capacity": {
+      "<slot_name>": { "required": false }
+    },
+    "@schema": {
+      "<slot_name>": { "required": true }
+    },
+    "@structure": {
+      "<slot_name>": { "required": false }
+    },
+    "@document": {
+      "<slot_name>": { "required": false }
+    }
+  },
+
+  "_common_patterns": {
+    "chain": {
+      "_comment": "Invoke A, pass result to B.",
+      ">sequence": {
+        "items": [
+          { "invoke": { "@capacity": "/root/ctx/a", "with": { "x": "$input.x" }, "as": "a_result" } },
+          { "invoke": { "@capacity": "/root/ctx/b", "with": { "a": "$a_result.payload.value" }, "as": "b_result" } },
+          { "output": { "result": "$b_result.payload.value" } }
+        ]
+      }
+    },
+    "conditional_chain": {
+      "_comment": "Invoke A, branch on result.",
+      ">sequence": {
+        "items": [
+          { "invoke": { "@capacity": "/root/ctx/a", "with": {}, "as": "a" } },
+          {
+            ">if": {
+              "when": { "left": "$a.payload.ok", "op": "eq", "right": true },
+              ">then": { "invoke": { "@capacity": "/root/ctx/b", "with": { "data": "$a.payload.data" }, "as": "result" } },
+              ">else": { "invoke": { "@capacity": "/root/ctx/fallback", "with": {}, "as": "result" } }
+            }
+          },
+          { "output": { "result": "$result.payload" } }
+        ]
+      }
+    },
+    "parallel_then_aggregate": {
+      "_comment": "Run A and B concurrently, collect both.",
+      ">sequence": {
+        "items": [
+          {
+            ">parallel": {
+              "items": [
+                { "invoke": { "@capacity": "/root/ctx/a", "with": {}, "as": "a" } },
+                { "invoke": { "@capacity": "/root/ctx/b", "with": {}, "as": "b" } }
+              ]
+            }
+          },
+          { "output": { "a": "$a.payload", "b": "$b.payload" } }
+        ]
+      }
+    },
+    "iterate_collection": {
+      "_comment": "Process each item in an array.",
+      ">for_each": {
+        "collection": "$input.items",
+        "as": "item",
+        "limit": 4,
+        "on_error": "continue",
+        ">do": {
+          "invoke": {
+            "@capacity": "/root/ctx/process",
+            "with": { "item": "$item", "index": "$item_index" },
+            "as": "item_result"
+          }
+        }
+      }
+    },
+    "compensating_sequence": {
+      "_comment": "Undo completed effectful steps when a later step fails (saga). The engine never compensates automatically: each effectful capacity declares its reverse in its own contract ('compensated_by'), and the orchestrating flow invokes those compensations explicitly on the failure path, in reverse completion order. Use invoke.on_error='collect' (or 'continue') on the risky step so the flow can branch instead of aborting.",
+      ">sequence": {
+        "items": [
+          { "invoke": { "@capacity": "/root/ctx/reserve.stock", "with": { "item": "$input.item" }, "as": "reserved" } },
+          { "invoke": { "@capacity": "/root/ctx/charge.payment", "with": { "amount": "$input.amount" }, "as": "charged", "on_error": "collect" } },
+          {
+            ">if": {
+              "when": { "left": "$charged.payload.collected_error", "op": "exists" },
+              ">then": {
+                ">sequence": {
+                  "items": [
+                    { "invoke": { "@capacity": "/root/ctx/reserve.stock.undo", "with": { "reservation": "$reserved.payload" }, "as": "compensated" } },
+                    { "output": { "ok": false, "compensated": true, "cause": "$charged.payload.collected_error" } }
+                  ]
+                }
+              },
+              ">else": { "output": { "ok": true, "reservation": "$reserved.payload", "charge": "$charged.payload" } }
+            }
+          }
+        ]
+      },
+      "_note": "reserve.stock declares compensated_by: '/root/ctx/reserve.stock.undo' in its contract — the flow above is simply honoring that declaration on its failure path."
+    },
+    "poll_until_ready": {
+      "_comment": "Repeat a status check until a capacity reports readiness, or give up after a bounded number of attempts.",
+      ">sequence": {
+        "items": [
+          { "invoke": { "@capacity": "/root/ctx/check_status", "with": {}, "as": "status" } },
+          {
+            ">while": {
+              "when": { "left": "$status.payload.ready", "op": "eq", "right": false },
+              "max_iterations": 10,
+              ">do": { "invoke": { "@capacity": "/root/ctx/check_status", "with": {}, "as": "status" } }
+            }
+          },
+          { "output": { "ready": "$status.payload.ready" } }
+        ]
+      }
+    },
+    "dynamic_capacity": {
+      "_comment": "Invoke a capacity whose name comes from input (e.g. a pluggable handler slot).",
+      "invoke": {
+        "@capacity": "$input.custom_handler",
+        "with": { "data": "$input.data" },
+        "as": "result",
+        "await_response": true,
+        "timeout": { "ms": 5000 },
+        "on_error": "fail"
+      }
+    }
+  }
+}

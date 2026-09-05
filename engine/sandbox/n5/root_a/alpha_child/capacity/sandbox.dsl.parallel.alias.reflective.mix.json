@@ -1,0 +1,152 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.parallel.alias.reflective.mix",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.parallel.alias.reflective.mix",
+    "description": "Run local and remote reflective calls in parallel, then consume the merged aliases in one downstream wrapper call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Launch one local read.meaning, one remote meaning.query, and one remote read.state in parallel, then synthesize one final wrapper input from all merged aliases.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "parallel_reflective_reads": "Local and remote reflective reads are executed concurrently.",
+        "parallel_alias_merge": "Aliases produced in parallel branches are merged for a downstream wrapper call."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one final wrapper input projection after multiple reflective branches execute concurrently and their aliases are merged coherently.",
+        "invariants": [
+          "The remote meaning projection is rebuilt once before the parallel block so the remote query branch reads from a refreshed index.",
+          "The terminal wrapper call merges local_meaning, remote_query, and remote_state aliases without cross-branch contamination."
+        ],
+        "success": [
+          "The terminal payload exposes received_params.label, received_params.local_name, received_params.remote_name, and received_params.remote_ctx.",
+          "received_params.local_name comes from the local read.meaning descriptor, while remote_name and remote_ctx come from the remote query and remote state branches."
+        ],
+        "failure": [
+          "The flow fails if the remote rebuild or any reflective branch fails after its retry policy is exhausted.",
+          "The flow fails if the final wrapper call cannot consume the merged alias projection."
+        ],
+        "notes": [
+          "This scenario validates alias merging after >parallel with mixed local and remote reflective branches.",
+          "The cached variant of this capacity removes the rebuild step to isolate concurrency behavior from projection rebuild races."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              ">parallel": {
+                "limit": 2,
+                "items": [
+                  {
+                    "invoke": {
+                      "@capacity": "/root/alpha_child/read.meaning",
+                      "to_type": "reflexive",
+                      "with": {
+                        "input": [
+                          {
+                            "element_kind": "capacity",
+                            "element_name": "sandbox.echo",
+                            "sections": [
+                              "objective"
+                            ]
+                          }
+                        ]
+                      },
+                      "as": "local_meaning"
+                    }
+                  },
+                  {
+                    "invoke": {
+                      "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                      "to_type": "reflexive",
+                      "with": {
+                        "ctx_id": "/root/beta_child",
+                        "element_kind": "capacity",
+                        "filters": [
+                          {
+                            "path": "objective.name",
+                            "op": "EQ",
+                            "value": "sandbox.echo"
+                          }
+                        ]
+                      },
+                      "timeout": {
+                        "ms": 1200
+                      },
+                      "retry": {
+                        "max": 6,
+                        "delay_ms": 50
+                      },
+                      "as": "remote_query"
+                    }
+                  },
+                  {
+                    "invoke": {
+                      "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.state",
+                      "to_type": "reflexive",
+                      "with": {
+                        "include": [
+                          "context"
+                        ]
+                      },
+                      "as": "remote_state"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "local_name": "$local_meaning.payload.result.0.descriptor.objective.name",
+                  "remote_name": "$remote_query.payload.result.0.name",
+                  "remote_ctx": "$remote_state.payload.context.context_id"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

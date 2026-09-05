@@ -1,0 +1,78 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.read_batch",
+    "family": "matter",
+    "file": "engine/matter/matter_read_introspec.go",
+    "function": "capMatterReadBatch"
+  },
+  "objective": {
+    "name": "matter.read_batch",
+    "description": "Read several matters in one request and return one per-item result entry."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve a list of matter identifiers, read the requested sections for each item, and return a fail-soft batch result.",
+      "inputs": {
+        "params": {
+          "matter_ids": {
+            "type": "array",
+            "_comment": "Ordered list of matter identifiers. Empty or blank-only lists are rejected."
+          },
+          "read_mode": {
+            "type": "string",
+            "_comment": "Optional pipe-separated selector such as meaning|functional|data|brique. The four tokens are strictly disjoint — 'meaning' does NOT include 'functional' (meaning only assembles objective+subjective; request 'meaning|functional' to get both). When omitted, all sections are requested for each item. Same semantics as matter.read's read_mode."
+          },
+          "want_meaning": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent. Kept for compatibility only — use read_mode."
+          },
+          "want_functional": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent. Kept for compatibility only — use read_mode."
+          },
+          "want_data": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent. Kept for compatibility only — use read_mode."
+          },
+          "want_brique": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent. Kept for compatibility only — use read_mode."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Ordered per-item result list. Each item on success: { ok: true, matter_id (string), meaning (object, when requested), functional (object, when requested), brique (object, when requested), data (object, when requested — same inline/http shape as matter.read: { kind: 'inline', bytes, size } or { kind: 'http', base_url, path, rid, tok, expires_at, revision, size_hint, method: 'GET' }) }. Each item on failure: { ok: false, matter_id (string), error: { code, message } }."
+          }
+        }
+      },
+      "effects": {
+        "catalog": "Local matter catalog is consulted for every requested matter.",
+        "substance_access": "Each successful item may read inline substance or open an HTTP lease."
+      },
+      "transformation_contract": {
+        "morphing": "A list of matter identifiers becomes an ordered batch of per-item success or error results, each carrying the requested matter sections when available.",
+        "invariants": [
+          "The batch preserves the original identifier order after blank entries are discarded.",
+          "One failing item does not invalidate successful sibling items."
+        ],
+        "success": [
+          "A successful batch response always returns result as one ordered list of per-item envelopes.",
+          "Each successful item contains ok=true plus the requested readable sections that could be assembled for that matter."
+        ],
+        "failure": [
+          "The capacity fails terminally when matter_ids is missing or empty.",
+          "Per-item read failures are reported inside result entries rather than failing the whole batch."
+        ],
+        "notes": [
+          "The batch uses fail-soft semantics: item-level errors are embedded in result instead of aborting the whole response.",
+          "The exact shape of each item's data field follows the same substance rules as matter.read."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

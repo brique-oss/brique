@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "cap_name": "sandbox.py.timeout",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py_timeout",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.py.timeout",
+    "description": "Interpreted wrapper-backed capacity used to prove readiness timeout fail-closed behavior"
+  },
+  "functional": {
+    "#root": {
+      "role": "Select an interpreted wrapper that never reaches readiness and expose the timeout fail-closed execution path.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_runtime": "The interpreted wrapper readiness path is exercised and expected to time out."
+      },
+      "transformation_contract": {
+        "morphing": "An interpreted execution request becomes a fail-closed timeout path when wrapper readiness is never observed.",
+        "invariants": [
+          "sandbox.py.timeout must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.py.timeout returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.py.timeout fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "simulate missing wrapper_ready"
+  }
+}

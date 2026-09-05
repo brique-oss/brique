@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "document"
+  },
+  "objective": {
+    "name": "remote_note",
+    "description": "remote-note-seed"
+  },
+  "functional": {
+    "tags": [
+      "remote",
+      "execution",
+      "wrapper"
+    ],
+    "mime_type": "application/json"
+  },
+  "subjective": {
+    "tone": "seeded"
+  }
+}

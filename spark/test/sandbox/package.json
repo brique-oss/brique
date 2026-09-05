@@ -1,0 +1,6 @@
+{
+  "name": "spark-sandbox",
+  "description": "Brique sandbox instance — npm install here to add UI dependencies",
+  "private": true,
+  "dependencies": {}
+}

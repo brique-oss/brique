@@ -1,0 +1,118 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.aggregate.params.matter.meaning",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.aggregate.params.matter.meaning",
+    "description": "Aggregate final params from one wrapper output, one matter.read payload, and one read.meaning payload before the final wrapper call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build one wrapper record, read one local matter, read one local meaning descriptor, and synthesize final wrapper params from all three sources.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_param_source": "One local wrapper output contributes to the final params.",
+        "matter_param_source": "One local matter.read payload contributes to the final params.",
+        "meaning_param_source": "One local read.meaning payload contributes to the final params."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one final wrapper input projection whose params are synthesized from one previous wrapper response, one matter.read response, and one read.meaning response.",
+        "invariants": [
+          "The final wrapper call receives label from the root input, message from sandbox.build.record, source_ctx from the local matter functional payload, and meaning fields from read.meaning.",
+          "The flow does not mutate the local matter or the meaning descriptor it reads."
+        ],
+        "success": [
+          "The terminal payload exposes received_params.label, received_params.message, received_params.source_ctx, received_params.meaning_name, and received_params.meaning_description.",
+          "received_params.message is prefixed by sandbox.build.record and the meaning fields match the objective section read from sandbox.echo."
+        ],
+        "failure": [
+          "The flow fails if sandbox.build.record, matter.read, or read.meaning fails before the terminal wrapper call.",
+          "The flow fails if the selected meaning item does not expose the requested objective fields."
+        ],
+        "notes": [
+          "This scenario is used by N7 to validate cross-source param aggregation inside the DSL before one wrapper termination.",
+          "The terminal payload shape is intentionally aligned with sandbox.inspect.inputs because that wrapper is used as the final consumer."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.record",
+                "with": {
+                  "message": "$input.message",
+                  "target_id": "ignored",
+                  "prefix": "meaning-agg"
+                },
+                "as": "built"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "m_chain_local",
+                  "read_mode": "functional|brique"
+                },
+                "as": "local_matter"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "sandbox.echo",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "as": "local_meaning"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "message": "$built.payload.record.composed",
+                  "source_ctx": "$local_matter.payload.functional.source_ctx",
+                  "meaning_name": "$local_meaning.payload.result.0.descriptor.objective.name",
+                  "meaning_description": "$local_meaning.payload.result.0.descriptor.objective.description"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "_comment": "Root context fixture for N6 Matter functional tests.",
+  "brique": {
+    "ctx_name": "sandbox-n6-matter-root",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n6-matter-root",
+    "children_list": [
+      "workspace"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "websocket_listener": {
+          "addr": ":19081"
+        },
+        "interfaces": [],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": true,
+        "repo_name": "brique-sandbox-n6-matter-root"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n6-matter-root",
+    "description": "Root fixture hosting the mono-instance Matter workspace"
+  },
+  "functional": {
+    "role": "root",
+    "test_scope": [
+      "matter public capability validation",
+      "wrapper-backed matter runtime validation",
+      "http_substance read and write validation",
+      "meaning projection verification"
+    ]
+  },
+  "subjective": {
+    "intent": "sandbox root fixture for N6 Matter",
+    "impression": "functional validation"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "brique": {
+    "cap_name": "delayed_echo",
+    "kind": "interpreted",
+    "wrapper": "inspector_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "delayed_echo",
+    "description": "Return params unchanged after a bounded delay."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "delay_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "message": {
+            "type": "string"
+          },
+          "delay_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "effects": {}
+    }
+  },
+  "subjective": {
+    "intent": "delayed echo flow"
+  }
+}

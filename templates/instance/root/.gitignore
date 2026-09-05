@@ -1,0 +1,14 @@
+node_modules/
+envs/**
+!envs/
+!envs/*/
+!envs/*/requirements.txt
+.DS_Store
+*.log
+*.pyc
+__pycache__/
+**/build/
+**/tmp/
+root/projection/
+**/trace/*.jsonl
+**/.spark/

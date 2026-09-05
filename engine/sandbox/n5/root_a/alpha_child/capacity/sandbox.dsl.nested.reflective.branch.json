@@ -1,0 +1,168 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.nested.reflective.branch",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.nested.reflective.branch",
+    "description": "Use remote meaning.query and local read.meaning in nested control flow before choosing the terminal wrapper route."
+  },
+  "functional": {
+    "#root": {
+      "role": "Refresh the remote projection, query one remote projected capacity, read one local detailed descriptor, then apply nested reflective control flow before choosing the terminal wrapper.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_projection_refresh": "The remote meaning projection is refreshed before selection.",
+        "remote_projection_query": "One remote projected capacity is selected.",
+        "local_detailed_meaning": "One local detailed meaning descriptor is read.",
+        "nested_reflective_branch": "The final wrapper route is chosen after nested reflective decisions."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific terminal response after chained remote and local reflective reads feed nested control flow.",
+        "invariants": [
+          "The outer branch is driven by the remote projected selection, and the inner branch is driven by the local detailed functional role.",
+          "The remote projection is rebuilt before the nested control flow starts so the remote query observes a refreshed index."
+        ],
+        "success": [
+          "The terminal payload exposes echo and ctx_id from the selected sandbox.echo branch.",
+          "When the remote query selects sandbox.echo and the local role matches the expected wrapper role, the terminal payload comes from the remote beta-child wrapper."
+        ],
+        "failure": [
+          "The flow fails if the remote rebuild, remote query, or local read.meaning cannot produce the values required for nested branching.",
+          "The flow can terminate through local fallback branches if either reflective condition is not satisfied."
+        ],
+        "notes": [
+          "This scenario validates nested control flow where remote projected discovery and local detailed meaning both influence the terminal route.",
+          "The branch payload shape remains that of sandbox.echo."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.name",
+                      "op": "EQ",
+                      "value": "sandbox.echo"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_query"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "sandbox.echo",
+                      "sections": [
+                        "objective",
+                        "functional"
+                      ]
+                    }
+                  ]
+                },
+                "as": "local_detail"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$remote_query.payload.result.0.name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  ">if": {
+                    "when": {
+                      "left": "$local_detail.payload.result.0.descriptor.functional.#root.role",
+                      "op": "eq",
+                      "right": "Return an echo payload from the local wrapper runtime."
+                    },
+                    ">then": {
+                      "invoke": {
+                        "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                        "with": {
+                          "message": "nested-remote"
+                        },
+                        "as": "nested_result"
+                      }
+                    },
+                    ">else": {
+                      "invoke": {
+                        "@capacity": "/root/alpha_child/sandbox.echo",
+                        "with": {
+                          "message": "nested-local-fallback"
+                        },
+                        "as": "nested_result"
+                      }
+                    }
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "nested-miss"
+                    },
+                    "as": "nested_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

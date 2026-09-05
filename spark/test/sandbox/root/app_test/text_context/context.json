@@ -1,0 +1,111 @@
+{
+  "_comment": "Text sandbox context.",
+  "brique": {
+    "ctx_name": "text_context",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "text_context",
+    "children_list": [],
+    "ui_config": {
+      "root_view": "TextPlayground",
+      "adapter": "react",
+      "host": "vscode",
+      "ws_path": "/app_test/text/ws"
+    },
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [
+          "text_sandbox_py"
+        ],
+        "interfaces": [
+          {
+            "name": "main",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/app_test/text/ws"
+            }
+          },
+          {
+            "name": "text_sandbox_py",
+            "type": "wrapper",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/wrapper/text_sandbox_py"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": [
+          {
+            "wrapper_name": "text_sandbox_py",
+            "mode": "interpreted",
+            "ready_timeout_ms": 2000,
+            "stop_timeout_ms": 1000,
+            "build": {
+              "shell": false,
+              "timeout_ms": 1000,
+              "artifact": "",
+              "artifact_kind": "file",
+              "cmd": []
+            },
+            "run": {
+              "shell": false,
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "text_sandbox_py"
+              }
+            }
+          }
+        ]
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "spark-pulse-sandbox-text"
+      }
+    }
+  },
+  "objective": {
+    "name": "text_context",
+    "description": "Context used to validate text matter mutation through wrapper-backed capacities."
+  },
+  "functional": {
+    "role": "text",
+    "test_scope": [
+      "set text",
+      "uppercase text",
+      "append text",
+      "read text"
+    ]
+  },
+  "subjective": {
+    "intent": "text matter validation"
+  }
+}

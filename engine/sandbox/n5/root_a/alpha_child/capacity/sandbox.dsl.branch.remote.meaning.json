@@ -1,0 +1,96 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.branch.remote.meaning",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.branch.remote.meaning",
+    "description": "Branch on a meaning-derived value obtained from a remote wrapper-backed reflective capacity and choose a local or remote wrapper terminal call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Invoke one remote wrapper-backed reflective capacity, branch on the returned meaning-derived objective name, and choose a wrapper-backed terminal route.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_reflective_wrapper_route": "A remote wrapper-backed reflective route crosses the inter-instance boundary.",
+        "branch_terminal_route": "The terminal route invokes either a remote or a local wrapper-backed capacity."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific terminal response selected from a meaning-derived value returned by a remote wrapper-backed reflective capacity.",
+        "invariants": [
+          "The branch decision is taken from remote_meaning.payload.objective_name returned by the remote wrapper-backed reflective helper.",
+          "The flow chooses between a remote and a local sandbox.echo terminal route, but the N7 fixture is arranged so the remote route is selected."
+        ],
+        "success": [
+          "The terminal payload exposes echo and ctx_id from the selected sandbox.echo branch.",
+          "When objective_name equals sandbox.echo, the terminal payload comes from the remote beta-child wrapper."
+        ],
+        "failure": [
+          "The flow fails if the remote reflective helper cannot return the meaning-derived objective name.",
+          "The flow fails if the selected wrapper-backed terminal route cannot complete across its local or remote boundary."
+        ],
+        "notes": [
+          "This scenario validates branching on a value that was itself derived by a wrapper through reflexive access.",
+          "The terminal branch payload shape follows sandbox.echo, not a custom DSL-specific envelope."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.reflect.local.meaning",
+                "with": {
+                  "name": "sandbox.echo"
+                },
+                "as": "remote_meaning"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$remote_meaning.payload.objective_name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                    "with": {
+                      "message": "meaning-branch-remote"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "meaning-branch-local"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

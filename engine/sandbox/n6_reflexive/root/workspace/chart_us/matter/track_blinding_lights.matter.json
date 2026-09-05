@@ -1,0 +1,76 @@
+{
+  "_comment": "US chart matter for contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_blinding_lights",
+    "description": "Blinding Lights in the US chart selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Blinding Lights",
+      "artist": "The Weeknd",
+      "album": "After Hours",
+      "genre": "pop",
+      "classification": {
+        "genres": [
+          "pop",
+          "synthpop"
+        ],
+        "styles": [
+          "synthwave",
+          "night-drive"
+        ]
+      },
+      "release": {
+        "year": "2020",
+        "date": "2020-11-29"
+      },
+      "chart": {
+        "market": "us",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "1",
+          "weekly": "1"
+        }
+      },
+      "tags": [
+        "pop",
+        "night",
+        "radio"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "chart track",
+    "impression": "mainstream chart leader",
+    "emojis": [
+      "🌙",
+      "✨"
+    ],
+    "tags": [
+      "night-drive",
+      "neon"
+    ]
+  }
+}

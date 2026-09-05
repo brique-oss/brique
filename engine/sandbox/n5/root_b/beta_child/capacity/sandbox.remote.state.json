@@ -1,0 +1,64 @@
+{
+  "brique": {
+    "cap_name": "sandbox.remote.state",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.remote.state",
+    "description": "Wrapper outbound reflexive call toward a remote instance child context"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit an outbound cross-instance reflexive state read and return the remote state payload.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "remote_status": {
+            "type": "string"
+          },
+          "remote_from": {
+            "type": "object"
+          },
+          "remote_payload": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "external_route": "The wrapper emits an outbound cross-instance reflexive call."
+      },
+      "transformation_contract": {
+        "morphing": "A local wrapper state request becomes a remote reflexive state snapshot returned through the inter-instance path.",
+        "invariants": [
+          "The wrapper emits exactly one outbound read.state reflexive call to the requested remote context.",
+          "The remote read is constrained to include only the context section.",
+          "ok is hard-coded to true by the wrapper when the outbound call itself returns."
+        ],
+        "success": [
+          "On success, sandbox.remote.state returns ok, remote_status, remote_from, and remote_payload.",
+          "remote_payload contains the payload returned by the remote read.state call."
+        ],
+        "failure": [
+          "The capability fails if the outbound inter-instance reflexive call cannot complete.",
+          "Missing to_context results in forwarding an empty target context to outbound routing and may therefore fail there."
+        ],
+        "notes": [
+          "This is a wrapper-side remote reflexive oracle used in inter-instance state tests.",
+          "The contract intentionally surfaces the remote response envelope rather than flattening the remote payload."
+        ]
+      }
+    }
+  }
+}

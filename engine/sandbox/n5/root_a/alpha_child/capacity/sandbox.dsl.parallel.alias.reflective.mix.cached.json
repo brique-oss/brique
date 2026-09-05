@@ -1,0 +1,135 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.parallel.alias.reflective.mix.cached",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.parallel.alias.reflective.mix.cached",
+    "description": "Run local and remote reflective calls in parallel against an already built remote projection, then consume the merged aliases in one downstream wrapper call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Launch one local read.meaning, one remote meaning.query, and one remote read.state in parallel, then synthesize one final wrapper input from all merged aliases without rebuilding the remote projection inside the flow.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "parallel_reflective_reads": "Local and remote reflective reads are executed concurrently.",
+        "parallel_alias_merge": "Aliases produced in parallel branches are merged for a downstream wrapper call."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one final wrapper input projection after multiple reflective branches execute concurrently and their aliases are merged coherently.",
+        "invariants": [
+          "The flow assumes the remote projection was rebuilt earlier and therefore performs only the parallel reflective reads inside the scenario.",
+          "The terminal wrapper call merges local_meaning, remote_query, and remote_state aliases without cross-branch contamination."
+        ],
+        "success": [
+          "The terminal payload exposes received_params.label, received_params.local_name, received_params.remote_name, and received_params.remote_ctx.",
+          "The output shape matches the non-cached variant while removing the in-flow rebuild dependency."
+        ],
+        "failure": [
+          "The flow fails if either reflective branch or the final wrapper call fails.",
+          "The flow also fails if the assumed prebuilt remote projection is absent or stale enough for remote_query to return no usable row."
+        ],
+        "notes": [
+          "This scenario is used by N7 concurrency tests to remove remote rebuild races from the reflective merge case.",
+          "Its semantic contract is intentionally the same as the non-cached variant apart from the omitted rebuild step."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              ">parallel": {
+                "limit": 2,
+                "items": [
+                  {
+                    "invoke": {
+                      "@capacity": "/root/alpha_child/read.meaning",
+                      "to_type": "reflexive",
+                      "with": {
+                        "input": [
+                          {
+                            "element_kind": "capacity",
+                            "element_name": "sandbox.echo",
+                            "sections": [
+                              "objective"
+                            ]
+                          }
+                        ]
+                      },
+                      "as": "local_meaning"
+                    }
+                  },
+                  {
+                    "invoke": {
+                      "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                      "to_type": "reflexive",
+                      "with": {
+                        "ctx_id": "/root/beta_child",
+                        "element_kind": "capacity",
+                        "filters": [
+                          {
+                            "path": "objective.name",
+                            "op": "EQ",
+                            "value": "sandbox.echo"
+                          }
+                        ]
+                      },
+                      "timeout": {
+                        "ms": 1200
+                      },
+                      "retry": {
+                        "max": 6,
+                        "delay_ms": 50
+                      },
+                      "as": "remote_query"
+                    }
+                  },
+                  {
+                    "invoke": {
+                      "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.state",
+                      "to_type": "reflexive",
+                      "with": {
+                        "include": [
+                          "context"
+                        ]
+                      },
+                      "as": "remote_state"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "local_name": "$local_meaning.payload.result.0.descriptor.objective.name",
+                  "remote_name": "$remote_query.payload.result.0.name",
+                  "remote_ctx": "$remote_state.payload.context.context_id"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

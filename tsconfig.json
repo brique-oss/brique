@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": [
+    "spark/index.ts",
+    "spark/core/**/*.ts",
+    "spark/hosts/**/*.ts",
+    "spark/launchers/**/*.ts",
+    "spark/ui/**/*.ts",
+    "spark/ui/**/*.tsx",
+    "spark/util/**/*.ts",
+    "pulse/runtime/**/*.ts",
+    "pulse/adapters/**/*.ts",
+    "briqueEditorUI/**/*.ts",
+    "briqueEditorUI/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "pulse/test",
+    "pulse/adapters/react/node_modules",
+    "pulse/adapters/react/dist",
+    "spark/test/*.ts",
+    "briqueEditorUI/**/*.test.ts"
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "brique": {
+    "cap_name": "sandbox.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.echo",
+    "description": "Wrapper-backed echo capacity for N5 inter-instance tests"
+  },
+  "functional": {
+    "#root": {
+      "role": "Return an echo payload from the local wrapper runtime.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "handled_by": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A wrapper echo request becomes an explicit echoed message returned by the local wrapper runtime.",
+        "invariants": [
+          "The wrapper always echoes the supplied message as a string, including the empty-string case.",
+          "The returned ctx_id and wrapper_name are derived from the active wrapper runtime environment.",
+          "The capability does not mutate any engine or wrapper state."
+        ],
+        "success": [
+          "On success, sandbox.echo returns echo, handled_by, ctx_id, and wrapper_name.",
+          "handled_by is a stable sandbox capability marker identifying the local wrapper implementation."
+        ],
+        "failure": [
+          "sandbox.echo has no contract-level validation failure for missing message because the wrapper coerces absent values to an empty string.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This sandbox capability is intentionally simple and is used as a stable wrapper oracle in N3, N5, and N7 tests.",
+          "The response is fully wrapper-backed and does not involve outbound calls."
+        ]
+      }
+    }
+  }
+}

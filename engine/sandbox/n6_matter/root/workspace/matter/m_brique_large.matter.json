@@ -1,0 +1,26 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_brique_large",
+    "description": "Brique-managed large payload matter"
+  },
+  "functional": {
+    "format": "text",
+    "domain": "matter-test",
+    "label": "seed-large",
+    "classification": {
+      "family": "brique"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "http",
+      "seed"
+    ]
+  }
+}

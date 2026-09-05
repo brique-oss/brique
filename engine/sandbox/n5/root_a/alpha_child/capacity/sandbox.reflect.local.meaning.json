@@ -1,0 +1,76 @@
+{
+  "brique": {
+    "cap_name": "sandbox.reflect.local.meaning",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.reflect.local.meaning",
+    "description": "Wrapper-backed capacity that reads local meaning through Reflexive and returns a normalized summary."
+  },
+  "functional": {
+    "#root": {
+      "role": "Ask the local Reflexive family for one capacity meaning descriptor and summarize objective and functional sections.",
+      "inputs": {
+        "params": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "item_ok": {
+            "type": "boolean"
+          },
+          "requested_name": {
+            "type": "string"
+          },
+          "objective_name": {
+            "type": "string"
+          },
+          "objective_description": {
+            "type": "string"
+          },
+          "functional_role": {
+            "type": "string"
+          },
+          "raw_item": {
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_reflexive_route": "The wrapper performs one local outbound read.meaning request."
+      },
+      "transformation_contract": {
+        "morphing": "A local wrapper request becomes a normalized meaning summary after one outbound local Reflexive read.",
+        "invariants": [
+          "The wrapper always performs exactly one local outbound read.meaning request for a capacity element.",
+          "The first result row is normalized from either desc or descriptor depending on the returned payload shape.",
+          "Absent name defaults to sandbox.echo before the outbound call is issued."
+        ],
+        "success": [
+          "On success, sandbox.reflect.local.meaning returns summary fields extracted from the first result row plus the raw_item, ctx_id, and wrapper_name.",
+          "item_ok mirrors the first read.meaning row rather than indicating outbound transport status by itself."
+        ],
+        "failure": [
+          "The capability fails if the outbound local Reflexive call cannot complete.",
+          "Descriptor extraction can degrade to empty strings without turning the call into a contract failure when the first row is simply missing sections."
+        ],
+        "notes": [
+          "This capability is used as a wrapper-side oracle for detailed local meaning reads in N7.",
+          "The raw_item output intentionally exposes the first reflected row for test diagnostics."
+        ]
+      }
+    }
+  }
+}

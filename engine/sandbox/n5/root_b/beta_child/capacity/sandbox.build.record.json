@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "sandbox.build.record",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.build.record",
+    "description": "Build a structured record payload from simple params."
+  },
+  "functional": {
+    "#root": {
+      "role": "Turn simple string params into a structured record object reusable by DSL flows.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "record": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Simple params become a structured record payload suitable for later DSL parameter construction.",
+        "invariants": [
+          "sandbox.build.record must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.build.record returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.build.record fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  }
+}

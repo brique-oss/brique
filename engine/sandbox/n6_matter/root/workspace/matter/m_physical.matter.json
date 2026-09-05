@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "physical",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_physical",
+    "description": "Physical matter"
+  },
+  "functional": {
+    "domain": "matter-test",
+    "label": "seed-physical",
+    "device": {
+      "location": "lab-A"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "physical",
+      "seed"
+    ]
+  }
+}

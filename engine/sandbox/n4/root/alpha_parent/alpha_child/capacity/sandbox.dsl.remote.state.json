@@ -1,0 +1,66 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.remote.state",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.remote.state",
+    "description": "DSL capacity used in N4 to invoke reflexive.read.state on a sibling context"
+  },
+  "functional": {
+    "#root": {
+      "role": "Invoke reflexive read.state on the remote beta child context and return its state payload.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "context": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "inter_context_route": "A DSL invoke crosses contexts and awaits a remote reflexive response."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes a remote reflexive state snapshot returned from a sibling context.",
+        "invariants": [
+          "sandbox.dsl.remote.state must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.dsl.remote.state returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.dsl.remote.state fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      },
+      "resolution": {
+        "invoke": {
+          "@capacity": "/root/beta_parent/beta_child/read.state",
+          "to_type": "reflexive",
+          "with": {
+            "include": [
+              "context"
+            ]
+          },
+          "as": "remote_state",
+          "await_response": true
+        }
+      }
+    }
+  },
+  "subjective": {
+    "intent": "n4 dsl inter-context reflexive read"
+  }
+}

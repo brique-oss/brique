@@ -1,0 +1,61 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "vocabulary.delete",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteVocabularyDeletePath"
+  },
+  "objective": {
+    "name": "vocabulary.delete",
+    "description": "Delete one root vocabulary path from the overlay and projection."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only vocabulary path deletion and expose deletion statistics.",
+      "inputs": {
+        "params": {
+          "path": {
+            "type": "string",
+            "_comment": "Required. Dot-separated or slash-separated vocabulary key path to delete (e.g. 'domain.status' or 'domain/status'). Targets an entire vocabulary subtree."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "deleted_path": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "effects": {
+        "projection_db": "The root vocabulary projection may delete the targeted subtree.",
+        "vocabulary_overlay": "The root vocabulary overlay file may be rewritten without the deleted path."
+      },
+      "transformation_contract": {
+        "morphing": "A root vocabulary path deletion request becomes a projection and overlay state where the targeted vocabulary subtree has been removed, with explicit deletion statistics.",
+        "invariants": [
+          "vocabulary.delete is root-only and targets a single resolved vocabulary path.",
+          "Deletion removes the targeted node from the SQLite vocabulary projection and removes the same path from vocabulary.json when present.",
+          "The capability does not rebuild the full projection; it performs a targeted projected subtree deletion."
+        ],
+        "success": [
+          "On success, vocabulary.delete returns the deleted_path and duration_ms.",
+          "Successful deletion rewrites the overlay best-effort after the projected subtree delete succeeds."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when params.path is missing, when the path does not exist in the projection, or when the projected deletion cannot be committed."
+        ],
+        "notes": [
+          "The response does not count removed descendants; it only echoes the targeted deleted_path.",
+          "This capability mutates the vocabulary projection and overlay, not source descriptor files."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

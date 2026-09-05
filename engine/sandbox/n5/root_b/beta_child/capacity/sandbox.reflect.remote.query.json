@@ -1,0 +1,78 @@
+{
+  "brique": {
+    "cap_name": "sandbox.reflect.remote.query",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.reflect.remote.query",
+    "description": "Wrapper-backed capacity that rebuilds and queries the remote root meaning projection."
+  },
+  "functional": {
+    "#root": {
+      "role": "Trigger one remote root meaning rebuild, then query the remote root meaning projection for one capacity row and summarize the first match.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "query_path": {
+            "type": "string"
+          },
+          "query_value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "rebuild_status": {
+            "type": "string"
+          },
+          "query_status": {
+            "type": "string"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "queried_ctx": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_reflexive_projection": "The wrapper traverses the remote root boundary to rebuild and query the meaning projection."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes a remote projection summary after one remote rebuild and one remote meaning query.",
+        "invariants": [
+          "sandbox.reflect.remote.query must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.reflect.remote.query returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.reflect.remote.query fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  }
+}

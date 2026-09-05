@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+
+class DemoService:
+    def __init__(self) -> None:
+        self.cache = "cold"
+        self.enabled = False
+
+    # <brique:capacity name="demo.echo">
+    def echo(self, params: dict) -> dict:
+        message = str(params.get("message", ""))
+        return {
+            "echo": message,
+            "handled_by": "DemoService.echo",
+        }
+    # </brique:capacity>
+
+    # <brique:capacity name="active.enable">
+    def enable(self, params: dict) -> dict:
+        self.enabled = True
+        return {
+            "ok": True,
+            "enabled": self.enabled,
+        }
+    # </brique:capacity>
+
+    # <brique:matter name="demo_cache">
+    def read_cache(self) -> str:
+        return self.cache
+
+    def write_cache(self, value: object) -> dict:
+        self.cache = str(value)
+        return {
+            "ok": True,
+            "value": self.cache,
+        }
+    # </brique:matter>
+
+    # <brique:matter name="active_enabled">
+    def read_enabled(self) -> bool:
+        return self.enabled
+
+    def write_enabled(self, value: object) -> dict:
+        self.enabled = bool(value)
+        return {
+            "ok": True,
+            "enabled": self.enabled,
+        }
+    # </brique:matter>
+
+
+def build_bindings(runtime):
+    service = DemoService()
+    return {
+        "capacities": {
+            ("", "demo.echo"): service.echo,
+            ("subctx/api", "demo.echo"): service.echo,
+            ("subctx/active", "active.enable"): service.enable,
+        },
+        "matters": {
+            ("", "demo_cache"): {
+                "read": service.read_cache,
+                "write": service.write_cache,
+                "notify_on_write": True,
+            },
+            ("subctx/active", "active_enabled"): {
+                "read": service.read_enabled,
+                "write": service.write_enabled,
+                "notify_on_write": True,
+            },
+        },
+        "shutdown": [],
+    }

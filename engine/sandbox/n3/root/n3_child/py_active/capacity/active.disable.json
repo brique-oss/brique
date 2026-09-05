@@ -1,0 +1,54 @@
+{
+  "_comment": "Stops or disables the active Python component.",
+  "brique": {
+    "cap_name": "active.disable",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "active",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "active.disable",
+    "description": "Disables the running Python component"
+  },
+  "functional": {
+    "#root": {
+      "role": "Disable the active background component inside the wrapper runtime.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {
+        "active_component": "The active wrapper-local component is disabled."
+      },
+      "transformation_contract": {
+        "morphing": "A local deactivation request becomes a disabled active component state inside the wrapper runtime.",
+        "invariants": [
+          "active.disable must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "active.disable returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "active.disable fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "disable active runtime"
+  }
+}

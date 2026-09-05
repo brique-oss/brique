@@ -1,0 +1,208 @@
+# Overlay / Reveal System — Interaction Specification (V1)
+
+## 1. Purpose
+
+Overlay / Reveal is a transversal interaction system.
+
+It is not an autonomous projection space.
+
+Its role is to provide:
+
+* contextual UI emergence;
+* temporary local interaction surfaces;
+* lightweight contextual information;
+* secondary contextual actions.
+
+Overlay / Reveal exists to avoid permanently exposing all interface complexity.
+
+---
+
+# 2. Conceptual Model
+
+Reveal is defined as:
+
+```text id="jlwm2x"
+a temporary contextual UI attached to a node or local interaction target
+```
+
+Reveal is:
+
+* local;
+* temporary;
+* contextual;
+* secondary.
+
+Reveal never defines the primary navigation structure.
+
+Primary navigation remains handled by:
+
+* Structure Space;
+* Semantic Space;
+* Flow Space;
+* Trace Space;
+* Inspection Space;
+* Operational State Space.
+
+---
+
+# 3. Reveal Types
+
+V1 supports lightweight contextual reveals such as:
+
+```text id="jlwm5n"
+context menus
+local temporary lists
+action reveals
+detail reveals
+preview reveals
+```
+
+Examples:
+
+* revealing a list from a collapsed stack node;
+* revealing actions for a selected semantic category;
+* revealing contextual preview information;
+* revealing lightweight local details.
+
+---
+
+# 4. Trigger Model
+
+Reveal appearance is interaction-driven.
+
+Supported triggers include:
+
+```text id="jlwm7z"
+click
+long press
+hover
+ctrl + hover
+selection
+```
+
+Trigger behavior depends on the active space and targeted node type.
+
+---
+
+# 5. Lifecycle
+
+Reveal visibility is temporary.
+
+V1 lifecycle behavior:
+
+```text id="jlwm0y"
+outside click closes reveal
+```
+
+Reveal also closes when:
+
+* target disappears;
+* focus changes;
+* another reveal opens.
+
+---
+
+# 6. Exclusivity
+
+V1 supports:
+
+```text id="jlwm8u"
+only one reveal open at a time
+```
+
+There is:
+
+* no reveal stacking;
+* no nested reveal hierarchy;
+* no persistent reveal chains.
+
+Opening a reveal closes the currently active reveal.
+
+---
+
+# 7. Positioning
+
+Reveal surfaces are:
+
+```text id="jlwm1f"
+attached to the originating node
+```
+
+They are spatially contextual.
+
+Reveal positioning follows the originating interaction target.
+
+---
+
+# 8. Relation With Inspector
+
+Reveal and Inspector are distinct systems.
+
+## Reveal
+
+Reveal provides:
+
+* lightweight temporary contextual information;
+* quick local interaction;
+* minimal contextual augmentation.
+
+---
+
+## Inspector
+
+Inspector provides:
+
+* persistent inspection;
+* complete editing;
+* structured detailed visualization;
+* stable workspace interaction.
+
+---
+
+## Inspector Preview
+
+V1 introduces:
+
+```text id="jlwm3k"
+ctrl + hover
+```
+
+to trigger lightweight inspection preview behavior without opening full persistent inspection workflows.
+
+---
+
+# 9. Navigation Separation
+
+Reveal must never replace:
+
+* native navigation;
+* structural expansion;
+* semantic traversal;
+* persistent projection rendering.
+
+Examples:
+
+* semantic expand/collapse is not a reveal;
+* structure navigation is not a reveal;
+* flow traversal is not a reveal.
+
+Reveal only augments existing navigation spaces.
+
+---
+
+# 10. Design Principles
+
+Reveal must remain:
+
+* lightweight;
+* contextual;
+* temporary;
+* spatially local;
+* visually non-invasive;
+* secondary to navigation spaces.
+
+The objective is:
+
+```text id="jlwm9v"
+reduce permanent interface density while preserving deep contextual interaction capability
+```

@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "m_wrapper",
+    "description": "Wrapper-backed matter"
+  },
+  "functional": {
+    "domain": "matter-test",
+    "label": "seed-wrapper",
+    "classification": {
+      "family": "wrapper"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "wrapper",
+      "seed"
+    ]
+  }
+}

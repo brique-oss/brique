@@ -1,0 +1,71 @@
+{
+  "_comment": "Wrapper boundary owner context for N4 routing tests.",
+  "brique": {
+    "ctx_name": "sandbox-n4-wrapper-owner",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n4-wrapper-owner",
+    "children_list": [],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [
+          "n4_py"
+        ],
+        "interfaces": [
+          {
+            "name": "n4_py",
+            "type": "wrapper",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/wrapper/n4_py"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-n4-wrapper-owner"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n4-wrapper-owner",
+    "description": "Boundary owner for shared wrapper routing in N4 tests"
+  },
+  "functional": {
+    "role": "boundary",
+    "test_scope": [
+      "local wrapper relay",
+      "remote wrapper boundary relay",
+      "wrapper-origin routing"
+    ]
+  },
+  "subjective": {
+    "intent": "wrapper owner",
+    "impression": "boundary node"
+  }
+}

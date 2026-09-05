@@ -1,0 +1,68 @@
+{
+  "brique": {
+    "cap_name": "sandbox.consume.record",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.consume.record",
+    "description": "Consume a structured record and return a compact summary."
+  },
+  "functional": {
+    "#root": {
+      "role": "Consume a few structured params and return one summary string.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "source_ctx": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "handled_by": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A structured record view becomes one compact summary string.",
+        "invariants": [
+          "message, source_ctx, and revision are coerced to trimmed strings before summary construction.",
+          "The summary format is deterministic: source_ctx:message:revision.",
+          "ctx_id and wrapper_name are derived from the active wrapper runtime environment."
+        ],
+        "success": [
+          "On success, sandbox.consume.record returns summary, handled_by, ctx_id, and wrapper_name.",
+          "handled_by identifies the concrete wrapper capability that produced the summary."
+        ],
+        "failure": [
+          "sandbox.consume.record has no contract-level validation failure for missing params because absent values are normalized to empty strings.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This capability is used as a deterministic terminal consumer in N7 orchestration chains.",
+          "The payload shape is intentionally compact to make final assertions easy."
+        ]
+      }
+    }
+  }
+}

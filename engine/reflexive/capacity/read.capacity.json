@@ -1,0 +1,69 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "read.capacity",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_read.go",
+    "function": "capReadCapacity"
+  },
+  "objective": {
+    "name": "read.capacity",
+    "description": "Return the full JSON descriptor of a named engine capacity."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve a capacity name against the engine capacity set and return its full JSON descriptor.",
+      "inputs": {
+        "params": {
+          "cap_name": {
+            "type": "string",
+            "_comment": "Required. The capacity name as used in an intention (e.g. matter.read, read.state, wrapper.start). Must exactly match a known engine capacity name."
+          },
+          "include_raw": {
+            "type": "boolean",
+            "_comment": "Optional, default false. When true, also return descriptor_json: the raw source JSON string preserving original key order. Only needed when the caller intends to reproduce that exact key order in a later write (e.g. via content_json on edit.create). Omit for read-only inspection to avoid paying for a duplicate payload."
+          },
+          "detail": {
+            "type": "string",
+            "_comment": "Optional, default 'invoke'. Accepted values: 'invoke' (functional.#root reduced to {role, inputs, outputs} — drops effects, transformation_contract, and any other narrative fields), 'full' (entire descriptor, unchanged). Use the 'invoke' default when only building an invocation; pass 'full' when the capacity's behavior is not yet understood. Ignored when include_raw is true and only descriptor_json is consulted, since descriptor_json is never filtered."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "cap_name": {
+            "type": "string",
+            "_comment": "Normalized capacity name as resolved by the engine."
+          },
+          "descriptor": {
+            "type": "object",
+            "_comment": "Parsed capacity descriptor as a structured JSON object. Key order may differ from source. functional.#root is reduced to {role, inputs, outputs} unless detail is 'full'."
+          },
+          "descriptor_json": {
+            "type": "string",
+            "_comment": "Present only when include_raw is true. Raw JSON string of the capacity descriptor, preserving original source key order. Parse this when key order matters."
+          }
+        }
+      },
+      "effects": {
+        "embedded_capacity_set": "The engine embedded capacity set is queried read-only. No context state is modified."
+      },
+      "transformation_contract": {
+        "morphing": "A capacity name becomes the corresponding parsed JSON descriptor exposed as a structured payload.",
+        "invariants": [
+          "Resolution is read-only and never modifies local context state.",
+          "The capacity name must exactly match a known engine capacity; partial names or wildcards are not supported.",
+          "descriptor (parsed object) is always returned; descriptor_json (raw string) is only included when include_raw is true.",
+          "descriptor_json, when included, always carries the full raw source — detail never filters it, only descriptor."
+        ],
+        "success": [
+          "Returns the normalized cap_name and the parsed descriptor object; descriptor_json is included only when include_raw was requested."
+        ],
+        "failure": [
+          "Fails when params.cap_name is missing or does not match any known engine capacity."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

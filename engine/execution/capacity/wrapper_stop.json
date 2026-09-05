@@ -1,0 +1,46 @@
+{
+  "brique": {
+    "_comment": "Engine-native Execution internal capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "wrapper_stop",
+    "family": "execution",
+    "file": "engine/execution/execution_cap.go",
+    "function": "execWrapperStopAck"
+  },
+  "objective": {
+    "name": "wrapper_stop",
+    "description": "Internal reserved execution signal acknowledging wrapper stop."
+  },
+  "functional": {
+    "#root": {
+      "role": "Accept the reserved internal wrapper-stop signal without mutating runtime state.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "An internal wrapper-stop acknowledgement is absorbed as a stable reserved execution signal with no direct runtime mutation.",
+        "invariants": [
+          "wrapper_stop is an internal one-way execution signal and does not emit a response payload.",
+          "The current implementation intentionally treats wrapper_stop acknowledgements as no-ops inside Execution.",
+          "Process-level stop enforcement is owned by lower runtime layers, not by this handler."
+        ],
+        "success": [
+          "Successful handling consists of accepting the reserved signal without mutating wrapper runtime state.",
+          "The absence of state mutation is part of the current contract."
+        ],
+        "failure": [
+          "wrapper_stop has no parameter-level failure contract in the current implementation because it is treated as a reserved no-op.",
+          "Unknown or malformed internal callers simply result in no observable runtime mutation."
+        ],
+        "notes": [
+          "This capability is reserved for internal execution signalling and is not a user-facing orchestration primitive.",
+          "If stop acknowledgements gain runtime effects later, this contract must be updated with the new observable mutation semantics."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

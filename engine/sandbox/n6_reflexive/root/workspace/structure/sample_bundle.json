@@ -1,0 +1,40 @@
+{
+  "_comment": "Seed structure descriptor for N6 reflexive and matter tests.",
+  "brique": {
+    "kind": "structure"
+  },
+  "objective": {
+    "name": "sample_bundle",
+    "description": "Seed structure referencing the workspace seed matter",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "matters": [
+      {
+        "matter_id": "m_seed",
+        "role": "primary_input"
+      }
+    ],
+    "documents": [
+      {
+        "document_id": "overview",
+        "role": "explanation"
+      }
+    ],
+    "schemas": [
+      {
+        "schema_id": "sample_payload",
+        "role": "payload_schema"
+      }
+    ]
+  },
+  "subjective": {
+    "intent": "structure seed",
+    "impression": "small composite structure",
+    "notes": [
+      "used as a stable existing structure for read tests",
+      "should appear in meaning projection after rebuild"
+    ]
+  }
+}

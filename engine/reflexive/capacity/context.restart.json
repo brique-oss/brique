@@ -1,0 +1,62 @@
+{
+  "brique": {
+    "_comment": "Engine-native control-channel capacity. Not dispatched by ReflexiveLoop family routing — routed directly to the addressed context's control channel (to.type=\"control\") and handled by ContextLoop.run/RestartChildren.",
+    "cap_name": "context.restart",
+    "family": "control",
+    "file": "engine/context/context_loop.go",
+    "function": "RestartChildren"
+  },
+  "objective": {
+    "name": "context.restart",
+    "description": "Stop and recreate one or more child contexts that are already loaded and running in memory."
+  },
+  "functional": {
+    "#root": {
+      "role": "For each named child, stop its current in-memory instance and recreate a fresh ContextLoop for it from the same parent lineage. Emit one response with a per-child result.",
+      "inputs": {
+        "params": {
+          "child": {
+            "type": "string | array of strings",
+            "required": true,
+            "_comment": "Required. Name of the direct child context to restart, or an array of such names (single path segments). Each must already be loaded — use context.start for a child that has never run. Blank array entries are dropped."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "One entry per requested child, in request order: { child (string), ok (bool), reason (string, present only when ok is false) }."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "Each named child's current ContextLoop is stopped and replaced in memory by a freshly created one, re-reading context.json and all local elements from disk."
+      },
+      "transformation_contract": {
+        "morphing": "A restart request for one or more already-loaded child contexts becomes a freshly stopped-and-recreated ContextLoop for each child that could be restarted, picking up any on-disk changes made since it last started, with a per-child outcome reported back to the caller.",
+        "invariants": [
+          "Each requested child must be a direct child name of the addressed context (single path segment).",
+          "The addressed (parent) context must itself be running, both before and after the corresponding old child instance stops.",
+          "Each requested child must already be loaded in memory — use context.start for a child that has never run in this parent process; such a child is reported with ok=false and an explanatory reason.",
+          "Children are processed sequentially and independently — one child's failure does not prevent the others from being attempted.",
+          "There is no capacity to restart /root itself from within the Brique world: RestartChildren always acts on named children of the addressed context, and the addressed context can never name itself as its own child. Addressing /root with a child name equal to \"root\" (or any self-reference) fails with the ordinary \"child not found\" reason, not a dedicated error — this is not a bug, self-restart is structurally impossible (the code that would stop the process is itself running inside that process's own loop). Picking up a change to /root/context.json (e.g. trace.enabled) requires stopping and relaunching the Brique process from outside the engine — there is no in-world intention that achieves this for the root context."
+        ],
+        "success": [
+          "response.status is \"ok\" only when every requested child restarted successfully.",
+          "payload.result always lists one entry per requested child, in request order, whether the overall response is ok or error."
+        ],
+        "failure": [
+          "response.status is \"error\" (code: refused) when params.child is valid but at least one requested child failed to restart; response.error.details.result carries the same per-child breakdown as the ok payload.",
+          "response.status is \"error\" (code: invalid) when params.child is missing, empty, or neither a string nor an array of strings — no child is attempted in this case."
+        ],
+        "notes": [
+          "Use this to pick up on-disk changes to a child's context.json, wrappers, capacities, matters, or code without restarting the whole instance.",
+          "For a child that was just created via edit.create and has never been loaded in this process, use context.start instead — context.restart requires an existing in-memory instance for each requested child.",
+          "Always inspect payload.result (or response.error.details.result) rather than assuming response.status alone tells you which children restarted."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

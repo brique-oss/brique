@@ -1,0 +1,61 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "read.meaning",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_read.go",
+    "function": "capReadMeaning"
+  },
+  "objective": {
+    "name": "read.meaning",
+    "description": "Read meaning descriptors for one or more local Brique elements."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one or more local element descriptors, filter the requested sections, and return one result entry per requested item.",
+      "inputs": {
+        "params": {
+          "input": {
+            "type": "array",
+            "_comment": "Required non-empty array of meaning read requests. Each item: { element_kind (string — accepted values: context, capacity, schema, document; matter and structure are refused by Reflexive), element_name (string — name of the element within the addressed context; for context, name is ignored), sections (optional string array: brique|objective|functional|subjective — brique always included), include_resolution (optional bool, default false — when false, strips functional.#root.resolution for capacity items), detail (optional string, default 'invoke' — for capacity items only: 'invoke' reduces functional.#root to {role, inputs, outputs}, taking precedence over include_resolution since resolution is dropped either way; pass 'full' for the entire descriptor) }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item on success: { ok: true, element_kind (string), element_name (string), path (string — navigation path within context), descriptor (object — filtered descriptor JSON) }. On failure: { ok: false, element_kind, element_name, path, error: { code, message } }."
+          }
+        }
+      },
+      "effects": {
+        "meaning_descriptors": "Meaning descriptor files under the current context may be read."
+      },
+      "transformation_contract": {
+        "morphing": "A list of local Brique element references becomes a per-item meaning result set carrying either the requested meaning sections or an explicit item-level error.",
+        "invariants": [
+          "Each input item is handled independently and contributes one result entry.",
+          "brique is always included in the returned descriptor sections even when callers request narrower sections.",
+          "Matter and structure descriptors are refused by Reflexive because they are owned by MatterLoop.",
+          "When element_kind is capacity and functional is in the requested sections, functional.#root.resolution is stripped unless include_resolution is explicitly true.",
+          "When element_kind is capacity, functional.#root is reduced to {role, inputs, outputs} unless detail is explicitly 'full', regardless of include_resolution."
+        ],
+        "success": [
+          "On success, the capacity returns result entries with ok=true, element identity fields, a navigation path, and descriptor containing the filtered descriptor sections in source key order.",
+          "Per-item resolution failures remain encoded inside result entries instead of failing the whole call once params.input is valid."
+        ],
+        "failure": [
+          "The capacity fails when params.input is missing or is not a non-empty array.",
+          "Individual items return ok=false entries when the element cannot be resolved, escapes scope, is invalid JSON, or is unsupported."
+        ],
+        "notes": [
+          "read.meaning targets local element descriptors under the current context only.",
+          "descriptor remains an ordinary JSON object on the wire while preserving source key order.",
+          "Item-level errors are part of the normal payload contract for mixed or partially invalid request sets."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

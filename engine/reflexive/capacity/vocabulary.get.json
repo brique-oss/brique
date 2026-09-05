@@ -1,0 +1,74 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "vocabulary.get",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteVocabularyGet"
+  },
+  "objective": {
+    "name": "vocabulary.get",
+    "description": "Return the complete root vocabulary document, either as JSON or as the LLM-readable text map."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only vocabulary document read and return either the full projected vocabulary JSON or the LLM-readable vocabulary text map.",
+      "inputs": {
+        "params": {
+          "file": {
+            "type": "string",
+            "required": false,
+            "accepted_values": [
+              "json",
+              "llm"
+            ],
+            "default": "json",
+            "_comment": "Selects which root projection vocabulary artifact to read. json reads projection/vocabulary.json. llm reads projection/vocabulary.llm.txt."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "file": {
+            "type": "string"
+          },
+          "vocabulary": {
+            "type": "object",
+            "_comment": "Present when params.file is absent or equals json."
+          },
+          "content": {
+            "type": "string",
+            "_comment": "Present when params.file equals llm."
+          }
+        }
+      },
+      "effects": {
+        "vocabulary_overlay": "The selected root vocabulary artifact is read-only."
+      },
+      "transformation_contract": {
+        "morphing": "A root vocabulary get request becomes either the complete vocabulary JSON document stored in projection/vocabulary.json or the LLM-readable text map stored in projection/vocabulary.llm.txt.",
+        "invariants": [
+          "vocabulary.get is root-only.",
+          "vocabulary.get reads the selected materialized vocabulary artifact without mutating projection state.",
+          "The json file preserves the JSON structure stored by rebuild, update, patch, and delete operations.",
+          "The llm file is a text-only hierarchical path map and does not include vocabulary values."
+        ],
+        "success": [
+          "On success with file=json, vocabulary.get returns payload.file='json' and payload.vocabulary as the complete vocabulary JSON object.",
+          "On success with file=llm, vocabulary.get returns payload.file='llm' and payload.content as the complete LLM-readable vocabulary text."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when params.file is not one of json|llm.",
+          "The capacity fails when the selected vocabulary artifact is unavailable or cannot be decoded/read."
+        ],
+        "notes": [
+          "vocabulary.get returns the full selected document; use vocabulary.query for path-scoped child traversal.",
+          "vocabulary.query remains JSON projection-only and is not affected by params.file.",
+          "This is a projection snapshot, not a live mirror of the filesystem: nothing in the engine calls meaning.rebuild or meaning.update automatically when descriptors are created, edited, or deleted (edit.create, edit.patch_meaning, matter.write, etc. never touch the projection). A vocabulary that looks sparse relative to the real number of contexts/capacities/matters on disk almost always means the projection predates most of that content, not that the content is absent. Before relying on this vocabulary to navigate an unfamiliar or long-lived world, call meaning.rebuild (mode=vocabulary-only is enough for this capacity) if you have no recent evidence the projection is current — do not assume a rebuild done earlier in an unrelated session still covers what exists now."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

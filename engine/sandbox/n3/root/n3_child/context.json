@@ -1,0 +1,111 @@
+{
+  "_comment": "Child context fixture for N3 sandbox tests.",
+  "brique": {
+    "ctx_name": "sandbox-n3-child",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n3-child",
+    "children_list": [
+      "py_api",
+      "py_active"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [
+          "sandbox_py"
+        ],
+        "interfaces": [
+          {
+            "name": "ui_child",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/ui_child"
+            }
+          },
+          {
+            "name": "sandbox_py",
+            "type": "wrapper",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/wrapper/sandbox_py"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": [
+          {
+            "wrapper_name": "sandbox_py",
+            "mode": "interpreted",
+            "ready_timeout_ms": 2000,
+            "stop_timeout_ms": 1000,
+            "build": {
+              "shell": false,
+              "timeout_ms": 1000,
+              "artifact": "",
+              "artifact_kind": "file",
+              "cmd": []
+            },
+            "run": {
+              "shell": false,
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "sandbox_py"
+              }
+            }
+          }
+        ]
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-child"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n3-child",
+    "description": "Child fixture carrying execution, matter, and reflexive assets for N3 pipeline tests"
+  },
+  "functional": {
+    "role": "child",
+    "test_scope": [
+      "communication to execution",
+      "communication to matter",
+      "communication to reflexive",
+      "wrapper-backed execution",
+      "wrapper-backed matter",
+      "nested python subcontexts"
+    ]
+  },
+  "subjective": {
+    "intent": "sandbox child fixture",
+    "impression": "integration-focused"
+  }
+}

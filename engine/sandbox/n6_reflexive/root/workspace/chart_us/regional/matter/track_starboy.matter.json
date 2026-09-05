@@ -1,0 +1,76 @@
+{
+  "_comment": "Nested US regional matter for complex contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_starboy",
+    "description": "Starboy in the US regional selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Starboy",
+      "artist": "The Weeknd",
+      "album": "Starboy",
+      "genre": "pop",
+      "classification": {
+        "genres": [
+          "pop",
+          "electronic"
+        ],
+        "styles": [
+          "synthwave",
+          "dark-pop"
+        ]
+      },
+      "release": {
+        "year": "2016",
+        "date": "2016-09-22"
+      },
+      "chart": {
+        "market": "us",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "7",
+          "weekly": "3"
+        }
+      },
+      "tags": [
+        "regional",
+        "night-drive",
+        "festival"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "regional track",
+    "impression": "dark neon momentum",
+    "emojis": [
+      "🌙",
+      "🔥"
+    ],
+    "tags": [
+      "midnight",
+      "stadium"
+    ]
+  }
+}

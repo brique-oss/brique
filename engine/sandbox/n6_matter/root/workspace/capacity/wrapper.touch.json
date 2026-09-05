@@ -1,0 +1,54 @@
+{
+  "brique": {
+    "cap_name": "wrapper.touch",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "wrapper.touch",
+    "description": "Mutate wrapper-backed matter and emit matter event notifications"
+  },
+  "functional": {
+    "#root": {
+      "role": "Trigger a wrapper-local mutation that flows back through the Matter event contract.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_state": "The wrapper-local backing state is mutated.",
+        "@matter": "The wrapper-backed matter may be updated and may emit notifications."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper touch request becomes a mutated wrapper-backed matter state and an explicit success acknowledgement.",
+        "invariants": [
+          "wrapper.touch must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "wrapper.touch returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "wrapper.touch fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "matter wrapper event test"
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.aggregate.params.matter.remote.query",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.aggregate.params.matter.remote.query",
+    "description": "Aggregate final params from one wrapper output, one matter.read payload, and one remote meaning.query payload."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build one wrapper record, read one local matter, query the remote root meaning projection, and synthesize final wrapper params from all three sources.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_param_source": "One local wrapper output contributes to the final params.",
+        "matter_param_source": "One local matter.read payload contributes to the final params.",
+        "remote_meaning_query_source": "One remote meaning.query payload contributes to the final params."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one final wrapper input projection whose params are synthesized from one previous wrapper response, one matter.read response, and one remote meaning.query response.",
+        "invariants": [
+          "The final wrapper call receives label from the root input, message from sandbox.build.record, source_ctx from the local matter payload, and selected_name/selected_ctx from the remote projected row.",
+          "The flow refreshes the remote projection before querying it so the selected remote row is derived from a rebuilt meaning index."
+        ],
+        "success": [
+          "The terminal payload exposes received_params.label, received_params.message, received_params.source_ctx, received_params.selected_name, and received_params.selected_ctx.",
+          "received_params.selected_name and received_params.selected_ctx come from the first remote meaning.query row."
+        ],
+        "failure": [
+          "The flow fails if the remote projection rebuild or the remote query fails after its retry policy is exhausted.",
+          "The flow fails if the local matter read or final wrapper call cannot be completed."
+        ],
+        "notes": [
+          "This scenario validates that a DSL can aggregate local wrapper output, local matter content, and remote reflective projection into one terminal wrapper call.",
+          "The remote meaning.query is intentionally used as a projected selector, not as a detailed descriptor reader."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.record",
+                "with": {
+                  "message": "$input.message",
+                  "target_id": "ignored",
+                  "prefix": "remote-query-agg"
+                },
+                "as": "built"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "m_chain_local",
+                  "read_mode": "functional|brique"
+                },
+                "as": "local_matter"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "Wrapper-backed echo capacity for N5 inter-instance tests"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_query"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "message": "$built.payload.record.composed",
+                  "source_ctx": "$local_matter.payload.functional.source_ctx",
+                  "selected_name": "$remote_query.payload.result.0.name",
+                  "selected_ctx": "$remote_query.payload.result.0.ctx_id"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

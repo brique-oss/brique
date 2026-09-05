@@ -1,0 +1,61 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "edit.duplicate",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_edit.go",
+    "function": "capEditDuplicate"
+  },
+  "objective": {
+    "name": "edit.duplicate",
+    "description": "Duplicate one or more local Brique elements into new local targets."
+  },
+  "functional": {
+    "#root": {
+      "role": "Validate one duplication batch, copy the targeted local elements to new local names, and return one aggregated per-item result payload.",
+      "inputs": {
+        "params": {
+          "items": {
+            "type": "array",
+            "_comment": "Required non-empty duplication batch. Each item: { type (string: context|capacity|schema|document), source_name (string), target_name (string), destination_ctx_id (optional string — absolute context path, defaults to addressed context) }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item: { ok (bool), type (string), source_name (string), target_name (string) } on success, or { ok: false, ..., error: { code, message, reason } } on failure."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "Local files, directories, and meaning descriptors may be copied under new local names."
+      },
+      "transformation_contract": {
+        "morphing": "A batch of local duplication requests becomes a per-item duplication result set, with successful items producing new local copies of the requested Brique elements.",
+        "invariants": [
+          "edit.duplicate is batch-oriented and returns one result entry per parsed item.",
+          "Duplication is a pure copy primitive in v1 and refuses any patch payload in the same item.",
+          "Context duplication copies the whole child context tree while filtering out .git paths.",
+          "Descriptor duplication preserves source key order; target-local document adjustments retain existing key positions and append only missing keys.",
+          "When duplicating within the same context (no destination_ctx_id, or destination_ctx_id equal to the addressed context), source_name and target_name must differ.",
+          "When duplicating to a different context, source_name and target_name may be identical, since the destination context is a distinct namespace."
+        ],
+        "success": [
+          "On success, each result item reports ok=true with the normalized type plus source_name and target_name.",
+          "Document duplication preserves local content semantics by copying the local file and rewriting brique.file deterministically for the target name."
+        ],
+        "failure": [
+          "The capacity fails when params.items is missing or cannot be parsed into a valid edit batch.",
+          "Individual items return errors when the type is unsupported, names are missing, source_name and target_name are equal within the same context, destination_ctx_id cannot be resolved, the source cannot be read, the target already exists, or copying cannot complete."
+        ],
+        "notes": [
+          "Matter and structure duplication is refused here because those element kinds are owned by MatterLoop.",
+          "Duplicate does not mutate the copied meaning beyond the target-local adjustments needed for documents and contexts."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

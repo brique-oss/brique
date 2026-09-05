@@ -1,0 +1,92 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.wrapper.dynamic.matter.inputs",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.wrapper.dynamic.matter.inputs",
+    "description": "Instantiate params and @matter refs for a wrapper-backed capacity from a previous sub-capacity output."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build matter refs in one wrapper-backed step, then instantiate params and @matter dynamically for a second wrapper-backed step.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_input_contract": "The final wrapper receives params and @matter refs built dynamically from a previous sub-response."
+      },
+      "transformation_contract": {
+        "morphing": "A DSL request becomes an explicit reflection of dynamically built params and matter refs observed by the wrapper runtime.",
+        "invariants": [
+          "The flow first materializes matter ref strings through sandbox.build.matter_refs before invoking the final wrapper.",
+          "The final wrapper call consumes both a param derived from the previous payload and dynamically built @matter refs.",
+          "Only one terminal wrapper invocation occurs after the builder step."
+        ],
+        "success": [
+          "On success, the terminal payload reflects the dynamically constructed params and @matter refs observed by the wrapper.",
+          "Successful execution proves that DSL can instantiate wrapper inputs from previous capacity outputs.",
+          "The terminal payload exposes received_params together with ctx_id and wrapper_name from sandbox.inspect.inputs."
+        ],
+        "failure": [
+          "The flow fails if either the ref-building wrapper step or the final inspection wrapper step cannot complete.",
+          "A failure in the builder step prevents the dynamic @matter injection step from running successfully."
+        ],
+        "notes": [
+          "This is the dynamic @matter injection oracle used by N7.",
+          "The scenario focuses on DSL dataflow between subcalls rather than on matter resolution itself."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.matter_refs",
+                "with": {
+                  "local_matter_id": "m_chain_local",
+                  "remote_matter_ref": "@ext_REMOTE_PUBKEY:/beta-child/m_chain_remote"
+                },
+                "as": "built_refs"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "origin": "$built_refs.payload.local_ref",
+                  "@matter": {
+                    "primary": "$built_refs.payload.local_ref",
+                    "secondary": "$built_refs.payload.remote_ref"
+                  }
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

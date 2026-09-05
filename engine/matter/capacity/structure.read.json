@@ -1,0 +1,78 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "structure.read",
+    "family": "matter",
+    "file": "engine/matter/matter_read_introspec.go",
+    "function": "capStructureRead"
+  },
+  "objective": {
+    "name": "structure.read",
+    "description": "Read one structure descriptor from the local context with selectable meaning, functional, and brique sections."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one structure identifier, read the local structure descriptor, and return the requested sections.",
+      "inputs": {
+        "params": {
+          "structure_id": {
+            "type": "string"
+          },
+          "want_meaning": {
+            "type": "boolean",
+            "_comment": "Optional. When true (default), includes the meaning section of the descriptor. Set to false to exclude it."
+          },
+          "want_functional": {
+            "type": "boolean",
+            "_comment": "Optional. When true (default), includes the functional section of the descriptor. Set to false to exclude it."
+          },
+          "want_brique": {
+            "type": "boolean",
+            "_comment": "Optional. When true (default), includes the brique section of the descriptor. Set to false to exclude it."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "structure_id": {
+            "type": "string"
+          },
+          "meaning": {
+            "type": "object"
+          },
+          "functional": {
+            "type": "object"
+          },
+          "brique": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "catalog": "Local structure catalog is consulted.",
+        "structure_descriptor": "The local structure descriptor file is read."
+      },
+      "transformation_contract": {
+        "morphing": "A structure identifier plus section selectors becomes an explicit structure view assembled from the local descriptor and catalog projection.",
+        "invariants": [
+          "structure.read never mutates the addressed structure.",
+          "Only descriptor sections are returned; no structure payload or matter substance is exposed here."
+        ],
+        "success": [
+          "A successful response always includes structure_id and every requested descriptor section that could be read.",
+          "The returned sections are assembled from the local catalog projection and structure descriptor file."
+        ],
+        "failure": [
+          "The capacity fails when structure_id is missing or the addressed structure is absent from the runtime catalog.",
+          "The capacity fails when the catalog entry is not actually a structure or when the descriptor cannot be read."
+        ],
+        "notes": [
+          "All three selector booleans default to true when omitted: omitting all of them returns the full descriptor.",
+          "Unlike matter.read, structure.read uses want_* booleans directly and does not support read_mode.",
+          "structure.read is descriptor-focused and does not expose a substance payload."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,60 @@
+{
+  "_comment": "Alpha branch parent context for N4 routing tests.",
+  "brique": {
+    "ctx_name": "sandbox-n4-alpha-parent",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n4-alpha-parent",
+    "children_list": [
+      "alpha_child"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": [],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-n4-alpha-parent"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n4-alpha-parent",
+    "description": "Alpha parent branch used for parent/child and sibling routing tests"
+  },
+  "functional": {
+    "role": "child",
+    "test_scope": [
+      "parent to child routing",
+      "child to parent routing",
+      "sibling routing"
+    ]
+  },
+  "subjective": {
+    "intent": "alpha branch parent",
+    "impression": "topology node"
+  }
+}

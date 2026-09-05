@@ -1,0 +1,69 @@
+{
+  "_comment": "Reflexive meaning copy of the DSL execution capacity.",
+  "brique": {
+    "cap_name": "sandbox.dsl.await",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.await",
+    "description": "Meaning descriptor for reflexive reads"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit a downstream request, await the correlated response, and return the synthesized DSL result.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "downstream_route": "A downstream intention is emitted and awaited by the DSL runtime."
+      },
+      "transformation_contract": {
+        "morphing": "An inbound DSL request becomes a synthesized result after one awaited downstream orchestration step.",
+        "invariants": [
+          "sandbox.dsl.await must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.dsl.await returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.dsl.await fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      },
+      "resolution": {
+        "invoke": {
+          "@capacity": "/root/n3_child/sandbox.emit.await",
+          "with": {
+            "target_context": "/remote/target",
+            "payload": "$input.message"
+          },
+          "as": "await_result",
+          "await_response": true
+        }
+      }
+    }
+  },
+  "subjective": {
+    "intent": "reflexive meaning"
+  }
+}

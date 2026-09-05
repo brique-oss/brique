@@ -1,0 +1,59 @@
+{
+  "_comment": "API-style Python capacity backed by a lambda-like callable.",
+  "brique": {
+    "cap_name": "api.combine",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "api",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "api.combine",
+    "description": "Combines two fields through a callable symbol"
+  },
+  "functional": {
+    "#root": {
+      "role": "Combine two string inputs through a callable symbol in the wrapper runtime.",
+      "inputs": {
+        "params": {
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "combined": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Two input strings become one combined string returned through a callable symbol in the wrapper runtime.",
+        "invariants": [
+          "api.combine must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "api.combine returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "api.combine fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "api combine"
+  }
+}

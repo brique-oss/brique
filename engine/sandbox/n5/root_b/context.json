@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "ctx_name": "sandbox-n5-root-b",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "root-b",
+    "children_list": [
+      "beta_child"
+    ],
+    "engine_config": {
+      "communication": {
+        "instance_key_name": "instance-b",
+        "wrapper_boundary": [],
+        "websocket_listener": {
+          "addr": ":19182"
+        },
+        "interfaces": [
+          {
+            "name": "outerCtx",
+            "type": "outerCtx",
+            "driver": "https",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "tls_insecure_skip_verify": true,
+              "path": "/brique",
+              "targets": {}
+            }
+          }
+        ]
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": true,
+        "repo_name": "brique-sandbox-n5-root-b"
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "cap_name": "sandbox.missing.wrapper",
+    "kind": "interpreted",
+    "wrapper": "sandbox_missing_wrapper",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.missing.wrapper",
+    "description": "Capacity pointing to a missing wrapper configuration for fail-closed tests"
+  },
+  "functional": {
+    "#root": {
+      "role": "Select a non-existent wrapper configuration and expose the fail-closed execution path.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_selection": "The wrapper selection path is exercised and expected to fail closed."
+      },
+      "transformation_contract": {
+        "morphing": "An execution request becomes a fail-closed missing-wrapper error path when the configured wrapper does not exist.",
+        "invariants": [
+          "sandbox.missing.wrapper must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.missing.wrapper returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.missing.wrapper fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "prove unresolved wrapper selection fails closed"
+  }
+}

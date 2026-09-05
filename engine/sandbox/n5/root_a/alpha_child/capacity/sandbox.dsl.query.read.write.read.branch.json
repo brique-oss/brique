@@ -1,0 +1,162 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.query.read.write.read.branch",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.query.read.write.read.branch",
+    "description": "Use local query/read meaning to write a matter, read it back, and branch on the committed value."
+  },
+  "functional": {
+    "#root": {
+      "role": "Rebuild the local projection, select one local element through meaning.query, read its detailed meaning, write one matter from that descriptor, read the matter back, and branch on the committed field.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_projection_refresh": "The local projection is refreshed before the query.",
+        "local_meaning_selection": "One local projected element is selected and read in detail.",
+        "meaning_driven_matter_write": "The selected descriptor materializes one local matter revision.",
+        "committed_branch": "The branch decision is taken from the committed matter value."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific terminal response after a local reflective selection is materialized into a matter and then re-read.",
+        "invariants": [
+          "The branch decision is taken from the committed local matter field produced after write and readback, not from the pre-commit meaning alias.",
+          "The local projection is rebuilt before the query so the selected projected row comes from a refreshed local index."
+        ],
+        "success": [
+          "When the committed message equals sandbox.echo, the terminal payload exposes summary and ctx_id from sandbox.consume.record.",
+          "The local matter revision stores the selected descriptor name and description before the final branch executes."
+        ],
+        "failure": [
+          "The flow fails if rebuild, query, read.meaning, matter.write, or matter.read fails before the branch.",
+          "The flow can still terminate through the else branch if the committed message does not match the expected selected capacity name."
+        ],
+        "notes": [
+          "This scenario validates a longer reflective chain query -> read -> write -> read -> branch inside a single DSL flow.",
+          "The else branch keeps the contract exhaustive, but the fixture data is arranged so the consume.record path is normally taken."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "as": "rebuilt"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/alpha_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "Wrapper-backed echo capacity for N5 inter-instance tests"
+                    }
+                  ]
+                },
+                "as": "selected"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "$selected.payload.result.0.name",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "as": "detailed"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.write",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "m_chain_local",
+                  "functional": {
+                    "message": "$detailed.payload.result.0.descriptor.objective.name",
+                    "source_ctx": "$detailed.payload.result.0.descriptor.objective.description"
+                  }
+                },
+                "as": "write_local"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$write_local.payload.matter_id",
+                  "read_mode": "functional|brique"
+                },
+                "as": "read_local"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$read_local.payload.functional.message",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.consume.record",
+                    "with": {
+                      "message": "$read_local.payload.functional.message",
+                      "source_ctx": "$read_local.payload.functional.source_ctx",
+                      "revision": "$write_local.payload.revision"
+                    },
+                    "as": "final_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-write-miss"
+                    },
+                    "as": "final_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

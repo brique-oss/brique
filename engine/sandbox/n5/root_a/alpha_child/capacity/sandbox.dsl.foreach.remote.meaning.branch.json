@@ -1,0 +1,155 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.foreach.remote.meaning.branch",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.foreach.remote.meaning.branch",
+    "description": "Build a collection, then use remote meaning.query inside a bounded for_each to drive per-item branching."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build one batch locally, then for each item query the remote meaning projection, branch on the selected remote element, and call the corresponding terminal wrapper.",
+      "inputs": {
+        "params": {
+          "prefix": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "items": {
+            "type": "array"
+          }
+        }
+      },
+      "effects": {
+        "collection_build": "One local wrapper builds the collection to iterate.",
+        "remote_reflective_branching": "Each iteration queries the remote meaning projection before choosing its branch."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one ordered list of per-item terminal payloads after each item is resolved through live remote reflective selection.",
+        "invariants": [
+          "The remote projection is rebuilt once before entering the loop, then each item performs its own remote meaning.query against that refreshed projection.",
+          "Each loop item branches independently from the first selected remote row while preserving the original batch ordering in the final items array."
+        ],
+        "success": [
+          "The terminal payload exposes items as the ordered list of per-item wrapper payloads returned by the selected branch.",
+          "When the remote query selects sandbox.echo, the corresponding item payload comes from the remote sandbox.echo capacity."
+        ],
+        "failure": [
+          "The flow fails if the initial rebuild or any per-item remote query exhausts its retry policy under the default fail-closed loop policy.",
+          "The flow fails if a selected terminal wrapper branch cannot be completed for an item."
+        ],
+        "notes": [
+          "This scenario validates reflective branching inside >for_each rather than before the loop.",
+          "The local else branch exists to keep the switch exhaustive, but the N7 fixture is designed so the remote branch is selected."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.batch",
+                "with": {
+                  "prefix": "$input.prefix",
+                  "count": "$input.count"
+                },
+                "as": "batch"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              ">for_each": {
+                "collection": "$batch.payload.items",
+                "limit": 2,
+                ">do": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "invoke": {
+                          "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                          "to_type": "reflexive",
+                          "with": {
+                            "ctx_id": "/root/beta_child",
+                            "element_kind": "capacity",
+                            "filters": [
+                              {
+                                "path": "objective.name",
+                                "op": "EQ",
+                                "value": "sandbox.echo"
+                              }
+                            ]
+                          },
+                          "timeout": {
+                            "ms": 1200
+                          },
+                          "retry": {
+                            "max": 3,
+                            "delay_ms": 25
+                          },
+                          "as": "selected"
+                        }
+                      },
+                      {
+                        ">if": {
+                          "when": {
+                            "left": "$selected.payload.result.0.name",
+                            "op": "eq",
+                            "right": "sandbox.echo"
+                          },
+                          ">then": {
+                            "invoke": {
+                              "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                              "with": {
+                                "message": "$item.message"
+                              },
+                              "as": "item_result"
+                            }
+                          },
+                          ">else": {
+                            "invoke": {
+                              "@capacity": "/root/alpha_child/sandbox.echo",
+                              "with": {
+                                "message": "$item.message"
+                              },
+                              "as": "item_result"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

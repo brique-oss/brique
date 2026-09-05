@@ -1,0 +1,33 @@
+{
+  "brique": {
+    "cap_name": "reset",
+    "kind": "interpreted",
+    "wrapper": "counter_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "reset",
+    "description": "Reset counter_value.value to zero."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "number"
+          }
+        }
+      },
+      "effects": {
+        "matter": "Writes counter_value."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "reset counter"
+  }
+}

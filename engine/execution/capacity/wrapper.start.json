@@ -1,0 +1,53 @@
+{
+  "brique": {
+    "_comment": "Engine-native Execution family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "wrapper.start",
+    "family": "execution",
+    "file": "engine/execution/execution_cap.go",
+    "function": "execWrapperStart"
+  },
+  "objective": {
+    "name": "wrapper.start",
+    "description": "Start a named wrapper in the current context. Builds if necessary, then starts the process and waits for readiness."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve the named wrapper configuration, build if required, start the process, wait for readiness, and emit a response.",
+      "inputs": {
+        "params": {
+          "name": {
+            "type": "string",
+            "required": true,
+            "_comment": "Required. Name of the wrapper to start, as declared in engine_config.execution.wrappers."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "_comment": "Empty payload on success. The wrapper is running and ready when the response is received."
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The wrapper process is started. Build artifacts may be produced if the wrapper requires compilation."
+      },
+      "transformation_contract": {
+        "morphing": "A start request becomes a running, ready wrapper process.",
+        "invariants": [
+          "params.name must refer to a wrapper declared in the addressed context's OWN execution config — resolution is strictly local per context, with no inheritance from a parent context's execution.wrappers, however architecturally close. A wrapper declared in a parent is never reachable by wrapper.start (or by any capacity) addressed at a child context; the wrapper must be declared, and wrapper.start invoked, against the exact context that owns it. Fails with reason=wrapper_not_configured otherwise.",
+          "The handler runs asynchronously — it does not block the execution inbox.",
+          "Delegates entirely to ensureWrapperReady.",
+          "Readiness requires the wrapper process to connect back to the engine over its own websocket route and send wrapper_ready. This requires THREE separate context.json declarations to agree: engine_config.execution.wrappers[].wrapper_name, engine_config.communication.wrapper_boundary (same name, enables routing), and an engine_config.communication.interfaces[] entry with type='wrapper' and the same name (opens the actual channel the process connects through). The engine does not cross-check these three at startup or during wrapper.start — if the interfaces[] entry is missing while the other two are present, the process starts but can never connect, and wrapper.start observes no different failure mode than any other unready process: it times out."
+        ],
+        "success": [
+          "Emits an OK response with empty payload when the wrapper is ready."
+        ],
+        "failure": [
+          "Emits an error response when the wrapper name is missing or not configured.",
+          "Emits an error response when the build or start process fails.",
+          "Times out with a generic 'wrapper readiness timeout' error (no distinguishing detail) when the process started but never signaled readiness — including the case where its required interfaces[] entry (type='wrapper', matching name) is missing from context.json. If wrapper.start times out, verify all three declarations noted above are present before assuming a build or process-level failure."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,116 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.aggregate.params.mixed.matters",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.aggregate.params.mixed.matters",
+    "description": "Aggregate params from several previous capacities and pass both wrapper-owned and remote matters into the final wrapper call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Aggregate final params from multiple previous sub-responses and resolve both a local wrapper matter and a remote Brique matter in the final wrapper call.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          },
+          "resolved_matters": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "multi_source_param_aggregation": "Final params are built from multiple previous capacity responses.",
+        "wrapper_matter_read": "A wrapper-owned matter is read in the final wrapper call.",
+        "remote_matter_read": "A remote matter is read in the final wrapper call."
+      },
+      "transformation_contract": {
+        "morphing": "A DSL request becomes one final wrapper response after aggregating params from multiple sub-responses and resolving both local-wrapper and remote-Brique matters.",
+        "invariants": [
+          "The final wrapper call receives label from the root input, message from sandbox.build.record, source_ctx from remote read.state, and @matter refs from sandbox.build.matter_refs.",
+          "The local wrapper-owned matter and the remote Brique matter are both resolved by the terminal wrapper call rather than inline in the DSL itself."
+        ],
+        "success": [
+          "The terminal payload exposes received_params and resolved_matters from sandbox.inspect.resolved.inputs.",
+          "received_params.@matter carries both the local wrapper matter ref and the remote Brique matter ref, while resolved_matters exposes their resolved contents."
+        ],
+        "failure": [
+          "The flow fails if sandbox.build.record, remote read.state, sandbox.build.matter_refs, or the final wrapper resolution step fails.",
+          "The flow fails if either referenced matter cannot be resolved by the terminal wrapper."
+        ],
+        "notes": [
+          "This scenario validates mixed local-wrapper and remote-Brique matter references flowing through one DSL orchestration.",
+          "N7 verifies both the raw received @matter refs and the resolved contents returned by the wrapper."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.record",
+                "with": {
+                  "message": "$input.message",
+                  "target_id": "ignored",
+                  "prefix": "agg"
+                },
+                "as": "built_record"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "remote_state"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.matter_refs",
+                "with": {
+                  "local_matter_id": "wrapper_note",
+                  "remote_matter_ref": "@ext_REMOTE_PUBKEY:/beta-child/m_chain_remote"
+                },
+                "as": "built_refs"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.resolved.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "message": "$built_record.payload.record.composed",
+                  "source_ctx": "$remote_state.payload.context.context_id",
+                  "@matter": {
+                    "primary": "$built_refs.payload.local_ref",
+                    "secondary": "$built_refs.payload.remote_ref"
+                  }
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

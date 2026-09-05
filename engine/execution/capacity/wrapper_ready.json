@@ -1,0 +1,48 @@
+{
+  "brique": {
+    "_comment": "Engine-native Execution internal capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "wrapper_ready",
+    "family": "execution",
+    "file": "engine/execution/execution_cap.go",
+    "function": "execWrapperReady"
+  },
+  "objective": {
+    "name": "wrapper_ready",
+    "description": "Internal execution signal emitted by a wrapper when it becomes ready."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve the wrapper runtime from the wrapper origin context, mark it ready when appropriate, and release the readiness waiter.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_runtime": "The target wrapper runtime readiness flags and timestamps may be updated."
+      },
+      "transformation_contract": {
+        "morphing": "An internal wrapper-ready signal becomes an updated ready state for the targeted wrapper runtime.",
+        "invariants": [
+          "wrapper_ready is an internal one-way execution signal and does not emit a response payload.",
+          "The target wrapper is resolved from the originating wrapper transport context, not from params.",
+          "The ready transition only applies when the wrapper runtime is starting or running, not yet marked ready, and has no recorded readiness error."
+        ],
+        "success": [
+          "When the signal is accepted, the wrapper runtime is marked ready, ReadyAt is stamped, and any readiness waiter is released.",
+          "A wrapper-ready trace event may be emitted when the readiness waiter is released."
+        ],
+        "failure": [
+          "Signals from contexts that do not resolve to a known wrapper are ignored rather than producing an external error.",
+          "Missing execution frame or wrapper registry prevents state mutation and leaves the signal effectively as a no-op."
+        ],
+        "notes": [
+          "This capability is reserved for internal wrapper lifecycle coordination inside Execution.",
+          "There are intentionally no declared outputs because callers should observe wrapper state indirectly rather than through a direct response."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,60 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "edit.create",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_edit.go",
+    "function": "capEditCreate"
+  },
+  "objective": {
+    "name": "edit.create",
+    "description": "Create one or more local Brique elements in the current context tree."
+  },
+  "functional": {
+    "#root": {
+      "role": "Validate one creation batch, materialize the requested local elements or contexts, and return one aggregated per-item result payload.",
+      "inputs": {
+        "params": {
+          "items": {
+            "type": "array",
+            "_comment": "Required non-empty creation batch. Each item: { type (string: context|capacity|schema|document), name (string), content_json (optional string — JSON object seed for the descriptor), destination_ctx_id (optional string — absolute context path, defaults to addressed context) }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item: { ok (bool), type (string), name (string) } on success, or { ok: false, type, name, error: { code, message, reason } } on per-item failure."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "Local directories, files, and meaning descriptors may be created under the current context."
+      },
+      "transformation_contract": {
+        "morphing": "A batch of local element creation requests becomes a per-item creation result set, with successful items materializing new local Brique elements in the current context tree.",
+        "invariants": [
+          "edit.create is batch-oriented and returns one result entry per parsed item.",
+          "Context creation materializes the child context directory tree plus required subdirectories and updates the parent child list.",
+          "Non-context creation writes a meaning descriptor from either provided content or the embedded template for the requested type.",
+          "Embedded template order is preserved, and content_json is authoritative when supplied so caller-defined key order is preserved."
+        ],
+        "success": [
+          "On success, each result item reports ok=true with the normalized type and name of the created element.",
+          "Document creation can also create an empty local content file when the created document resolves to a local file target."
+        ],
+        "failure": [
+          "The capacity fails when params.items is missing or cannot be parsed into a valid edit batch.",
+          "Individual items return errors when the target type is unsupported, the name is invalid or already exists, the target escapes scope, or the descriptor/template cannot be written."
+        ],
+        "notes": [
+          "Matter and structure creates are refused here because those element kinds are owned by MatterLoop.",
+          "Structured content objects remain supported for compatibility but cannot preserve caller key order after map decoding; use content_json when descriptor order matters.",
+          "Templates are loaded from the embedded engine template set when item content is not supplied."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,34 @@
+{
+  "brique": {
+    "kind": "structure",
+    "revision": 1
+  },
+  "objective": {
+    "name": "s_playlist",
+    "description": "Seed playlist structure for Matter N6 structure tests"
+  },
+  "functional": {
+    "kind": "playlist",
+    "title": "Seed Playlist",
+    "items": [
+      {
+        "matter_id": "m_brique_inline",
+        "role": "lead"
+      },
+      {
+        "matter_id": "m_brique_large",
+        "role": "support"
+      }
+    ],
+    "classification": {
+      "family": "music",
+      "theme": "test"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "seed",
+      "playlist"
+    ]
+  }
+}

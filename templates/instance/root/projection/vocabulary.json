@@ -1,0 +1,250 @@
+{
+  "brique": {
+    "cap_name": [
+      "brique.intention",
+      "mcp.initialize",
+      "mcp.response"
+    ],
+    "children_list": [
+      "mcp"
+    ],
+    "ctx_ext_name": [
+      "mcp",
+      "root"
+    ],
+    "ctx_name": [
+      "mcp",
+      "root"
+    ],
+    "ctx_type": [
+      "root"
+    ],
+    "ctx_version": [
+      "1"
+    ],
+    "engine_config": {
+      "communication": {
+        "interfaces": {
+          "config": {
+            "egress_enabled": {},
+            "ingress_enabled": {},
+            "path": [
+              "/mcp/ws",
+              "/wrapper/mcp_server_go",
+              "/ws"
+            ]
+          },
+          "driver": [
+            "ws"
+          ],
+          "name": [
+            "main",
+            "mcp_server_go",
+            "repl"
+          ],
+          "type": [
+            "ui",
+            "wrapper"
+          ]
+        },
+        "scattered": {
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          },
+          "scattered_max_items": [
+            8
+          ]
+        },
+        "websocket_listener": {
+          "addr": [
+            ":8080"
+          ]
+        },
+        "wrapper_boundary": [
+          "mcp_server_go"
+        ]
+      },
+      "execution": {
+        "wrappers": {
+          "build": {
+            "artifact": [
+              "build/mcp_server_go/mcp_server_go"
+            ],
+            "artifact_kind": [
+              "file"
+            ],
+            "cmd": [
+              "-o",
+              ".",
+              "../../build/mcp_server_go/mcp_server_go",
+              "build",
+              "go"
+            ],
+            "shell": {},
+            "timeout_ms": [
+              30000
+            ]
+          },
+          "mode": [
+            "compiled"
+          ],
+          "ready_timeout_ms": [
+            5000
+          ],
+          "run": {
+            "cmd": [
+              "./mcp_server_go"
+            ],
+            "env": {
+              "BRIQUE_WRAPPER_NAME": [
+                "mcp_server_go"
+              ]
+            },
+            "shell": {}
+          },
+          "stop_timeout_ms": [
+            500
+          ],
+          "wrapper_name": [
+            "mcp_server_go"
+          ]
+        }
+      },
+      "reflexive": {
+        "repo_name": [
+          "my-brique-instance",
+          "spark-pulse-sandbox-mcp"
+        ],
+        "root_repo": {}
+      },
+      "trace": {
+        "enabled": {},
+        "flush_every_interval": [
+          20
+        ],
+        "flush_every_n": [
+          8
+        ],
+        "level": [
+          "debug"
+        ],
+        "ring_capacity": [
+          64
+        ],
+        "segment_max_bytes": [
+          1048576
+        ]
+      }
+    },
+    "engine_version": [
+      "0.0.1"
+    ],
+    "file": [
+      "document/mcp_intent.md"
+    ],
+    "kind": [
+      "compiled",
+      "document",
+      "matter"
+    ],
+    "lang": [
+      "go"
+    ],
+    "ref": [
+      ""
+    ],
+    "rel_ctx": [
+      ""
+    ],
+    "substance_mode": [
+      "brique"
+    ],
+    "substance_type": [
+      "text"
+    ],
+    "type": [
+      "local"
+    ],
+    "ui_config": {
+      "adapter": [
+        "react"
+      ],
+      "host": [
+        "electron",
+        "vscode"
+      ],
+      "name": [
+        "main",
+        "repl"
+      ],
+      "root_view": [
+        "BriqueEditorRoot",
+        "IntentionRepl"
+      ],
+      "ws_path": [
+        "/mcp/ws",
+        "/ws"
+      ]
+    },
+    "wrapper": [
+      "mcp_server_go"
+    ]
+  },
+  "functional": {
+    "content_kind": [
+      "markdown"
+    ],
+    "external_retrieval": {},
+    "format": [
+      "md"
+    ],
+    "mime_type": [
+      "text/markdown"
+    ],
+    "operations": {
+      "read": {
+        "enabled": {},
+        "modes": [
+          "brique",
+          "data",
+          "meaning"
+        ]
+      },
+      "write": {
+        "enabled": {},
+        "metadata_only": {},
+        "payload_allowed_only_when_mode_is": [
+          "brique"
+        ]
+      }
+    },
+    "owns_wrappers": [
+      "mcp_server_go"
+    ],
+    "role": [
+      "mcp_bridge",
+      "root"
+    ],
+    "source_kind": [
+      "local"
+    ]
+  },
+  "objective": {
+    "description": [],
+    "name": [
+      "brique.intention",
+      "brique_cognitive_framework",
+      "mcp",
+      "mcp.initialize",
+      "mcp.response",
+      "mcp_intent",
+      "root"
+    ]
+  },
+  "subjective": {}
+}

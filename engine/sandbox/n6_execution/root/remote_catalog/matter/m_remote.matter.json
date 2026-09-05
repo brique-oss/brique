@@ -1,0 +1,30 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_remote",
+    "description": "Remote matter readable from wrapper outbound flow"
+  },
+  "functional": {
+    "domain": "execution-test",
+    "label": "remote-seed",
+    "classification": {
+      "family": "remote",
+      "kind": "seed"
+    },
+    "music": {
+      "title": "Remote Anthem",
+      "artist": "Brique Ensemble"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "remote",
+      "seed"
+    ]
+  }
+}

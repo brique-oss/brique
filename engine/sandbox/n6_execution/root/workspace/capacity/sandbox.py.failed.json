@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "cap_name": "sandbox.py.failed",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py_fail",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.py.failed",
+    "description": "Interpreted wrapper-backed capacity used to prove wrapper_failed fail-closed behavior"
+  },
+  "functional": {
+    "#root": {
+      "role": "Select an interpreted wrapper that fails before readiness and expose the fail-closed execution path.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_runtime": "The interpreted wrapper readiness path is exercised and expected to fail closed."
+      },
+      "transformation_contract": {
+        "morphing": "An interpreted execution request becomes a fail-closed wrapper-failed path when readiness is explicitly reported as failed.",
+        "invariants": [
+          "sandbox.py.failed must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.py.failed returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.py.failed fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "simulate wrapper failure before readiness"
+  }
+}

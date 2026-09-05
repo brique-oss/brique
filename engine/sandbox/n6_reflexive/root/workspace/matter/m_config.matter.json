@@ -1,0 +1,49 @@
+{
+  "_comment": "Secondary matter descriptor used to densify meaning rebuild and structure references.",
+  "brique": {
+    "kind": "matter",
+    "revision": 3,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_config",
+    "description": "Configuration-like JSON matter for sandbox N6 workspace",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "schema/meaning_patch.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": false,
+        "payload_allowed_only_when_mode_is": [
+          "brique"
+        ]
+      }
+    },
+    "substance": {
+      "local_file": "data.bin",
+      "content_type": "application/json"
+    },
+    "tags": [
+      "config",
+      "json",
+      "seed"
+    ]
+  },
+  "subjective": {
+    "intent": "configuration matter seed",
+    "impression": "json payload"
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "meaning.query",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteMeaningQuery"
+  },
+  "objective": {
+    "name": "meaning.query",
+    "description": "Query the root meaning projection with filters, paging, and ordering."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only query against the projection database and return the matching projected elements.",
+      "inputs": {
+        "params": {
+          "element_kind": {
+            "type": "string",
+            "_comment": "Optional. Filter results to this element kind (e.g. capacity, matter, document)."
+          },
+          "ctx_id": {
+            "type": "string",
+            "_comment": "Optional. Restrict query to elements belonging to this context id (absolute path from /root)."
+          },
+          "ctx_mode": {
+            "type": "string",
+            "_comment": "Optional. Only meaningful together with ctx_id. Accepted values: strict (default — only elements whose ctx_id exactly equals the requested one), subtree (elements whose ctx_id equals the requested one or is nested under it). Ignored when ctx_id is absent."
+          },
+          "filters": {
+            "type": "array",
+            "_comment": "Optional filter list. Each filter: { path (string — dot-separated semantic path into the element descriptor, e.g. 'functional.tags.domain'), op (string — case-insensitive, accepted values: EQ (exact text match), LIKE (SQL LIKE pattern with % wildcards), EXISTS (checks presence of the path regardless of value)), value (string or array of strings — required for EQ and LIKE, ignored for EXISTS), match (string: ANY|ALL — when value is an array: ANY=at least one matches, ALL=all must match; default ANY) }. Unknown or invalid filter entries are silently ignored. Example: [{ \"path\": \"functional.tags.domain\", \"op\": \"EQ\", \"value\": \"audio\" }, { \"path\": \"functional.tags.status\", \"op\": \"EQ\", \"value\": [\"active\", \"experimental\"], \"match\": \"ANY\" }, { \"path\": \"objective.description\", \"op\": \"LIKE\", \"value\": \"%stream%\" }, { \"path\": \"brique.author\", \"op\": \"EXISTS\" }]. All filters combine with AND."
+          },
+          "limit": {
+            "type": "integer",
+            "_comment": "Optional maximum number of results to return."
+          },
+          "offset": {
+            "type": "integer",
+            "_comment": "Optional zero-based result offset for pagination."
+          },
+          "order_by": {
+            "type": "string",
+            "_comment": "Optional ordering. Accepted values: name (ascending by element name), kind (ascending by element_kind then name). Defaults to name."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Matching projected elements. Each item: { element_kind (string — e.g. capacity, document, schema), name (string — element name within its context), ctx_id (string — absolute context path such as /root/workspace) }. The projection returns identity fields only; use read.meaning to retrieve full descriptor sections."
+          }
+        }
+      },
+      "effects": {
+        "projection_db": "The root meaning projection database is queried read-only."
+      },
+      "transformation_contract": {
+        "morphing": "A root meaning query becomes an ordered list of projected elements matching the requested filters, paging, and ordering.",
+        "invariants": [
+          "meaning.query is root-only and runs against the derived projection database, never directly against descriptor files.",
+          "EXISTS selects elements by semantic path presence without requiring a value; it matches any indexed node at that path.",
+          "EQ selects elements by exact text value at the requested semantic path.",
+          "LIKE selects elements by SQL LIKE pattern (use % as wildcard) at the requested semantic path.",
+          "Array value paths are query-compatible: a filter on a container path also matches flattened values stored under that container, regardless of how many array levels the path traverses (e.g. a path through an array of objects that each hold another array) — supply the path without any array marker; the engine resolves it against every indexed array-bearing variant.",
+          "When filters[].value is an array, match=ANY selects elements matching at least one supplied value; match=ALL selects elements matching every supplied value.",
+          "Multiple filters in the list are combined with AND (all must match).",
+          "Supported order_by values are 'name' (default) and 'kind'. Default limit is 50 when absent.",
+          "ctx_mode=subtree matches ctx_id itself and any context nested under it (path prefix match); ctx_mode=strict (default) matches ctx_id exactly, with no nested contexts included."
+        ],
+        "success": [
+          "On success, meaning.query returns an ordered result array of projected elements that match the requested filters and paging window.",
+          "Empty result sets are valid successful outcomes."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when the projection database is unavailable or the query parameters cannot be translated into a valid projection query."
+        ],
+        "notes": [
+          "meaning.query is for projected discovery and selection, not for returning full descriptor sections.",
+          "Use read.meaning on the selected elements when detailed descriptor sections are required."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

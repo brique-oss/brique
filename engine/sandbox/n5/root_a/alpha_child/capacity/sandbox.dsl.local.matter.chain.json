@@ -1,0 +1,112 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.local.matter.chain",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.local.matter.chain",
+    "description": "Local DSL chain that builds params, writes a matter, reads it back, and consumes the written fields."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build a local record, write it into a local matter, read that matter back, and terminate through a local consumer wrapper.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "matter_write": "One local matter revision is updated.",
+        "matter_read": "The newly written local matter is read back.",
+        "local_wrapper_runtime": "Local wrapper capacities build and consume the record."
+      },
+      "transformation_contract": {
+        "morphing": "A local message becomes a consumed summary after one built record is written into a matter and read back.",
+        "invariants": [
+          "The local matter write uses the record built by sandbox.build.record as the source of functional.message and functional.source_ctx.",
+          "The terminal wrapper consumes the committed matter fields returned by matter.read rather than the pre-commit built record."
+        ],
+        "success": [
+          "The terminal payload exposes summary and ctx_id from sandbox.consume.record after the local matter round-trip.",
+          "The committed local matter revision stores the composed message and originating local context id."
+        ],
+        "failure": [
+          "The flow fails if sandbox.build.record, matter.write, matter.read, or sandbox.consume.record cannot complete.",
+          "The flow fails if the local matter cannot be updated with the built record fields."
+        ],
+        "notes": [
+          "This scenario is the local counterpart of the remote matter chain and validates committed local matter readback inside one DSL orchestration.",
+          "N7 validates both the terminal wrapper summary and the resulting local matter contents."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.record",
+                "with": {
+                  "message": "$input.message",
+                  "target_id": "m_chain_local",
+                  "prefix": "local"
+                },
+                "as": "built"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.write",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$built.payload.record.target_id",
+                  "functional": {
+                    "message": "$built.payload.record.composed",
+                    "source_ctx": "$built.payload.record.ctx_id"
+                  }
+                },
+                "as": "write_local"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$write_local.payload.matter_id",
+                  "read_mode": "functional|brique"
+                },
+                "as": "read_local"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.consume.record",
+                "with": {
+                  "message": "$read_local.payload.functional.message",
+                  "source_ctx": "$read_local.payload.functional.source_ctx",
+                  "revision": "$write_local.payload.revision"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

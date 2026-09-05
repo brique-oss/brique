@@ -1,0 +1,78 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "read.structure",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_read.go",
+    "function": "capReadStructure"
+  },
+  "objective": {
+    "name": "read.structure",
+    "description": "Read the deterministic context structure tree from the local filesystem view."
+  },
+  "functional": {
+    "#root": {
+      "role": "Traverse the local context tree from disk, normalize scope and traversal limits, and return the resulting structure tree.",
+      "inputs": {
+        "params": {
+          "scope": {
+            "type": "string",
+            "_comment": "Optional child context name relative to the addressed context. When provided, traversal starts from that child."
+          },
+          "depth": {
+            "type": "integer",
+            "_comment": "Optional traversal depth. 0 (default) returns only context nodes recursively without content. A positive value N includes context contents and descends at most N context levels."
+          },
+          "max_per_path": {
+            "type": "integer",
+            "_comment": "Optional maximum number of items returned per directory node. Defaults to an engine limit when absent."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "root": {
+            "type": "object",
+            "_comment": "Root navigation node. Recursive structure: { name (string), kind (string), children (array of nodes) }. Possible kind values: 'context' (a context directory), 'context_file' (context.json itself), 'dir' (a Brique directory entry: capacity/, matter/, structure/, document/, schema/, code/, ui/), 'capacity' (an individual capacity file inside capacity/), 'matter_item' (an individual matter inside matter/), 'structure_item' (an individual structure inside structure/), 'document' (an individual document inside document/), 'schema' (an individual schema inside schema/), 'file' (a raw file inside code/ or ui/). Note: directory container nodes (capacity/, matter/, etc.) always have kind='dir'; their children have the specific kind (capacity, matter_item, etc.)."
+          },
+          "params": {
+            "type": "object",
+            "_comment": "Effective traversal parameters applied: { scope (string), depth (integer), max_per_path (integer) }."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "The local context filesystem is scanned as the authoritative source of structural information."
+      },
+      "transformation_contract": {
+        "morphing": "A structure query over the local context tree becomes a deterministic structural snapshot with explicit effective traversal parameters.",
+        "invariants": [
+          "The current context filesystem is the authoritative source for traversal results.",
+          "depth is normalized to a non-negative value and max_per_path is clamped to a positive limit before traversal.",
+          "depth zero returns only context nodes and recursively traverses the complete descendant context hierarchy.",
+          "depth greater than zero includes context contents and bounds descendant context traversal to the requested depth.",
+          "When scope is provided, it must resolve to a local child context under the current context root.",
+          "Directory container nodes (capacity/, matter/, structure/, document/, schema/, code/, ui/) always have kind='dir'. Their children have specific kinds (capacity, matter_item, structure_item, document, schema, file).",
+          "matter and structure directory nodes are only included when their directory physically exists on disk.",
+          "code/ and ui/ directories are scanned recursively; files within them use kind: 'file'.",
+          "build/, tmp/, trace/ and other non-Brique directories are excluded from traversal."
+        ],
+        "success": [
+          "On success, read.structure returns a root navigation node plus the effective normalized query parameters.",
+          "With depth zero, every returned node has kind context and no context content nodes are returned.",
+          "Successful traversal returns deterministic sibling ordering and per-path truncation metadata when child lists exceed max_per_path."
+        ],
+        "failure": [
+          "The capacity fails when scope is invalid, missing on disk, or does not designate a context child.",
+          "The capacity fails when local descriptor or filesystem access needed for traversal cannot be completed."
+        ],
+        "notes": [
+          "The payload is a structural navigation snapshot, not a runtime state snapshot.",
+          "Matter and structure listings are derived from local disk layout rather than from remote or projected state.",
+          "A bounded depth (depth > 0, or scope narrowing traversal to a subtree) means a missing element in the result is not evidence the element doesn't exist — it may simply live deeper than the requested depth, or outside the requested scope. depth=0 traverses the complete descendant context hierarchy (see invariant above) and does not have this blind spot for contexts, but even then content nodes (capacity/matter/document/etc.) are never returned at depth=0, so an element's content-level absence there is equally inconclusive. When searching for a specific named element and the traversal depth needed to find it is unknown in advance, prefer meaning.query or the vocabulary capacities (name-based lookup, unbounded by tree position) over increasing depth speculatively."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

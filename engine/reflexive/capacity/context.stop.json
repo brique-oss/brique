@@ -1,0 +1,64 @@
+{
+  "brique": {
+    "_comment": "Engine-native control-channel capacity. Not dispatched by ReflexiveLoop family routing — routed directly to the addressed context's control channel (to.type=\"control\") and handled by ContextLoop.run/StopChildren.",
+    "cap_name": "context.stop",
+    "family": "control",
+    "file": "engine/context/context_loop.go",
+    "function": "StopChildren"
+  },
+  "objective": {
+    "name": "context.stop",
+    "description": "Stop one or more child contexts that are currently loaded and running in memory, without restarting them."
+  },
+  "functional": {
+    "#root": {
+      "role": "For each named child, stop its current in-memory instance and remove it from the runtime registry. Emit one response with a per-child result.",
+      "inputs": {
+        "params": {
+          "child": {
+            "type": "string | array of strings",
+            "required": true,
+            "_comment": "Required. Name of the direct child context to stop, or an array of such names (single path segments). Each must already be loaded — a child that was never started or is already stopped is reported with ok=false. Blank array entries are dropped."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "One entry per requested child, in request order: { child (string), ok (bool), reason (string, present only when ok is false) }."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "Each named child's current ContextLoop, and everything running inside it (its own children, families), is stopped and removed from the parent's in-memory registry. The child's on-disk context.json and elements are untouched."
+      },
+      "transformation_contract": {
+        "morphing": "A stop request for one or more already-loaded child contexts becomes a stopped and unloaded subtree for each child that could be stopped, with a per-child outcome reported back to the caller.",
+        "invariants": [
+          "Each requested child must be a direct child name of the addressed context (single path segment).",
+          "The addressed (parent) context must itself be running.",
+          "Each requested child must already be loaded in memory — a child that has never run, or was already stopped, is reported with ok=false and an explanatory reason.",
+          "Children are processed sequentially and independently — one child's failure does not prevent the others from being attempted.",
+          "A stopped child is not recreated — this is the difference from context.restart, which stops and immediately recreates. Use context.start afterward to bring the child back.",
+          "The stopped child's name remains in the parent's on-disk declared children list, so it is picked up again on the parent's next cold start or via context.start — context.stop only affects the in-memory instance.",
+          "There is no capacity to stop /root itself from within the Brique world through this capacity: StopChildren always acts on named children of the addressed context, and the addressed context can never name itself as its own child."
+        ],
+        "success": [
+          "response.status is \"ok\" only when every requested child stopped successfully.",
+          "payload.result always lists one entry per requested child, in request order, whether the overall response is ok or error."
+        ],
+        "failure": [
+          "response.status is \"error\" (code: refused) when params.child is valid but at least one requested child failed to stop; response.error.details.result carries the same per-child breakdown as the ok payload.",
+          "response.status is \"error\" (code: invalid) when params.child is missing, empty, or neither a string nor an array of strings — no child is attempted in this case."
+        ],
+        "notes": [
+          "Use this to shut down a child subtree without immediately bringing it back — e.g. before a maintenance window, or to free runtime resources for a child not currently needed.",
+          "To restart a running child (stop + immediately recreate), use context.restart instead — it is a single operation, not context.stop followed by context.start.",
+          "Always inspect payload.result (or response.error.details.result) rather than assuming response.status alone tells you which children stopped."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

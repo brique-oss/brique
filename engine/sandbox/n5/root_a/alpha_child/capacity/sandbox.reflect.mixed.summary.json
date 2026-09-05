@@ -1,0 +1,89 @@
+{
+  "brique": {
+    "cap_name": "sandbox.reflect.mixed.summary",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.reflect.mixed.summary",
+    "description": "Wrapper-backed capacity that composes one local read.meaning with one remote meaning.query."
+  },
+  "functional": {
+    "#root": {
+      "role": "Read one local capacity meaning descriptor, rebuild and query one remote root meaning projection, then return one normalized synthesis spanning both reflective sources.",
+      "inputs": {
+        "params": {
+          "local_name": {
+            "type": "string"
+          },
+          "remote_name": {
+            "type": "string"
+          },
+          "to_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "local_name": {
+            "type": "string"
+          },
+          "local_role": {
+            "type": "string"
+          },
+          "remote_name": {
+            "type": "string"
+          },
+          "remote_row_count": {
+            "type": "integer"
+          },
+          "remote_rebuild_status": {
+            "type": "string"
+          },
+          "remote_query_status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_reflexive_read": "The wrapper performs one local detailed meaning read.",
+        "remote_reflexive_query": "The wrapper rebuilds and queries one remote root meaning projection."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes a mixed reflective synthesis after one local detailed meaning read and one remote projected meaning selection.",
+        "invariants": [
+          "The wrapper always performs one local read.meaning plus one remote meaning.rebuild and one remote meaning.query.",
+          "summary is deterministically built as local_name:remote_name:remote_ctx.",
+          "The payload keeps local detailed meaning and remote projected meaning concerns separated."
+        ],
+        "success": [
+          "On success, sandbox.reflect.mixed.summary returns local_name, local_role, remote_name, remote_row_count, remote_rebuild_status, remote_query_status, summary, ctx_id, and wrapper_name.",
+          "An empty remote selection remains a valid successful outcome and is reflected through remote_row_count and remote_name."
+        ],
+        "failure": [
+          "The capability fails if any of the local or remote outbound reflective calls cannot complete.",
+          "Missing local_name or remote_name fall back to sandbox.echo instead of causing a contract failure."
+        ],
+        "notes": [
+          "This capability is used to prove mixed local detailed meaning plus remote projected meaning composition.",
+          "The wrapper payload is intentionally summarized for DSL branching and assertion simplicity."
+        ]
+      }
+    }
+  }
+}

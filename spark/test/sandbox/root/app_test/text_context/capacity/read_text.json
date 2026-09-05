@@ -1,0 +1,31 @@
+{
+  "brique": {
+    "cap_name": "read_text",
+    "kind": "interpreted",
+    "wrapper": "text_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "read_text",
+    "description": "Read text_buffer.value without mutation."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {}
+    }
+  },
+  "subjective": {
+    "intent": "read text"
+  }
+}

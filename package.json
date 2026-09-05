@@ -1,0 +1,86 @@
+{
+  "name": "brique",
+  "displayName": "Brique",
+  "description": "Brique engine, Pulse runtime, and Spark host extension.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/spark/hosts/vscode/extension.cjs",
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "brique.openContext",
+        "title": "Brique: Open Context"
+      },
+      {
+        "command": "brique.openWorkspaceContext",
+        "title": "Brique: Open Workspace Context"
+      },
+      {
+        "command": "brique.stop",
+        "title": "Brique: Stop"
+      },
+      {
+        "command": "brique.launchContextUI",
+        "title": "Brique: Launch Context UI"
+      },
+      {
+        "command": "brique.newInstance",
+        "title": "Brique: New Instance"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vscode/vsce": "^3.9.1",
+    "electron": "^41.3.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@xyflow/react": "^12.10.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "elkjs": "^0.11.1",
+    "esbuild": "^0.28.0",
+    "esbuild-wasm": "^0.28.1",
+    "lucide-react": "^1.16.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-resizable-panels": "^4.11.2",
+    "tailwind-merge": "^3.6.0"
+  },
+  "scripts": {
+    "clean": "node scripts/clean-dist.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:brique": "node scripts/build-brique.mjs",
+    "build:adapters": "node scripts/build-adapters.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/build-adapters.mjs",
+    "vscode:check-bundle": "node scripts/check-vscode-bundle.mjs",
+    "vscode:prune-dist": "node scripts/prune-vscode-dist.mjs",
+    "vscode:package": "npm run clean && npm run build:brique && npm run build && npm run vscode:check-bundle && npm run vscode:prune-dist && vsce package --out brique-0.0.1.vsix --allow-missing-repository",
+    "vscode:install": "node scripts/vscode-install.mjs",
+    "vscode:deploy": "npm run vscode:package && npm run vscode:install",
+    "start": "node dist/spark/index.js",
+    "start:sandbox": "node dist/spark/index.js spark/test/sandbox/root/context.json",
+    "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts",
+    "test:brique-editor": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test briqueEditorUI/Brique_Substrate/test/brique-substrate.test.ts",
+    "start:mcp": "node scripts/start-brique-instance-mcp.mjs"
+  }
+}

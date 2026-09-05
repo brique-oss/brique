@@ -1,0 +1,83 @@
+{
+  "_comment": "app_test sub-context — sandbox UI on its own WebSocket.",
+  "brique": {
+    "ctx_name": "app_test",
+    "ctx_type": "child",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "app_test",
+    "children_list": [
+      "text_context",
+      "counter_context",
+      "inspector_context",
+      "stream_context"
+    ],
+    "ui_config": {
+      "root_view": "SandboxRoot",
+      "adapter": "react",
+      "host": "electron",
+      "name": "app_test",
+      "ws_path": "/app_test/ws"
+    },
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": [
+          {
+            "name": "app_test",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/app_test/ws"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "spark-pulse-sandbox-app-test"
+      }
+    }
+  },
+  "objective": {
+    "name": "app_test",
+    "description": "Sandbox UI sub-context with its own WebSocket interface, separate from the editor."
+  },
+  "functional": {
+    "role": "app_test",
+    "test_scope": [
+      "ui websocket startup",
+      "child context startup",
+      "Pulse pathUI routing",
+      "React projection mounting",
+      "HTTP substance streaming"
+    ]
+  },
+  "subjective": {
+    "intent": "manual integration sandbox"
+  }
+}

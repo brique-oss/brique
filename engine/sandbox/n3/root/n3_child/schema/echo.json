@@ -1,0 +1,21 @@
+{
+  "_comment": "Minimal schema descriptor for sandbox assets.",
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "echo",
+    "description": "Schema placeholder for sandbox payloads"
+  },
+  "functional": {
+    "fields": [
+      "message",
+      "echo",
+      "reply"
+    ]
+  },
+  "subjective": {
+    "intent": "sandbox schema",
+    "impression": ""
+  }
+}

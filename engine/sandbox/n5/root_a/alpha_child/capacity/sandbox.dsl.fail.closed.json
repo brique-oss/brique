@@ -1,0 +1,78 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.fail.closed",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.fail.closed",
+    "description": "DSL flow that fails on an engine-native error after one successful local wrapper subcall."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run one successful local wrapper step, then fail terminally on a missing reflexive meaning lookup.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_wrapper_runtime": "The local wrapper runtime is invoked.",
+        "terminal_error": "The terminal response is an execution-visible propagated error."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one terminal propagated error after one successful local wrapper step and one failing engine-native step.",
+        "invariants": [
+          "The flow always executes the initial local wrapper step before the failing read.meaning step.",
+          "The successful pre-step does not become a terminal success once the later engine-native step fails.",
+          "The scenario is intentionally fail-closed and exposes propagated error semantics."
+        ],
+        "success": [
+          "This scenario does not define a nominal successful terminal payload in the tested path.",
+          "Observable correctness is the propagation of the terminal error rather than a success payload."
+        ],
+        "failure": [
+          "The flow fails terminally when the read.meaning step cannot resolve the missing target.",
+          "No intermediate wrapper response must leak as an external terminal response once the later step fails."
+        ],
+        "notes": [
+          "This scenario exists to validate fail-closed orchestration, not nominal business behavior.",
+          "The missing lookup is deliberate and part of the contract."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": {
+                  "message": "before-failure"
+                },
+                "as": "local_echo"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "element_kind": "document",
+                  "name": "missing_n7_document"
+                },
+                "as": "missing_doc"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

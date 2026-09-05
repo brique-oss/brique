@@ -1,0 +1,79 @@
+{
+  "brique": {
+    "cap_name": "sandbox.inspect.resolved.inputs",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.inspect.resolved.inputs",
+    "description": "Resolve incoming matter refs inside the wrapper and return both aggregated params and resolved matter payloads."
+  },
+  "functional": {
+    "#root": {
+      "role": "Expose aggregated params and resolve local wrapper-owned plus remote Brique matters inside the wrapper runtime.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "source_ctx": {
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "primary": {
+            "required": false
+          },
+          "secondary": {
+            "required": false
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          },
+          "resolved_matters": {
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_matter_read": "A wrapper-owned matter may be read natively.",
+        "remote_matter_read": "A remote Brique matter may be read through outbound routing."
+      },
+      "transformation_contract": {
+        "morphing": "Aggregated params and incoming matter refs become explicit params plus resolved local-wrapper and remote-Brique matter payloads.",
+        "invariants": [
+          "primary is resolved through the local wrapper matter manager when present.",
+          "secondary is resolved through an outbound matter.read call when present.",
+          "The capability preserves the original received params alongside resolved matter content."
+        ],
+        "success": [
+          "On success, sandbox.inspect.resolved.inputs returns received_params, resolved_matters, ctx_id, and wrapper_name.",
+          "Resolved local and remote matter payloads are partitioned under resolved_matters by logical input name."
+        ],
+        "failure": [
+          "sandbox.inspect.resolved.inputs has no contract-level validation failure for missing @matter entries because each binding is optional.",
+          "The capability fails if local wrapper matter resolution or outbound remote matter resolution cannot complete."
+        ],
+        "notes": [
+          "This is the strongest wrapper input oracle in N7 for mixed params plus @matter scenarios.",
+          "The payload shape intentionally separates raw received_params from resolved_matters."
+        ]
+      }
+    }
+  }
+}

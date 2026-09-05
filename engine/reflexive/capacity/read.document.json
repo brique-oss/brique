@@ -1,0 +1,63 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "read.document",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_read.go",
+    "function": "capReadDocument"
+  },
+  "objective": {
+    "name": "read.document",
+    "description": "Resolve one or more local document descriptors and their reachable content targets."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve requested local document items, classify each target as local or external, and return one result entry per requested document.",
+      "inputs": {
+        "params": {
+          "items": {
+            "type": "array",
+            "_comment": "Required non-empty array. Each item: { name (string — document name within the addressed context) }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "total": {
+            "type": "integer",
+            "_comment": "Total number of items in the result."
+          },
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item on success: { ok: true, name (string), target: { kind (string: 'local'|'ref'), rel (string — path relative to context root, present when kind=local), abs (string — absolute filesystem path, present when kind=local), ref (string — external URI or ref, present when kind=ref) } }. On failure: { ok: false, name, error: { code, message, details: { reason } } }. NOTE: document content bytes are NOT returned inline; the response provides the resolved target path so the caller can read the file directly from the filesystem (abs) or follow the external reference (ref)."
+          }
+        }
+      },
+      "effects": {
+        "document_descriptors": "Document descriptors and local document targets may be read from the current context."
+      },
+      "transformation_contract": {
+        "morphing": "A list of requested document names becomes a per-item document target result set describing the reachable descriptor and content state for each local document.",
+        "invariants": [
+          "Each requested document contributes one result entry preserving the requested name.",
+          "Document resolution is anchored by the descriptor under document/<name>.json; there is no fallback to raw files without a descriptor.",
+          "External instance callers are currently refused before any document resolution occurs."
+        ],
+        "success": [
+          "On success, total equals the number of returned result entries.",
+          "Each successful item returns ok=true and a target describing either a local content pointer or an external reference."
+        ],
+        "failure": [
+          "The capacity fails when params.items is missing or empty.",
+          "Individual items return ok=false entries when the name is missing, the descriptor is absent or invalid, or the resolved local content path is invalid or missing.",
+          "The whole call is refused for external instance callers."
+        ],
+        "notes": [
+          "The descriptor must contain brique.file (local pointer) or brique.ref (external reference) to resolve successfully.",
+          "Document content bytes are never returned inline; use target.abs to read the file from the filesystem when target.kind is 'local'."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

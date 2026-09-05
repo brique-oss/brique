@@ -1,0 +1,56 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.exists",
+    "family": "matter",
+    "file": "engine/matter/matter_read_introspec.go",
+    "function": "capMatterExists"
+  },
+  "objective": {
+    "name": "matter.exists",
+    "description": "Answer whether a matter currently exists in the local matter catalog."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one matter identifier against the local runtime catalog and return an explicit existence answer.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "matter_id": {
+            "type": "string"
+          },
+          "exist": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A matter identifier becomes an explicit existence statement against the current local matter catalog.",
+        "invariants": [
+          "matter.exists performs a catalog lookup only and does not read matter substance or descriptor files.",
+          "The response is limited to the addressed matter identifier and a boolean existence answer."
+        ],
+        "success": [
+          "A successful response always returns the requested matter_id and an exist boolean.",
+          "The response remains successful whether the catalog contains the matter or not."
+        ],
+        "failure": [
+          "The capacity fails when matter_id is missing.",
+          "The capacity fails only when the runtime cannot evaluate the local catalog lookup."
+        ],
+        "notes": [
+          "An absent matter is reported as exist=false, not as a refused business outcome.",
+          "This capacity is intended for cheap existence checks before heavier read or write flows."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

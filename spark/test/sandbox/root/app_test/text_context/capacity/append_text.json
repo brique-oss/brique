@@ -1,0 +1,37 @@
+{
+  "brique": {
+    "cap_name": "append_text",
+    "kind": "interpreted",
+    "wrapper": "text_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "append_text",
+    "description": "Append params.value to text_buffer.value."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "matter": "Writes text_buffer."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "append text"
+  }
+}

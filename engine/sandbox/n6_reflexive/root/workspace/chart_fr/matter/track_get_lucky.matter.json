@@ -1,0 +1,76 @@
+{
+  "_comment": "French chart matter for contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_get_lucky",
+    "description": "Get Lucky in the French chart selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Get Lucky",
+      "artist": "Daft Punk",
+      "album": "Random Access Memories",
+      "genre": "electronic",
+      "classification": {
+        "genres": [
+          "electronic",
+          "dance"
+        ],
+        "styles": [
+          "nu-disco",
+          "funk"
+        ]
+      },
+      "release": {
+        "year": "2013",
+        "date": "2013-04-19"
+      },
+      "chart": {
+        "market": "fr",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "2",
+          "weekly": "1"
+        }
+      },
+      "tags": [
+        "dance",
+        "radio",
+        "classic"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "chart track",
+    "impression": "high rotation electronic hit",
+    "emojis": [
+      "✨",
+      "🔥"
+    ],
+    "tags": [
+      "feel-good",
+      "sunset"
+    ]
+  }
+}

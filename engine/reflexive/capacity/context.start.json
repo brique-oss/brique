@@ -1,0 +1,62 @@
+{
+  "brique": {
+    "_comment": "Engine-native control-channel capacity. Not dispatched by ReflexiveLoop family routing — routed directly to the addressed context's control channel (to.type=\"control\") and handled by ContextLoop.run/StartChildren.",
+    "cap_name": "context.start",
+    "family": "control",
+    "file": "engine/context/context_loop.go",
+    "function": "StartChildren"
+  },
+  "objective": {
+    "name": "context.start",
+    "description": "Load and start one or more child contexts that exist on disk but are not yet running in memory."
+  },
+  "functional": {
+    "#root": {
+      "role": "For each named child, validate it is not already loaded, confirm a context.json exists for it on disk, create its ContextLoop, and install it under the addressed parent context. Emit one response with a per-child result.",
+      "inputs": {
+        "params": {
+          "child": {
+            "type": "string | array of strings",
+            "required": true,
+            "_comment": "Required. Name of the direct child context to start, or an array of such names (single path segments, as created by edit.create with type \"context\"). Blank array entries are dropped."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "One entry per requested child, in request order: { child (string), ok (bool), reason (string, present only when ok is false) }."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "A new ContextLoop is created and installed in memory for each successfully started child. No files are written — each child's context.json must already exist on disk (typically created beforehand via edit.create with type \"context\")."
+      },
+      "transformation_contract": {
+        "morphing": "A start request for one or more on-disk-but-unloaded child contexts becomes a running ContextLoop for each child that could be started, with a per-child outcome reported back to the caller.",
+        "invariants": [
+          "Each requested child must be a direct child name of the addressed context (single path segment).",
+          "The addressed (parent) context must itself be running.",
+          "A child must not already be loaded in memory — use context.restart for an already-running child; such a child is reported with ok=false and an explanatory reason.",
+          "A context.json must already exist on disk at <parent_dir>/<child> for each requested child — context.start never creates it. Use edit.create with type \"context\" first.",
+          "Children are processed sequentially and independently — one child's failure does not prevent the others from being attempted."
+        ],
+        "success": [
+          "response.status is \"ok\" only when every requested child started successfully.",
+          "payload.result always lists one entry per requested child, in request order, whether the overall response is ok or error."
+        ],
+        "failure": [
+          "response.status is \"error\" (code: refused) when params.child is valid but at least one requested child failed to start; response.error.details.result carries the same per-child breakdown as the ok payload.",
+          "response.status is \"error\" (code: invalid) when params.child is missing, empty, or neither a string nor an array of strings — no child is attempted in this case."
+        ],
+        "notes": [
+          "This is the cold-start path for a child context created after its parent already started — createChildrenFromDescriptor only loads children_list entries at parent startup time.",
+          "Typical sequence: edit.create (type: context) to materialize the child on disk, then context.start with params.child set to the same name (or a list of names) to bring it to life.",
+          "Always inspect payload.result (or response.error.details.result) rather than assuming response.status alone tells you which children started."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

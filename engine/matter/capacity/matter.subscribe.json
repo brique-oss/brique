@@ -1,0 +1,74 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.subscribe",
+    "family": "matter",
+    "file": "engine/matter/matter_event.go",
+    "function": "capMatterSubscribe"
+  },
+  "objective": {
+    "name": "matter.subscribe",
+    "description": "Subscribe to matter updates, either locally for brique-mode matters or by delegating to the owning wrapper for wrapper-mode matters."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one matter identifier, select the correct ownership mode, and register or delegate the subscription.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string",
+            "_comment": "Required. Name of the matter to subscribe to within the addressed context."
+          },
+          "sub_id": {
+            "type": "string",
+            "_comment": "Required. Caller-provided subscription identifier. Used to correlate notifications and to unsubscribe."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "matter_id": {
+            "type": "string"
+          },
+          "sub_id": {
+            "type": "string",
+            "_comment": "Confirmed subscription identifier."
+          },
+          "substance_mode": {
+            "type": "string",
+            "_comment": "Substance mode of the subscribed matter (e.g. brique, wrapper, ext_ref)."
+          }
+        }
+      },
+      "effects": {
+        "subscriptions": "A local brique-mode subscription may be created in MatterLoop memory.",
+        "wrapper_transport": "Wrapper-mode subscriptions are forwarded to the wrapper boundary instead of being stored locally."
+      },
+      "transformation_contract": {
+        "morphing": "A matter identifier plus a subscription identifier becomes an explicit subscription registration, either local in brique mode or delegated to the owning wrapper.",
+        "invariants": [
+          "Subscriptions are only supported for matters whose catalog substance mode resolves to brique or wrapper.",
+          "Brique-mode subscriptions are stored locally in MatterLoop memory and target the caller address unless a future override contract is added.",
+          "Wrapper-mode subscriptions are delegated to the owning wrapper boundary instead of being stored locally."
+        ],
+        "success": [
+          "On success, matter.subscribe returns ok=true, the matter_id, the effective sub_id, and the resolved substance_mode.",
+          "If sub_id is omitted for a brique-mode subscription, the engine mints one before storing the local subscription."
+        ],
+        "failure": [
+          "The capacity fails when matter_id is missing.",
+          "The capacity refuses subscription when the matter is absent from the runtime catalog.",
+          "The capacity refuses subscription when the matter substance mode is neither brique nor wrapper, or when wrapper delegation cannot reach a running wrapper."
+        ],
+        "notes": [
+          "Wrapper-mode subscribe requests pass through the current intention to the wrapper after context rewrite.",
+          "Local subscription ordering is unspecified and remains an in-memory concern."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

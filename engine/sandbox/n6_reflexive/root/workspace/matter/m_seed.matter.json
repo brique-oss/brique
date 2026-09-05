@@ -1,0 +1,61 @@
+{
+  "_comment": "Seed brique matter for N6 reflexive and matter tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_seed",
+    "description": "Seed local matter payload for sandbox N6 workspace",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": false,
+        "payload_allowed_only_when_mode_is": [
+          "brique"
+        ]
+      }
+    },
+    "substance": {
+      "local_file": "data.bin",
+      "content_type": "text/plain"
+    },
+    "tags": [
+      "seed",
+      "payload",
+      "workspace"
+    ],
+    "usage": {
+      "role": "primary fixture payload",
+      "consumed_by": [
+        "matter.read",
+        "meaning.rebuild",
+        "structure.read"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "matter seed",
+    "impression": "plain-text seed payload",
+    "notes": [
+      "intended to remain stable across N6 tests",
+      "safe target for read and existence assertions"
+    ]
+  }
+}

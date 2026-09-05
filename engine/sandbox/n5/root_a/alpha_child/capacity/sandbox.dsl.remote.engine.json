@@ -1,0 +1,83 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.remote.engine",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.remote.engine",
+    "description": "Cross-instance DSL flow invoking a remote engine-native reflexive capacity."
+  },
+  "functional": {
+    "#root": {
+      "role": "Perform a local wrapper call, then invoke a remote engine-native state read directly through the external Brique boundary.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_wrapper_runtime": "The local wrapper runtime is invoked.",
+        "external_route": "A remote engine-native reflexive route crosses the inter-instance boundary."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes a remote engine-native state response after one local wrapper step and one direct inter-instance route.",
+        "invariants": [
+          "The flow performs one local wrapper step before the remote engine-native call.",
+          "The terminal payload is the payload returned by the remote read.state call rather than by the local wrapper step.",
+          "Only one inter-instance engine-native subcall is issued."
+        ],
+        "success": [
+          "On success, the terminal payload is the remote read.state payload reached through the external boundary.",
+          "Successful execution proves that local wrapper work can precede a direct remote engine-native terminal call."
+        ],
+        "failure": [
+          "The flow fails if either the local wrapper pre-step or the remote engine-native call cannot complete.",
+          "Inter-instance routing errors close the capacity fail-closed."
+        ],
+        "notes": [
+          "This scenario validates DSL orchestration that terminates on a remote engine-native response.",
+          "The initial local wrapper call is intentionally non-terminal and only proves preceding local composition."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": {
+                  "message": "$input.message"
+                },
+                "as": "local_echo"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "remote_state"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

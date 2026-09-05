@@ -1,0 +1,89 @@
+{
+  "_comment": "Seed capacity descriptor for N6 reflexive tests.",
+  "brique": {
+    "cap_name": "sample.echo",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sample.echo",
+    "description": "Seed capacity descriptor used for reflexive read and meaning projection",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite",
+    "ordre": [
+      {
+        "entites": ["alpha", "bravo"]
+      },
+      {
+        "entites": ["charlie"]
+      }
+    ]
+  },
+  "functional": {
+    "#root": {
+      "role": "Echo the message parameter into a structured result payload.",
+      "call": {
+        "family": "user"
+      },
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "uppercase": {
+            "type": "boolean"
+          },
+          "trim": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "length": {
+            "type": "integer"
+          },
+          "uppercase": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "An inbound message becomes an explicit echo result with derived length and uppercase projections.",
+        "invariants": [
+          "sample.echo must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sample.echo returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sample.echo fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      },
+      "resolution": {
+        "_comment": "Seed descriptor used for reflexive meaning tests; runtime execution is not asserted from this descriptor alone."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "capacity seed",
+    "impression": "minimal public capability",
+    "notes": [
+      "should be indexable by meaning.rebuild",
+      "used to validate read.meaning on capacity descriptors"
+    ]
+  }
+}

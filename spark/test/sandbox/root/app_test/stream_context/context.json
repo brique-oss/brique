@@ -1,0 +1,79 @@
+{
+  "_comment": "Stream sandbox context — validates HTTP substance lease streaming.",
+  "brique": {
+    "ctx_name": "stream_context",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "stream_context",
+    "children_list": [],
+    "ui_config": {
+      "root_view": "StreamPlayground",
+      "adapter": "react",
+      "host": "vscode",
+      "ws_path": "/app_test/stream/ws"
+    },
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": [
+          {
+            "name": "main",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/app_test/stream/ws"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "http_substance": {
+        "enabled": true,
+        "addr": ":18204",
+        "lease_ttl_ms": 30000
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "spark-pulse-sandbox-stream"
+      }
+    }
+  },
+  "objective": {
+    "name": "stream_context",
+    "description": "Context used to validate HTTP substance lease reads from Pulse to React."
+  },
+  "functional": {
+    "role": "stream",
+    "test_scope": [
+      "http substance lease",
+      "read streaming",
+      "streaming status transitions"
+    ]
+  },
+  "subjective": {
+    "intent": "streaming validation"
+  }
+}

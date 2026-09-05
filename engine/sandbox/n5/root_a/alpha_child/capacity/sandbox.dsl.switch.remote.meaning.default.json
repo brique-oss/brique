@@ -1,0 +1,129 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.switch.remote.meaning.default",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.switch.remote.meaning.default",
+    "description": "Use remote meaning.query and fall through to a switch default route when no projected row matches."
+  },
+  "functional": {
+    "#root": {
+      "role": "Refresh the remote projection, query a missing remote projected element, then use >switch default to choose the terminal local route.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "remote_projection_refresh": "The remote projection is refreshed before the missing query.",
+        "empty_remote_query": "The remote query yields no matching row.",
+        "default_terminal_route": "The switch default route provides the terminal response."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one default-branch terminal response after a remote reflective selection yields no row.",
+        "invariants": [
+          "The flow refreshes and queries the remote projection before evaluating the DSL switch.",
+          "The switch discriminator is expected to be absent because the remote query intentionally yields no row.",
+          "The >default terminal route is the intended success path for this scenario."
+        ],
+        "success": [
+          "On success, the terminal payload is the payload returned by the local default sandbox.echo route.",
+          "Successful execution proves that an empty remote selection can still drive deterministic default routing."
+        ],
+        "failure": [
+          "The flow fails if the remote rebuild, remote query, or the default terminal route cannot complete.",
+          "The scenario is invalid only if the remote query unexpectedly cannot be evaluated at all, not merely because it returns no rows."
+        ],
+        "notes": [
+          "This scenario exists specifically to validate switch default behavior on empty reflective selections.",
+          "The remote miss is deliberate and part of the scenario contract."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.name",
+                      "op": "EQ",
+                      "value": "sandbox.missing"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_query"
+              }
+            },
+            {
+              ">switch": {
+                "on": "$remote_query.payload.result.0.name",
+                "cases": [
+                  {
+                    "value": "sandbox.echo",
+                    ">then": {
+                      "invoke": {
+                        "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                        "with": {
+                          "message": "switch-default-remote"
+                        },
+                        "as": "switch_result"
+                      }
+                    }
+                  }
+                ],
+                ">default": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "switch-default-local"
+                    },
+                    "as": "switch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

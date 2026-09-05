@@ -1,0 +1,70 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "edit.get_element_template",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_edit.go",
+    "function": "capEditGetElementTemplate"
+  },
+  "objective": {
+    "name": "edit.get_element_template",
+    "description": "Return the embedded template for one supported Brique element kind."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one supported element kind against the embedded template set and return the parsed template payload.",
+      "inputs": {
+        "params": {
+          "item_type": {
+            "type": "string",
+            "_comment": "Required. Supported values: context, capacity, matter, structure, schema, document, message, intention, response."
+          },
+          "include_raw": {
+            "type": "boolean",
+            "_comment": "Optional, default false. When true, also return descriptor_json (and dsl_reference_json for item_type=capacity): the raw source JSON string preserving original key order. Only needed when the caller intends to reproduce that exact key order in a later write (e.g. via content_json on edit.create). Omit for read-only inspection to avoid paying for a duplicate payload."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "element_kind": {
+            "type": "string",
+            "_comment": "Normalized element kind matching item_type."
+          },
+          "template": {
+            "type": "object",
+            "_comment": "Parsed template descriptor as a structured object."
+          },
+          "descriptor_json": {
+            "type": "string",
+            "_comment": "Present only when include_raw is true. Raw template JSON preserving original key order."
+          }
+        }
+      },
+      "effects": {
+        "embedded_templates": "One embedded template document is read from the engine template set."
+      },
+      "transformation_contract": {
+        "morphing": "A supported element-kind request becomes the corresponding parsed template descriptor exposed as a structured contract payload.",
+        "invariants": [
+          "Template resolution is read-only and uses the embedded engine template set.",
+          "Only the explicitly supported item_type values can be resolved.",
+          "descriptor_json (and dsl_reference_json) are only included when include_raw is true; the parsed template/dsl_reference objects are always returned."
+        ],
+        "success": [
+          "On success, edit.get_element_template returns the normalized element_kind and the parsed template object; descriptor_json is included only when include_raw was requested.",
+          "Template retrieval succeeds without mutating local context state."
+        ],
+        "failure": [
+          "The capacity fails when params.item_type is missing or unsupported.",
+          "The capacity fails when the corresponding embedded template cannot be loaded or parsed."
+        ],
+        "notes": [
+          "This capability is a template lookup helper for editors and generators.",
+          "Consumers requiring template source order must pass include_raw=true and parse descriptor_json; template remains the structured compatibility representation and is cheaper when order does not matter."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

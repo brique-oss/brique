@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "sandbox.cpp.echo",
+    "kind": "compiled",
+    "wrapper": "sandbox_cpp",
+    "lang": "cpp",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.cpp.echo",
+    "description": "Compiled wrapper-backed echo capacity for Execution N6 tests"
+  },
+  "functional": {
+    "#root": {
+      "role": "Build if needed, run the compiled wrapper, and return an echoed message.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_build": "The compiled wrapper may be built or rebuilt.",
+        "wrapper_runtime": "The compiled wrapper runtime may be started lazily."
+      },
+      "transformation_contract": {
+        "morphing": "An echoed message request becomes a wrapper-produced echo after the compiled execution path has ensured a runnable build artifact.",
+        "invariants": [
+          "sandbox.cpp.echo must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.cpp.echo returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.cpp.echo fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "prove compiled wrapper dispatch"
+  }
+}

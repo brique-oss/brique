@@ -1,0 +1,91 @@
+{
+  "brique": {
+    "cap_name": "sandbox.inspect.remote.trace",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.inspect.remote.trace",
+    "description": "Wrapper-backed capacity that inspects remote user traces by calling a remote wrapper-side trace observer."
+  },
+  "functional": {
+    "#root": {
+      "role": "Call one remote wrapper-side local trace observer and summarize the first matching user trace event.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "from_ts_ns": {
+            "type": "integer"
+          },
+          "to_ts_ns": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "trace_status": {
+            "type": "string"
+          },
+          "event_count": {
+            "type": "integer"
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "first_reason_code": {
+            "type": "string"
+          },
+          "first_user_text": {
+            "type": "string"
+          },
+          "first_trace_kind": {
+            "type": "string"
+          },
+          "target_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_trace_projection": "The wrapper emits one outbound wrapper-to-wrapper request to another context and summarizes the returned trace observation."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes one remote wrapper-mediated trace inspection summary over user traces selected by reason_code and optionally narrowed to a recent time window.",
+        "invariants": [
+          "The wrapper does not access remote trace files directly.",
+          "The wrapper always goes through a remote wrapper-side trace observer instead of reading traces itself.",
+          "The payload summarizes only the first matching event plus aggregate count."
+        ],
+        "success": [
+          "On success, sandbox.inspect.remote.trace returns whether a matching remote user trace was found and the first matching event fields.",
+          "An empty result is a valid successful outcome expressed through found=false and event_count=0."
+        ],
+        "failure": [
+          "The capability fails if the outbound remote wrapper inspection request cannot complete.",
+          "The capability does not mask errors returned by the remote wrapper-side trace observer."
+        ],
+        "notes": [
+          "When from_ts_ns and to_ts_ns are provided, they are forwarded to the remote wrapper-side local trace observer.",
+          "This capacity is used as a remote wrapper-side trace observer in N7 system tests."
+        ]
+      }
+    }
+  }
+}

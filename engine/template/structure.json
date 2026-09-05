@@ -1,0 +1,46 @@
+{
+  "_comment": "Canonical structure descriptor template (structure/<id>.json). The engine treats the functional section as fully opaque — only brique.kind is read for catalog stamping.",
+
+  "brique": {
+    "_comment": "Required. The only field the engine reads from this section.",
+
+    "kind": "structure",
+    "_kind_note": "Required. Always 'structure'. The engine stamps this automatically when absent, but it must be explicitly set.",
+
+    "revision": 1,
+    "_revision_note": "Managed by the engine. Set to 1 on creation. The engine increments this value (as a Unix nanosecond timestamp) on every structure.patch commit. Do not set or modify manually."
+  },
+
+  "objective": {
+    "_comment": "Optional. Projected by the reflexive meaning layer.",
+    "name": "<structure_id>",
+    "_name_note": "Conventionally matches the structure filename without .json.",
+    "description": "One sentence describing what this structure organizes."
+  },
+
+  "functional": {
+    "_comment": "Fully opaque to the engine. Use this section to describe the structure's content in any shape that fits your use case. Common pattern: an 'items' array of typed references.",
+
+    "items": [
+      {
+        "_comment": "A matter reference. Preferred form for cross-context matter bindings.",
+        "kind": "matter_ref",
+        "_kind_note": "Informational convention. Not enforced by the engine.",
+        "context": "/root/workspace",
+        "_context_note": "Absolute context path that owns the referenced matter.",
+        "matter_id": "my_matter",
+        "role": "primary"
+      },
+      {
+        "_comment": "A structure reference.",
+        "kind": "structure_ref",
+        "context": "/root/workspace",
+        "structure_id": "my_other_structure",
+        "role": "dependency"
+      }
+    ]
+  },
+
+  "subjective": {},
+  "_subjective_note": "Optional. Free-form space for subjective categorization. Add any key-value pairs meaningful to you or your team — tags, priority, notes, author opinions. The engine ignores this section entirely."
+}

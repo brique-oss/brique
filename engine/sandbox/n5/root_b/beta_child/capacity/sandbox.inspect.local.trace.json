@@ -1,0 +1,88 @@
+{
+  "brique": {
+    "cap_name": "sandbox.inspect.local.trace",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.inspect.local.trace",
+    "description": "Wrapper-backed capacity that inspects local user traces through the public trace.inspect capability."
+  },
+  "functional": {
+    "#root": {
+      "role": "Query one local trace.inspect events view filtered to user traces and summarize the first matching event.",
+      "inputs": {
+        "params": {
+          "reason_code": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "from_ts_ns": {
+            "type": "integer"
+          },
+          "to_ts_ns": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "trace_status": {
+            "type": "string"
+          },
+          "event_count": {
+            "type": "integer"
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "first_reason_code": {
+            "type": "string"
+          },
+          "first_user_text": {
+            "type": "string"
+          },
+          "first_trace_kind": {
+            "type": "string"
+          },
+          "target_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_trace_projection": "The wrapper emits one outbound trace.inspect request to its own context and summarizes the returned trace events."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes one local trace inspection summary over user traces selected by reason_code and optionally narrowed to a recent time window.",
+        "invariants": [
+          "The wrapper does not access local trace files directly.",
+          "The wrapper always uses trace.inspect for local trace observation.",
+          "The payload summarizes only the first matching event plus aggregate count."
+        ],
+        "success": [
+          "On success, sandbox.inspect.local.trace returns whether a matching local user trace was found and the first matching event fields.",
+          "An empty result is a valid successful outcome expressed through found=false and event_count=0."
+        ],
+        "failure": [
+          "The capability fails if the outbound trace.inspect request cannot complete.",
+          "The capability does not mask errors returned by trace.inspect."
+        ],
+        "notes": [
+          "When from_ts_ns and to_ts_ns are provided, they are forwarded as trace.inspect time_range to avoid scanning unrelated older trace history.",
+          "This capacity is used as the remote-side wrapper observer behind sandbox.inspect.remote.trace in N7 system tests."
+        ]
+      }
+    }
+  }
+}

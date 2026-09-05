@@ -1,0 +1,112 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.remote.matter.chain",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.remote.matter.chain",
+    "description": "Cross-instance DSL chain that builds params, writes a remote matter, reads it back, and consumes the remote fields locally."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build a local record, write it into a remote matter through the external route, read that remote matter back, and terminate through a local consumer wrapper.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "external_matter_write": "One remote matter revision is updated through the external route.",
+        "external_matter_read": "The newly written remote matter is read back through the external route.",
+        "local_wrapper_runtime": "Local wrapper capacities build and consume the record."
+      },
+      "transformation_contract": {
+        "morphing": "A local message becomes a locally consumed summary after one built record is written into a remote matter and read back.",
+        "invariants": [
+          "The remote matter write uses the record built locally by sandbox.build.record as the source of functional.message and functional.source_ctx.",
+          "The terminal local wrapper consumes only the committed remote matter values returned by the remote matter.read."
+        ],
+        "success": [
+          "The terminal payload exposes summary and ctx_id from sandbox.consume.record after the remote matter round-trip.",
+          "The remote matter revision stores the built composed message and the originating local context id."
+        ],
+        "failure": [
+          "The flow fails if the remote matter write or remote matter read cannot be completed across the external boundary.",
+          "The flow fails if the local record build or terminal wrapper consumption fails."
+        ],
+        "notes": [
+          "This scenario validates remote matter mutation and remote readback inside one DSL flow.",
+          "The N7 harness verifies both the terminal wrapper payload and the committed remote matter contents."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.record",
+                "with": {
+                  "message": "$input.message",
+                  "target_id": "m_chain_remote",
+                  "prefix": "remote"
+                },
+                "as": "built"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/matter.write",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$built.payload.record.target_id",
+                  "functional": {
+                    "message": "$built.payload.record.composed",
+                    "source_ctx": "$built.payload.record.ctx_id"
+                  }
+                },
+                "as": "write_remote"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$write_remote.payload.matter_id",
+                  "read_mode": "functional|brique"
+                },
+                "as": "read_remote"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.consume.record",
+                "with": {
+                  "message": "$read_remote.payload.functional.message",
+                  "source_ctx": "$read_remote.payload.functional.source_ctx",
+                  "revision": "$write_remote.payload.revision"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

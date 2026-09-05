@@ -1,0 +1,56 @@
+{
+  "brique": {
+    "_comment": "Engine-native Execution internal capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "wrapper_failed",
+    "family": "execution",
+    "file": "engine/execution/execution_cap.go",
+    "function": "execWrapperFailed"
+  },
+  "objective": {
+    "name": "wrapper_failed",
+    "description": "Internal execution signal emitted by a wrapper when readiness fails."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve the wrapper runtime from the wrapper origin context, record the readiness failure once, and release the readiness waiter.",
+      "inputs": {
+        "params": {
+          "error_text": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "_comment": "Fallback failure text used only when error_text is absent."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_runtime": "The target wrapper runtime ready error and readiness waiter may be updated."
+      },
+      "transformation_contract": {
+        "morphing": "An internal wrapper-failed signal becomes a persisted readiness failure state for the targeted wrapper runtime.",
+        "invariants": [
+          "wrapper_failed is an internal one-way execution signal and does not emit a response payload.",
+          "The target wrapper is resolved from the originating wrapper transport context, not from params.",
+          "Once a readiness error is recorded for the wrapper runtime, subsequent failure signals do not replace it."
+        ],
+        "success": [
+          "When the signal is accepted, the wrapper runtime records a readiness error message and any readiness waiter is released.",
+          "error_text takes precedence over message when both are supplied."
+        ],
+        "failure": [
+          "Signals from contexts that do not resolve to a known wrapper are ignored rather than producing an external error.",
+          "Missing execution frame or wrapper registry prevents state mutation and leaves the signal effectively as a no-op."
+        ],
+        "notes": [
+          "This capability is reserved for internal wrapper lifecycle coordination inside Execution.",
+          "The failure message defaults to a generic wrapper failed text when neither error_text nor message is provided."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "kind": "document",
+    "file": "document/mcp_intent.md",
+    "ref": ""
+  },
+  "objective": {
+    "name": "mcp_intent",
+    "description": "Intent and vision document for the mcp_brique context — cognitive framework for LLM-Brique interoperability."
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "source_kind": "local",
+    "mime_type": "text/markdown"
+  },
+  "subjective": {}
+}

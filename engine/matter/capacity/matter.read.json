@@ -1,0 +1,90 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.read",
+    "family": "matter",
+    "file": "engine/matter/matter_read_introspec.go",
+    "function": "capMatterRead"
+  },
+  "objective": {
+    "name": "matter.read",
+    "description": "Read one matter from the local context, optionally including meaning, functional, brique, and substance data sections."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one matter identifier, select the requested sections, and return the assembled matter view.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string"
+          },
+          "read_mode": {
+            "type": "string",
+            "_comment": "Optional. Pipe-separated subset selector. Accepted tokens (case-insensitive): meaning, functional, data, brique. The four tokens are strictly disjoint — none is a superset of another, and in particular 'meaning' does NOT include 'functional' despite the intuitive reading of the word: 'meaning' only assembles the objective and subjective descriptor sections, while what an element does lives exclusively under the separate 'functional' token. To get objective+subjective+functional together, request both tokens explicitly, e.g. read_mode='meaning|functional'. Example: 'meaning|brique'. When read_mode is present, ONLY the listed sections are returned; want_* params are ignored. When read_mode is absent, all four sections are returned by default."
+          },
+          "want_meaning": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent (all sections returned). Kept for compatibility only — use read_mode."
+          },
+          "want_functional": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent (all sections returned). Kept for compatibility only — use read_mode."
+          },
+          "want_data": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent (all sections returned). Kept for compatibility only — use read_mode."
+          },
+          "want_brique": {
+            "type": "boolean",
+            "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent (all sections returned). Kept for compatibility only — use read_mode."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "matter_id": {
+            "type": "string"
+          },
+          "meaning": {
+            "type": "object",
+            "_comment": "Assembles only the objective and subjective descriptor sections. Does not include functional — request the separate 'functional' token to also get what the element does."
+          },
+          "functional": {
+            "type": "object"
+          },
+          "brique": {
+            "type": "object"
+          },
+          "data": {
+            "type": "object",
+            "_comment": "Present only when 'data' is in the requested sections and the matter has brique substance mode. Two possible shapes. Shape 1 — inline (payload <= 256 KB): { kind: 'inline', bytes: string, size: integer (byte count), encoding: string, present only when substance_type='binary' }. bytes encoding depends on the matter descriptor's brique.substance_type (see matter.json template): 'text' (or substance_type absent — this is the default) → bytes is the raw file content as a plain UTF-8 string, NOT base64, and no 'encoding' field is present; 'binary' → bytes is base64-encoded content and 'encoding':'base64' is present alongside it. Always check for the 'encoding' field (or read brique.substance_type separately) before assuming bytes needs decoding — do not assume base64 unconditionally. Shape 2 — HTTP lease (payload > 256 KB): { kind: 'http', base_url: string, path: string (e.g. '/substance/<rid>'), rid: string, tok: string, expires_at: integer (unix nanoseconds), revision: integer, size_hint: integer, method: 'GET' }. To fetch leased content: GET <base_url><path> with the tok as authorization token, before expires_at. Wrapper-mode matters delegate to the owning wrapper and may return different payload shapes."
+          }
+        }
+      },
+      "effects": {
+        "catalog": "Local matter catalog is consulted.",
+        "substance_access": "Matter substance may be read inline or through an HTTP lease depending on the matter mode."
+      },
+      "transformation_contract": {
+        "morphing": "A matter identifier plus section selectors becomes an explicit matter view assembled from the local descriptor and the current substance access policy.",
+        "invariants": [
+          "matter.read never mutates the addressed matter.",
+          "When read_mode is omitted, the runtime defaults to exposing all readable sections."
+        ],
+        "success": [
+          "A successful response always includes matter_id and every requested readable section that could be assembled.",
+          "When data is requested in brique mode, the payload exposes either inline bytes metadata or an HTTP lease handle according to the substance access policy."
+        ],
+        "failure": [
+          "The capacity fails when matter_id is missing or the addressed matter is absent from the runtime catalog.",
+          "The capacity fails when a requested descriptor section cannot be read or when payload access is refused by the substance mode."
+        ],
+        "notes": [
+          "Use read_mode to control which sections are returned; want_* params have no effect in any scenario.",
+          "The inline/http threshold is 256 KB: payloads at or below are served inline as base64 bytes; larger payloads yield an HTTP lease handle for out-of-band GET."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

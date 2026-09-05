@@ -1,0 +1,76 @@
+{
+  "objective": {
+    "name": "root",
+    "description": "Brique root context."
+  },
+  "functional": {
+    "role": "root"
+  },
+  "subjective": {},
+  "brique": {
+    "children_list": [
+      "mcp"
+    ],
+    "ctx_ext_name": "root",
+    "ctx_name": "root",
+    "ctx_type": "root",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {
+        "websocket_listener": {
+          "_comment": "Root-only shared physical WebSocket listener. Child contexts and wrappers configure only logical paths; wrapper processes receive BRIQUE_WS_ADDR and BRIQUE_WS_URL automatically from the engine.",
+          "addr": ":8080"
+        },
+        "interfaces": [
+          {
+            "config": {
+              "_comment": "Logical route on the shared listener. The physical listener address is defined by communication.websocket_listener.addr.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/ws"
+            },
+            "driver": "ws",
+            "name": "main",
+            "type": "ui"
+          }
+        ],
+        "scattered": {
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          },
+          "scattered_max_items": 8
+        },
+        "wrapper_boundary": []
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "reflexive": {
+        "repo_name": "my-brique-instance",
+        "root_repo": true
+      },
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "debug",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.1",
+    "type": "local",
+    "ui_config": {
+      "adapter": "react",
+      "host": "vscode",
+      "name": "main",
+      "root_view": "BriqueEditorRoot",
+      "ws_path": "/ws"
+    }
+  }
+}

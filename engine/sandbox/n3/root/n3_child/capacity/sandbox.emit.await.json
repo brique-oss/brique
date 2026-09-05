@@ -1,0 +1,58 @@
+{
+  "_comment": "Wrapper-backed capacity that emits an outbound intention and waits for the correlated response.",
+  "brique": {
+    "cap_name": "sandbox.emit.await",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "sandbox.emit.await",
+    "description": "Emit an outbound intention through the wrapper runtime and await the response"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit an outbound intention to another context, await the correlated response, and return the remote payload.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "remote": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "outbound_route": "The wrapper emits and awaits an outbound intention."
+      },
+      "transformation_contract": {
+        "morphing": "A local wrapper request becomes a remote correlated payload returned through one awaited outbound route.",
+        "invariants": [
+          "sandbox.emit.await must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.emit.await returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.emit.await fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "wrapper outbound await"
+  }
+}

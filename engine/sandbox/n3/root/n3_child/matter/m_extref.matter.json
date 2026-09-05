@@ -1,0 +1,31 @@
+{
+  "_comment": "External-reference matter used to validate no-wrapper N3 branches.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "ext_ref",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_extref",
+    "description": "External-reference matter"
+  },
+  "functional": {
+    "external_retrieval": {
+      "ext_ref": {
+        "kind": "url",
+        "locator": "https://example.test/resource.bin",
+        "method": "GET",
+        "headers": {},
+        "auth": {
+          "kind": "none",
+          "value": ""
+        }
+      }
+    }
+  },
+  "subjective": {
+    "intent": "sandbox ext_ref matter",
+    "impression": ""
+  }
+}

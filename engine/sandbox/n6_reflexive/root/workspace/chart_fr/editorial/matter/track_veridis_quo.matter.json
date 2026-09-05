@@ -1,0 +1,76 @@
+{
+  "_comment": "Nested French editorial matter for complex contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_veridis_quo",
+    "description": "Veridis Quo in the French editorial selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Veridis Quo",
+      "artist": "Daft Punk",
+      "album": "Discovery",
+      "genre": "electronic",
+      "classification": {
+        "genres": [
+          "electronic",
+          "ambient"
+        ],
+        "styles": [
+          "downtempo",
+          "instrumental"
+        ]
+      },
+      "release": {
+        "year": "2001",
+        "date": "2001-03-12"
+      },
+      "chart": {
+        "market": "fr",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "11",
+          "weekly": "4"
+        }
+      },
+      "tags": [
+        "editorial",
+        "classic",
+        "deep-cut"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "editorial track",
+    "impression": "quiet synth journey",
+    "emojis": [
+      "🛰️",
+      "✨"
+    ],
+    "tags": [
+      "instrumental",
+      "sunrise"
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.parallel.mix",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.parallel.mix",
+    "description": "Bounded-parallel DSL flow mixing local wrapper, remote engine-native, and remote wrapper-backed subcalls."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run three awaited subcalls with bounded concurrency and return one aggregated payload.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_wrapper_runtime": "The local wrapper runtime is invoked.",
+        "external_route": "Remote engine-native and remote wrapper-backed routes cross the inter-instance boundary."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one aggregated response after bounded concurrent orchestration of local and remote sub-capacities.",
+        "invariants": [
+          "The flow launches exactly three awaited subcalls under a parallel concurrency limit of 2.",
+          "The aggregated terminal payload is built from all successful parallel branches.",
+          "No branch-specific response becomes terminal on its own while the parallel group succeeds."
+        ],
+        "success": [
+          "On success, the terminal payload is the runtime parallel aggregation of the local wrapper branch, the remote state branch, and the remote wrapper branch.",
+          "Successful execution proves bounded parallel orchestration across local and inter-instance subcalls."
+        ],
+        "failure": [
+          "The flow fails terminally if any required parallel branch fails under the default fail policy.",
+          "A failure in one branch prevents the parallel aggregate from becoming a successful terminal payload."
+        ],
+        "notes": [
+          "This scenario is the baseline N7 proof for bounded parallel composition.",
+          "The concurrency limit is part of the scenario semantics, not just an optimization detail."
+        ]
+      },
+      "resolution": {
+        ">parallel": {
+          "limit": 2,
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": {
+                  "message": "local-fixed"
+                },
+                "as": "local_echo"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "remote_state"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                "with": {
+                  "message": "remote-fixed"
+                },
+                "as": "remote_echo"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

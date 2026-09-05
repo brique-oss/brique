@@ -1,0 +1,57 @@
+{
+  "brique": {
+    "cap_name": "sandbox.py.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.py.echo",
+    "description": "Interpreted wrapper-backed echo capacity for Execution N6 tests"
+  },
+  "functional": {
+    "#root": {
+      "role": "Return an echoed message through the interpreted wrapper runtime.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The interpreted wrapper runtime may be started lazily."
+      },
+      "transformation_contract": {
+        "morphing": "An echoed message request becomes a wrapper-produced echo through the interpreted execution path.",
+        "invariants": [
+          "sandbox.py.echo must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.py.echo returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.py.echo fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "prove interpreted wrapper dispatch"
+  }
+}

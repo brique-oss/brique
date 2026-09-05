@@ -1,0 +1,108 @@
+{
+  "_comment": "Canonical intention wire format. This is the exact JSON shape that must be emitted to invoke a Brique capacity. All _note fields are documentation-only.",
+
+  "intention_id": "<uuid>",
+  "_intention_id_note": "Required. Unique identifier for this intention. Generate a fresh UUID per call.",
+
+  "await_response": true,
+  "_await_response_note": "Required. true = block until a response is received. false = fire-and-forget, no response expected.",
+
+  "to": {
+    "_comment": "Required. Destination address of the capacity to invoke.",
+    "context": "/root/my_context",
+    "_context_note": "Required. Absolute context path from /root (e.g. '/root', '/root/workspace', '/root/workspace/child'). This is the context that owns the capacity.",
+    "cap": "matter.read",
+    "_cap_note": "Required. Exact capacity name (matches cap_name in the capacity descriptor).",
+    "type": "matter",
+    "_type_note": "Required. Engine family that handles this capacity. Accepted values: 'communication', 'execution', 'matter', 'trace', 'reflexive', 'control', 'user'. Engine-native capacities: matter family → 'matter', reflexive family → 'reflexive', execution family → 'execution'. User-defined DSL or interpreted capacities → 'user'.",
+    "version": "",
+    "_version_note": "Optional. Leave empty in practice unless version routing is explicitly required."
+  },
+
+  "from": {
+    "_comment": "Optional in most contexts. Identifies the caller. The engine fills this automatically for internal calls.",
+    "context": "/root/my_context",
+    "cap": "",
+    "_cap_note": "Optional. Caller capacity name. Often empty for external callers.",
+    "type": "user",
+    "_type_note": "Same enum as to.type. Use 'user' for calls originating outside the engine.",
+    "version": ""
+  },
+
+  "identity": {
+    "_comment": "Optional. Presence required only at trust boundaries (external callers, cross-instance calls). Typically empty inside an engine instance.",
+    "id": "",
+    "kind": "",
+    "_kind_note": "Optional. Identity kind (e.g. 'instance', 'user', 'service').",
+    "pubkey": "",
+    "signature": ""
+  },
+
+  "params": {
+    "_comment": "Optional. Free-form key-value payload consumed by the targeted capacity. Shape is capacity-specific — see the capacity descriptor for the exact accepted params.",
+    "<param_key>": "<param_value>"
+  },
+
+  "matters": [
+    {
+      "_comment": "Optional. Matter references carried with this intention. Each entry binds a concrete matter to a logical repr name consumed by the capacity.",
+      "context": "/root/workspace",
+      "_context_note": "Required per entry. Absolute context path that owns the matter.",
+      "id": "my_matter_name",
+      "_id_note": "Required per entry. Matter name within its context.",
+      "repr": "source_profile",
+      "_repr_note": "Optional. Logical slot name as declared in the capacity's @matter inputs. Used by the capacity to identify which slot this matter fills.",
+      "mode": "read",
+      "_mode_note": "Optional. 'read' or 'write'. Informs the engine about the intended access mode."
+    }
+  ],
+
+  "element_refs": [
+    {
+      "_comment": "Optional. Non-matter element references (schema, structure, document, capacity) carried with this intention.",
+      "context": "/root/workspace",
+      "id": "my_schema_name",
+      "_id_note": "Required per entry. Element name within its context.",
+      "repr": "validation_shape",
+      "_repr_note": "Optional. Logical slot name as declared in the capacity's @schema/@structure/@document/@capacity inputs.",
+      "kind": "schema",
+      "_kind_note": "Required per entry. Accepted values: 'schema', 'structure', 'document', 'capacity'."
+    }
+  ],
+
+  "correlation": {
+    "_comment": "Optional. Links this intention to a parent chain. Populated automatically by the DSL engine for sub-invocations. For top-level external calls, omit entirely.",
+    "root_intention_id": "<uuid of the root intention in the chain>",
+    "parent_intention_id": "<uuid of the direct parent intention>"
+  },
+
+  "_capacity_family_routing": {
+    "_comment": "Quick reference: which to.type to use per capacity family.",
+    "matter.*": "type = 'matter'",
+    "structure.*": "type = 'matter'",
+    "read.*": "type = 'reflexive'",
+    "edit.*": "type = 'reflexive'",
+    "meaning.*": "type = 'reflexive'",
+    "vocabulary.*": "type = 'reflexive'",
+    "trace.*": "type = 'reflexive'",
+    "wrapper.*": "type = 'execution'",
+    "user_defined_dsl_or_interpreted": "type = 'user'"
+  },
+
+  "_minimal_example": {
+    "_comment": "Minimal valid intention to call matter.read in the root context.",
+    "intention_id": "a1b2c3d4-...",
+    "await_response": true,
+    "to": {
+      "context": "/root",
+      "cap": "matter.read",
+      "type": "matter"
+    },
+    "from": { "context": "/root", "cap": "", "type": "user" },
+    "identity": { "id": "" },
+    "params": {
+      "matter_id": "my_matter",
+      "read_mode": "meaning|data"
+    }
+  }
+}

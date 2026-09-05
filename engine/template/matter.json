@@ -1,0 +1,80 @@
+{
+  "_comment": "Canonical matter descriptor template (matter/<id>/matter.json). Documents every field the MatterLoop reads from the brique section, and what is opaque to the engine.",
+
+  "brique": {
+    "_comment": "Required. The only section the MatterLoop reads from disk. Everything else is opaque to the engine.",
+
+    "kind": "matter",
+    "_kind_note": "Optional. The engine stamps 'matter' automatically when absent. Always 'matter' for matter descriptors.",
+
+    "substance_mode": "brique",
+    "_substance_mode_note": "Required in practice. Accepted values: 'brique' (engine manages a local data.bin file — the only mode that supports inline or leased read/write), 'wrapper' (substance is delegated to an external wrapper — requires wrapper_name), 'ext_ref' (substance lives at an external URL or API — functional.external_retrieval.ext_ref describes how to fetch it), 'physical' (substance comes from a physical device — functional.external_retrieval.physical describes acquisition). The engine uses substance_mode to route matter.read and matter.write.",
+
+    "wrapper_name": "",
+    "_wrapper_name_note": "Required when substance_mode is 'wrapper'. Must match a wrapper_name declared in context.json engine_config.execution.wrappers. Empty for all other modes.",
+
+    "revision": 1,
+    "_revision_note": "Managed by the engine when present. The engine sets it on creation and increments it (as a Unix nanosecond timestamp) on every matter.write commit — never set or modify its value manually. But do not include this key in params at all unless the architect explicitly asked for the matter to carry a tracked revision: check the matter's current descriptor first, and only pass revision-affecting params when it already has one, or when creating a new matter with revision tracking explicitly requested.",
+
+    "substance_type": "text",
+    "_substance_type_note": "Optional. Tells matter.read how to serialize data.bin content. Accepted values: 'text' (content is UTF-8 text — serialized as a plain JSON string), 'binary' (content is arbitrary bytes — serialized as base64). Defaults to 'text' when absent. Declare the specific format (markdown, json, png, etc.) in functional if needed — the engine does not read it."
+  },
+
+  "objective": {
+    "_comment": "Optional but recommended. Projected by the reflexive layer for meaning queries.",
+    "name": "<matter_id>",
+    "_name_note": "Conventionally matches the matter directory name.",
+    "description": "One sentence describing what this matter holds."
+  },
+
+  "functional": {
+    "_comment": "Completely opaque to the engine. Describe business semantics, schema refs, and retrieval config here. No field in this section is read by MatterLoop during normal operation.",
+
+    "format": "md",
+    "_format_note": "Optional. Describes the specific format of the substance content (e.g. 'md', 'json', 'png', 'mp4', 'csv'). Also used by the engine as the payload file extension (<matter_id>.<format>) — pair with substance_type in brique section for serialization.",
+
+    "schema_ref": "/root/schema/<schema_name>",
+    "_schema_ref_note": "Optional. Absolute Brique path to the schema descriptor that constrains this matter's content. Informational only — the engine does not enforce it.",
+
+    "external_retrieval": {
+      "_comment": "Describe how substance is fetched when substance_mode is 'ext_ref' or 'physical'. Opaque to the engine — consumed by wrappers or external tooling.",
+
+      "ext_ref": {
+        "_comment": "Use when substance_mode = 'ext_ref'.",
+        "kind": "url",
+        "_kind_note": "Accepted values: 'url', 'api', 'object_store', 'file_share', 'custom'.",
+        "locator": "https://example.org/resource",
+        "method": "GET",
+        "_method_note": "Accepted values: 'GET', 'POST', 'READ'.",
+        "headers": {},
+        "auth": {
+          "kind": "none",
+          "_kind_note": "Accepted values: 'none', 'bearer', 'basic', 'api_key', 'custom'.",
+          "value": ""
+        }
+      },
+
+      "physical": {
+        "_comment": "Use when substance_mode = 'physical'.",
+        "kind": "sensor",
+        "_kind_note": "Accepted values: 'sensor', 'serial', 'usb', 'i2c', 'spi', 'gpio', 'camera', 'microphone', 'custom'.",
+        "address": "/dev/ttyUSB0",
+        "protocol": "serial",
+        "_protocol_note": "Accepted values: 'modbus', 'can', 'serial', 'hid', 'v4l2', 'alsa', 'custom'.",
+        "sampling": {
+          "mode": "pull",
+          "_mode_note": "Accepted values: 'pull', 'push', 'interval'.",
+          "interval_ms": 1000
+        },
+        "decoder": {
+          "kind": "raw",
+          "_kind_note": "Accepted values: 'raw', 'json', 'csv', 'binary', 'custom'.",
+          "config": {}
+        }
+      }
+    }
+  },
+
+  "subjective": {},
+  "_subjective_note": "Optional. Free-form space for subjective categorization. Add any key-value pairs meaningful to you or your team — tags, priority, notes, author opinions. The engine ignores this section entirely."
+}

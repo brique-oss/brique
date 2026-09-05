@@ -1,0 +1,110 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.local.composite",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.local.composite",
+    "description": "Local composite DSL flow mixing a local wrapper-backed call, a local engine-native call, and a branch."
+  },
+  "functional": {
+    "#root": {
+      "role": "Compose local wrapper and local engine-native calls, branch on the engine response, and return one terminal local wrapper result.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_wrapper_runtime": "The local wrapper runtime is invoked.",
+        "local_engine_route": "A local engine-native reflexive call is awaited."
+      },
+      "transformation_contract": {
+        "morphing": "A local request becomes one terminal wrapper result after a composed local wrapper call, a local engine-native state read, and a branch driven by the state response.",
+        "invariants": [
+          "The flow always performs one local wrapper call and one local read.state before evaluating the branch condition.",
+          "Exactly one terminal wrapper invocation is selected by the branch, and intermediate sub-responses are not exposed as terminal outputs.",
+          "Branch selection is driven only by local_state.payload.context.context_id."
+        ],
+        "success": [
+          "On success, the terminal payload is the payload returned by the selected final sandbox.echo invocation.",
+          "When the local context id is /root/alpha_child, the echoed terminal message is the message returned by the first local wrapper call."
+        ],
+        "failure": [
+          "The flow fails terminally if either the initial local wrapper step or the local read.state step cannot complete.",
+          "A terminal branch invocation failure closes the whole DSL capacity fail-closed."
+        ],
+        "notes": [
+          "This scenario is the baseline local composition proof for N7.",
+          "The scenario validates sequence plus conditional routing without crossing context or instance boundaries."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": {
+                  "message": "$input.message"
+                },
+                "as": "local_echo"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "local_state"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$local_state.payload.context.context_id",
+                  "op": "eq",
+                  "right": "/root/alpha_child"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "$local_echo.payload.echo"
+                    },
+                    "as": "final_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "unexpected-branch"
+                    },
+                    "as": "final_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

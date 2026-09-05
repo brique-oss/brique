@@ -1,0 +1,19 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "default",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.ts",
+    "css": "briqueEditorUI/globals.css",
+    "baseColor": "slate",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "briqueEditorUI/components",
+    "utils": "briqueEditorUI/lib/utils",
+    "ui": "briqueEditorUI/components/ui",
+    "lib": "briqueEditorUI/lib",
+    "hooks": "briqueEditorUI/hooks"
+  }
+}

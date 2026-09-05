@@ -1,0 +1,58 @@
+{
+  "_comment": "Secondary structure descriptor with multiple references for N6 tests.",
+  "brique": {
+    "kind": "structure"
+  },
+  "objective": {
+    "name": "sample_collection",
+    "description": "Secondary structure referencing multiple workspace artifacts",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "matters": [
+      {
+        "matter_id": "m_seed",
+        "role": "payload"
+      },
+      {
+        "matter_id": "m_config",
+        "role": "config"
+      }
+    ],
+    "documents": [
+      {
+        "document_id": "overview",
+        "role": "overview"
+      },
+      {
+        "document_id": "guide",
+        "role": "guide"
+      }
+    ],
+    "capacities": [
+      {
+        "cap_name": "sample.echo",
+        "role": "entry_point"
+      },
+      {
+        "cap_name": "sample.normalize",
+        "role": "transform"
+      }
+    ],
+    "schemas": [
+      {
+        "schema_id": "sample_payload",
+        "role": "payload_schema"
+      },
+      {
+        "schema_id": "meaning_patch",
+        "role": "patch_schema"
+      }
+    ]
+  },
+  "subjective": {
+    "intent": "secondary structure seed",
+    "impression": "denser composite structure"
+  }
+}

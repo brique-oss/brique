@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "ext_ref",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_extref",
+    "description": "External reference matter"
+  },
+  "functional": {
+    "domain": "matter-test",
+    "label": "seed-extref",
+    "reference": {
+      "uri": "https://example.org/reference/m_extref"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "reference",
+      "seed"
+    ]
+  }
+}

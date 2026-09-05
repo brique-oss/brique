@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "brique": {
+      "type": "sse",
+      "url": "http://127.0.0.1:18200/sse"
+    }
+  }
+}

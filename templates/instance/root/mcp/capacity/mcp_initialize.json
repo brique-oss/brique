@@ -1,0 +1,153 @@
+{
+  "brique": {
+    "cap_name": "mcp.initialize",
+    "kind": "compiled",
+    "wrapper": "mcp_server_go",
+    "rel_ctx": "",
+    "lang": "go"
+  },
+  "objective": {
+    "name": "mcp.initialize",
+    "description": "Handle an MCP initialize request by loading the Brique cognitive framework matter and returning it to the LLM as its active reasoning context."
+  },
+  "functional": {
+    "#root": {
+      "role": "Transform an MCP initialize request into an MCP initialize response carrying the Brique cognitive framework as the LLM active context.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "protocol_version": {
+            "type": "string"
+          },
+          "server_info": {
+            "type": "object"
+          },
+          "capabilities": {
+            "type": "object"
+          },
+          "context": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "llm_context": "The LLM session receives the Brique cognitive framework as its active reasoning context."
+      },
+      "transformation_contract": {
+        "morphing": "An uncontextualized MCP initialize request becomes an initialized LLM session carrying the full Brique cognitive framework as its active reasoning context.",
+        "invariants": [
+          "The cognitive framework content is never modified during loading.",
+          "The MCP protocol fields remain conformant with protocol version 2024-11-05."
+        ],
+        "success": [
+          "The response includes a valid protocol_version, server_info, and capabilities.",
+          "The context field contains the full text content of the brique_cognitive_framework matter."
+        ],
+        "failure": [
+          "The capacity fails when the brique_cognitive_framework matter cannot be read from Brique.",
+          "The capacity fails when the matter substance is unavailable or empty."
+        ],
+        "notes": [
+          "This capacity is internal to the MCP bridge wrapper and is never invoked directly from Brique."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#read_framework": {
+                "role": "Retrieve the full text content of the brique_cognitive_framework matter from Brique.",
+                "outputs": {
+                  "payload": {
+                    "framework_content": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "The brique_cognitive_framework matter substance becomes an in-memory text available for response assembly.",
+                  "invariants": [
+                    "The matter is never modified."
+                  ],
+                  "success": [
+                    "framework_content contains the full non-empty text of brique_cognitive_framework."
+                  ],
+                  "failure": [
+                    "The section fails when matter.read returns an error or empty substance."
+                  ]
+                },
+                "resolution": {
+                  "invoke": {
+                    "@capacity": "/root/mcp/matter.read",
+                    "with": {
+                      "matter_id": "brique_cognitive_framework",
+                      "read_mode": "data"
+                    },
+                    "as": "framework_read",
+                    "await_response": true
+                  }
+                }
+              }
+            },
+            {
+              "#build_response": {
+                "role": "Assemble the MCP initialize response from the loaded framework content and static server metadata.",
+                "inputs": {
+                  "params": {
+                    "framework_content": {
+                      "type": "string",
+                      "value": "$framework_read.data.bytes"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "protocol_version": {
+                      "type": "string",
+                      "value": "2024-11-05"
+                    },
+                    "server_info": {
+                      "type": "object",
+                      "value": {
+                        "name": "brique-mcp",
+                        "version": "0.0.1"
+                      }
+                    },
+                    "capabilities": {
+                      "type": "object",
+                      "value": {
+                        "tools": {},
+                        "resources": {}
+                      }
+                    },
+                    "context": {
+                      "type": "string",
+                      "value": "$framework_read.data.bytes"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "The loaded framework text and static server metadata become a well-formed MCP initialize response payload returned to the LLM.",
+                  "invariants": [
+                    "protocol_version is always 2024-11-05.",
+                    "context carries the framework_content without truncation."
+                  ],
+                  "success": [
+                    "The payload conforms to the MCP initialize response structure.",
+                    "context is non-empty and contains the full framework text."
+                  ],
+                  "failure": [
+                    "The section fails when framework_content is empty."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

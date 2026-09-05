@@ -1,0 +1,85 @@
+{
+  "brique": {
+    "cap_name": "sandbox.reflect.remote.query",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.reflect.remote.query",
+    "description": "Wrapper-backed capacity that rebuilds and queries the remote root meaning projection."
+  },
+  "functional": {
+    "#root": {
+      "role": "Trigger one remote root meaning rebuild, then query the remote root meaning projection for one capacity row and summarize the first match.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "query_path": {
+            "type": "string"
+          },
+          "query_value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "rebuild_status": {
+            "type": "string"
+          },
+          "query_status": {
+            "type": "string"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "queried_ctx": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_reflexive_projection": "The wrapper traverses the remote root boundary to rebuild and query the meaning projection."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes a remote projection summary after one remote rebuild and one remote meaning query.",
+        "invariants": [
+          "The wrapper performs a remote meaning.rebuild before the remote meaning.query.",
+          "query_path defaults to objective.name and query_value defaults to the normalized requested name.",
+          "The payload summarizes only the first query row and the remote call statuses."
+        ],
+        "success": [
+          "On success, sandbox.reflect.remote.query returns rebuild_status, query_status, row_count, queried_ctx, first_name, ctx_id, and wrapper_name.",
+          "An empty query result is a valid successful outcome expressed through row_count=0 and first_name=''."
+        ],
+        "failure": [
+          "The capability fails if the remote rebuild or remote query outbound call cannot complete.",
+          "The contract does not validate the semantic correctness of query_path beyond forwarding it to meaning.query."
+        ],
+        "notes": [
+          "This capability intentionally couples remote rebuild plus query to provide a stable projected-reflexive oracle in N7.",
+          "The wrapper payload reflects remote statuses rather than raw remote payloads."
+        ]
+      }
+    }
+  }
+}

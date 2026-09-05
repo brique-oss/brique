@@ -1,0 +1,70 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "vocabulary.patch",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteVocabularyPatch"
+  },
+  "objective": {
+    "name": "vocabulary.patch",
+    "description": "Patch the root vocabulary overlay, its LLM-readable text map, and projection."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only vocabulary patch, merge the overlay, regenerate the LLM-readable vocabulary map, update the projection, and expose patch statistics.",
+      "inputs": {
+        "params": {
+          "patch": {
+            "type": "object",
+            "_comment": "Required. Two accepted forms. Form 1 — hierarchical overlay: a nested JSON object deep-merged into vocabulary.json. Form 1 example: { \"domain\": { \"status\": [\"active\", \"archived\"] }, \"media\": { \"format\": [\"mp3\", \"wav\"] } }. Form 2 — value operations: { \"add\": [{ \"path\": string[] (key segment array), \"value\": any }], \"remove\": [{ \"path\": string[], \"value\": any }] }. Form 2 example: { \"add\": [{ \"path\": [\"domain\", \"status\"], \"value\": \"review\" }], \"remove\": [{ \"path\": [\"domain\", \"status\"], \"value\": \"deprecated\" }] }. Detection rule: if the patch object has an 'add' or 'remove' key whose value is an array, Form 2 is used; otherwise Form 1."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "updated_nodes": {
+            "type": "integer",
+            "_comment": "Number of vocabulary nodes touched in the projection during this patch."
+          },
+          "updated_values": {
+            "type": "integer",
+            "_comment": "Number of terminal values updated. Fixed to zero in v1 (value-specific accounting not tracked separately)."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "_comment": "Total patch duration in milliseconds."
+          }
+        }
+      },
+      "effects": {
+        "projection_db": "The root vocabulary projection may be updated.",
+        "vocabulary_overlay": "The root vocabulary JSON overlay file may be atomically rewritten.",
+        "vocabulary_llm": "The root LLM-readable vocabulary text file may be atomically regenerated from the JSON vocabulary tree."
+      },
+      "transformation_contract": {
+        "morphing": "A root vocabulary patch becomes a new committed JSON overlay, regenerated LLM-readable vocabulary map, and projection state, with explicit patch statistics for the touched vocabulary nodes and values.",
+        "invariants": [
+          "vocabulary.patch is root-only and rewrites the vocabulary overlay before updating the projection.",
+          "The JSON vocabulary file filters out string values containing spaces before it is written.",
+          "The LLM vocabulary file is derived from the JSON vocabulary tree and contains only the hierarchical category/path map, without values.",
+          "Patch application is a deterministic deep-merge where existing overlay values can override observed defaults.",
+          "Projection insertion is add-only in v1 and does not remove existing projected vocabulary nodes."
+        ],
+        "success": [
+          "On success, vocabulary.patch returns updated_nodes, updated_values, and duration_ms.",
+          "Successful execution atomically writes vocabulary.json and vocabulary.llm.txt, then applies the patch to the vocabulary projection."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when params.patch is missing, when the vocabulary JSON or LLM artifact cannot be written, or when the projection database cannot apply the add-only patch."
+        ],
+        "notes": [
+          "updated_values is currently fixed to zero in v1 because value-specific accounting is not tracked separately.",
+          "This capability mutates derived vocabulary state, not source descriptors."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,35 @@
+{
+  "brique": {
+    "cap_name": "echo",
+    "kind": "interpreted",
+    "wrapper": "inspector_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "echo",
+    "description": "Return params unchanged."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {}
+    }
+  },
+  "subjective": {
+    "intent": "echo flow"
+  }
+}

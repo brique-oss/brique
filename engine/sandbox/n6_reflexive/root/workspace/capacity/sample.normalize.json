@@ -1,0 +1,71 @@
+{
+  "_comment": "Secondary capacity descriptor for N6 reflexive tests.",
+  "brique": {
+    "cap_name": "sample.normalize",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sample.normalize",
+    "description": "Normalize a record-like payload into a canonical shape",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "#root": {
+      "role": "Normalize one record-like input into a canonical payload shape.",
+      "call": {
+        "family": "execution"
+      },
+      "inputs": {
+        "params": {
+          "record": {
+            "type": "object"
+          },
+          "drop_empty": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "normalized": {
+            "type": "object"
+          },
+          "field_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "An inbound record becomes a canonical normalized representation with an explicit field count.",
+        "invariants": [
+          "sample.normalize must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sample.normalize returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sample.normalize fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      },
+      "resolution": {
+        "_comment": "Seed descriptor used for reflexive meaning tests; runtime execution is not asserted from this descriptor alone."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "secondary capacity seed",
+    "impression": "structured transform"
+  }
+}

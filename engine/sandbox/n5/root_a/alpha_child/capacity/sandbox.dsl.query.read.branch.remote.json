@@ -1,0 +1,149 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.query.read.branch.remote",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.query.read.branch.remote",
+    "description": "Rebuild the remote root meaning projection, query one remote element, read its detailed remote meaning, and branch on the returned descriptor value."
+  },
+  "functional": {
+    "#root": {
+      "role": "Use remote meaning.query to discover one remote capacity through the remote root projection, reuse that selected element in remote read.meaning, and branch on the returned remote objective name.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "remote_projection_refresh": "The remote root meaning projection is rebuilt before selection.",
+        "remote_projection_query": "The remote root meaning projection is queried for one matching element.",
+        "remote_detailed_meaning_read": "The selected remote element is read through remote read.meaning before branching."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific remote terminal response after remote projected discovery and remote detailed meaning read of the selected element.",
+        "invariants": [
+          "The flow rebuilds the remote root projection before querying it and then reads detailed meaning on the selected remote element.",
+          "Remote rebuild and query use explicit timeout and retry qualifiers before the branch is evaluated.",
+          "Exactly one terminal wrapper branch is selected from the detailed remote meaning value."
+        ],
+        "success": [
+          "On success, the terminal payload comes from either the remote or local sandbox.echo branch selected from the remote detailed meaning value.",
+          "When the detailed remote objective name resolves to sandbox.echo, the successful branch is the remote wrapper route."
+        ],
+        "failure": [
+          "The flow fails if the remote rebuild, remote query, remote detailed read, or selected terminal branch cannot complete.",
+          "Inter-instance reflective routing errors close the scenario fail-closed."
+        ],
+        "notes": [
+          "This is the remote counterpart to the local query -> read -> branch scenario.",
+          "The scenario proves that projected selection and detailed meaning read can both cross the external boundary."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "rebuilt"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "Wrapper-backed echo capacity for N5 inter-instance tests"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "selected"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "$selected.payload.result.0.name",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "as": "detailed"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$detailed.payload.result.0.descriptor.objective.name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-remote-branch"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-remote-miss"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

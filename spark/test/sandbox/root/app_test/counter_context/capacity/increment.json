@@ -1,0 +1,33 @@
+{
+  "brique": {
+    "cap_name": "increment",
+    "kind": "interpreted",
+    "wrapper": "counter_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "increment",
+    "description": "Increment counter_value.value by one."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "number"
+          }
+        }
+      },
+      "effects": {
+        "matter": "Writes counter_value."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "increment counter"
+  }
+}

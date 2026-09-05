@@ -1,0 +1,34 @@
+{
+  "_comment": "Secondary document descriptor used for duplicate and meaning projection tests.",
+  "brique": {
+    "kind": "document",
+    "file": "document/guide.md",
+    "ref": ""
+  },
+  "objective": {
+    "name": "guide",
+    "description": "Guide document describing the sandbox workspace domain",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "source_kind": "local",
+    "mime_type": "text/markdown",
+    "tags": [
+      "guide",
+      "seed",
+      "workspace",
+      "projection"
+    ],
+    "sections": [
+      "model",
+      "entities",
+      "projection"
+    ]
+  },
+  "subjective": {
+    "intent": "secondary document seed",
+    "impression": "supporting artifact"
+  }
+}

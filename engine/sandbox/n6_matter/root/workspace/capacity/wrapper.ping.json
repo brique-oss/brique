@@ -1,0 +1,53 @@
+{
+  "brique": {
+    "cap_name": "wrapper.ping",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "wrapper.ping",
+    "description": "Bootstrap capacity used to start the Matter wrapper runtime"
+  },
+  "functional": {
+    "#root": {
+      "role": "Provide a minimal wrapper-backed call that forces lazy wrapper startup and acknowledges readiness.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The configured wrapper runtime may be started lazily."
+      },
+      "transformation_contract": {
+        "morphing": "A bootstrap ping becomes an explicit proof that the Matter wrapper runtime is reachable.",
+        "invariants": [
+          "wrapper.ping must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "wrapper.ping returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "wrapper.ping fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "matter wrapper bootstrap"
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "mcp",
+    "ctx_name": "mcp",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "config": {
+              "_comment": "Logical wrapper route on the root shared listener. Wrapper code uses BRIQUE_WS_URL/BRIQUE_WS_ADDR injected by the engine plus this path.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/wrapper/mcp_server_go"
+            },
+            "driver": "ws",
+            "name": "mcp_server_go",
+            "type": "wrapper"
+          },
+          {
+            "config": {
+              "_comment": "Logical UI route on the root shared listener. The physical address is resolved dynamically from the instance root's communication.websocket_listener.addr.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/mcp/ws"
+            },
+            "driver": "ws",
+            "name": "repl",
+            "type": "ui"
+          }
+        ],
+        "scattered": {
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          },
+          "scattered_max_items": 8
+        },
+        "wrapper_boundary": [
+          "mcp_server_go"
+        ]
+      },
+      "execution": {
+        "wrappers": [
+          {
+            "build": {
+              "artifact": "build/mcp_server_go/mcp_server_go",
+              "artifact_kind": "file",
+              "cmd": [
+                "go",
+                "build",
+                "-o",
+                "../../build/mcp_server_go/mcp_server_go",
+                "."
+              ],
+              "shell": false,
+              "timeout_ms": 30000
+            },
+            "mode": "compiled",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "./mcp_server_go"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "mcp_server_go"
+              },
+              "shell": false
+            },
+            "stop_timeout_ms": 500,
+            "wrapper_name": "mcp_server_go"
+          }
+        ]
+      },
+      "reflexive": {
+        "repo_name": "spark-pulse-sandbox-mcp",
+        "root_repo": false
+      },
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "debug",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.1",
+    "ui_config": {
+      "adapter": "react",
+      "host": "electron",
+      "name": "repl",
+      "root_view": "IntentionRepl",
+      "ws_path": "/mcp/ws"
+    }
+  },
+  "objective": {
+    "name": "mcp",
+    "description": "MCP (Model Context Protocol) server — exposes tools and resources via a Go wrapper."
+  },
+  "functional": {
+    "role": "mcp_bridge",
+    "owns_wrappers": [
+      "mcp_server_go"
+    ]
+  },
+  "subjective": {}
+}

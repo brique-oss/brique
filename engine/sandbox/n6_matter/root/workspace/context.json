@@ -1,0 +1,99 @@
+{
+  "_comment": "Workspace child context used as mutable target for N6 Matter functional tests.",
+  "brique": {
+    "ctx_name": "sandbox-n6-matter-workspace",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n6-matter-workspace",
+    "children_list": [
+      "sub_ctx"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [
+          "sandbox_py"
+        ],
+        "interfaces": [
+          {
+            "name": "sandbox_py",
+            "type": "wrapper",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/wrapper/sandbox_py"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": [
+          {
+            "wrapper_name": "sandbox_py",
+            "mode": "interpreted",
+            "ready_timeout_ms": 2000,
+            "stop_timeout_ms": 1000,
+            "build": {
+              "shell": false,
+              "timeout_ms": 1000,
+              "artifact": "",
+              "artifact_kind": "file",
+              "cmd": []
+            },
+            "run": {
+              "shell": false,
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "sandbox_py"
+              }
+            }
+          }
+        ]
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-n6-matter-workspace"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n6-matter-workspace",
+    "description": "Mutable child context carrying Matter fixtures for N6 functional tests"
+  },
+  "functional": {
+    "role": "workspace",
+    "test_scope": [
+      "matter read and write",
+      "substance mode matrix",
+      "wrapper-backed matter",
+      "http substance",
+      "reflexive verification"
+    ]
+  },
+  "subjective": {
+    "intent": "mutable matter workspace",
+    "impression": "integration-focused"
+  }
+}

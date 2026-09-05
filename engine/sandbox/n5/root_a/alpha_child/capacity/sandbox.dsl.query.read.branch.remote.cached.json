@@ -1,0 +1,133 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.query.read.branch.remote.cached",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.query.read.branch.remote.cached",
+    "description": "Query one remote element from an already built remote meaning projection, read its detailed remote meaning, and branch on the returned descriptor value."
+  },
+  "functional": {
+    "#root": {
+      "role": "Use an already refreshed remote meaning projection to discover one remote capacity through meaning.query, reuse that selected element in remote read.meaning, and branch on the returned remote objective name.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_projection_query": "The remote root meaning projection is queried for one matching element.",
+        "remote_detailed_meaning_read": "The selected remote element is read through remote read.meaning before branching."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific remote terminal response after remote projected discovery and remote detailed meaning read of the selected element.",
+        "invariants": [
+          "The flow relies on an already built remote projection and therefore skips the rebuild step inside the scenario.",
+          "The branch decision is taken from the detailed remote read.meaning result rather than directly from the projected query row."
+        ],
+        "success": [
+          "The terminal payload exposes echo and ctx_id from the selected terminal sandbox.echo branch.",
+          "When the selected remote descriptor objective.name equals sandbox.echo, the terminal payload comes from the remote beta-child wrapper."
+        ],
+        "failure": [
+          "The flow fails if the cached remote meaning.query or the subsequent remote read.meaning cannot produce a usable selected element.",
+          "The flow fails if the selected terminal wrapper route cannot complete."
+        ],
+        "notes": [
+          "This cached variant is used by N7 concurrency tests to isolate remote reflective branching from concurrent rebuild races.",
+          "Its semantic contract matches the non-cached remote branch scenario apart from the omitted rebuild step."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "Wrapper-backed echo capacity for N5 inter-instance tests"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 6,
+                  "delay_ms": 50
+                },
+                "as": "selected"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "$selected.payload.result.0.name",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "as": "detailed"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$detailed.payload.result.0.descriptor.objective.name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-remote-branch"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-remote-miss"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

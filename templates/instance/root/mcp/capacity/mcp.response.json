@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "cap_name": "mcp.response",
+    "kind": "compiled",
+    "wrapper": "mcp_server_go",
+    "rel_ctx": "",
+    "lang": "go"
+  },
+  "objective": {
+    "name": "mcp.response",
+    "description": "Routing anchor capacity — allows Brique to route outbound intention responses back to the mcp_server_go wrapper boundary."
+  },
+  "functional": {
+    "#root": {
+      "role": "Receive responses routed back to the wrapper from Brique engine families.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      }
+    }
+  },
+  "subjective": {}
+}

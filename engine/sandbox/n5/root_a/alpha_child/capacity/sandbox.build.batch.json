@@ -1,0 +1,59 @@
+{
+  "brique": {
+    "cap_name": "sandbox.build.batch",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.build.batch",
+    "description": "Build a collection payload for bounded DSL for_each orchestration."
+  },
+  "functional": {
+    "#root": {
+      "role": "Create a deterministic collection of items for later DSL iteration.",
+      "inputs": {
+        "params": {
+          "prefix": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "items": {
+            "type": "array"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A simple batch request becomes a deterministic collection used by bounded DSL iteration.",
+        "invariants": [
+          "count is coerced to an integer and clamped to zero when negative.",
+          "Each item is generated deterministically as {message: prefix-index, index: index}.",
+          "The returned count echoes the normalized count actually used to build the items array."
+        ],
+        "success": [
+          "On success, sandbox.build.batch returns items plus the normalized count.",
+          "The payload is stable input for DSL for_each and parallel iteration tests."
+        ],
+        "failure": [
+          "sandbox.build.batch has no contract-level validation failure for missing prefix or count because defaults are applied locally.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This capability is intentionally deterministic to make orchestration tests stable.",
+          "Items are plain payload objects and do not allocate matter or structure state."
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "cap_name": "sandbox.py.bad_run",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py_bad_run",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.py.bad_run",
+    "description": "Interpreted wrapper-backed capacity used to prove run failure fail-closed behavior"
+  },
+  "functional": {
+    "#root": {
+      "role": "Select an interpreted wrapper configuration that fails during run and expose the fail-closed execution path.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "wrapper_runtime": "The interpreted wrapper run path is exercised and expected to fail closed."
+      },
+      "transformation_contract": {
+        "morphing": "An interpreted execution request becomes a fail-closed runtime error path when the selected wrapper cannot start correctly.",
+        "invariants": [
+          "sandbox.py.bad_run must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.py.bad_run returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.py.bad_run fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "simulate invalid run command"
+  }
+}

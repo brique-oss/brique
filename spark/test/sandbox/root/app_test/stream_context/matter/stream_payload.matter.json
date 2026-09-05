@@ -1,0 +1,13 @@
+{
+  "brique": {
+    "matter_id": "stream_payload",
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "stream_payload",
+    "description": "Large binary payload served via HTTP substance lease for streaming validation."
+  }
+}

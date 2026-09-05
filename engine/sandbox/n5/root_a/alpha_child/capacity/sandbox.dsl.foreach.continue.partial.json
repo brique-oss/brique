@@ -1,0 +1,110 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.foreach.continue.partial",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.foreach.continue.partial",
+    "description": "Build a collection, then iterate with on_error=continue so one failing item does not abort the whole loop."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build one deterministic batch, deliberately fail one iteration through a matter read error, continue the other iterations, and aggregate only the successful terminal payloads.",
+      "inputs": {
+        "params": {
+          "prefix": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "items": {
+            "type": "array"
+          }
+        }
+      },
+      "effects": {
+        "partial_loop_success": "Successful iterations remain aggregated even when one iteration fails.",
+        "local_iteration_failure": "One iteration intentionally produces a local matter read error."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one partial aggregate after a bounded loop continues past one failed iteration and preserves the successful items.",
+        "invariants": [
+          "Exactly one iteration is designed to fail through a missing local matter read while the others terminate through sandbox.echo.",
+          "The loop keeps on_error=continue semantics, so failed iterations are omitted from the final items array instead of aborting the whole flow."
+        ],
+        "success": [
+          "The terminal payload exposes only the successful item payloads in order, excluding the failed iteration.",
+          "For count=3 in the N7 fixture, the resulting items array contains the first and third built messages only."
+        ],
+        "failure": [
+          "The flow fails if the batch cannot be built before iteration starts.",
+          "The flow also fails if a non-tolerated loop error occurs outside the single continued iteration path."
+        ],
+        "notes": [
+          "This scenario exists to validate partial success semantics for >for_each with on_error=continue.",
+          "The intentional failure path uses matter.read so the continued error remains observable and deterministic."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.build.batch",
+                "with": {
+                  "prefix": "$input.prefix",
+                  "count": "$input.count"
+                },
+                "as": "batch"
+              }
+            },
+            {
+              ">for_each": {
+                "collection": "$batch.payload.items",
+                "limit": 2,
+                "on_error": "continue",
+                ">do": {
+                  ">if": {
+                    "when": {
+                      "left": "$item.index",
+                      "op": "eq",
+                      "right": 1
+                    },
+                    ">then": {
+                      "invoke": {
+                        "@capacity": "/root/alpha_child/matter.read",
+                        "to_type": "matter",
+                        "with": {
+                          "matter_id": "missing_partial_item",
+                          "read_mode": "functional"
+                        },
+                        "as": "failed_item"
+                      }
+                    },
+                    ">else": {
+                      "invoke": {
+                        "@capacity": "/root/alpha_child/sandbox.echo",
+                        "with": {
+                          "message": "$item.message"
+                        },
+                        "as": "ok_item"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

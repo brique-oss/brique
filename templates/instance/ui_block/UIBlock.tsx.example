@@ -1,0 +1,225 @@
+import React, { useMemo, useState } from "react";
+import {
+  PulseProvider,
+  usePulse,
+  useIntentionSubscription,
+  useBriqueAction,
+  useMatter,
+} from "@spark/pulse/react";
+import { PulseRuntime } from "@spark/pulse/runtime";
+
+// Rename this file, the type below, and the two component names to match
+// `ui_config.root_view` in this context's context.json (see UIBlock.md §2).
+// The file must live at <context_dir>/ui/<RootView>.tsx.
+
+export type UIBlockExampleProps = {
+  pulse?: PulseRuntime;
+  transportUrl?: string;
+  rootContextId?: string;
+};
+
+export function UIBlockExample({ pulse: providedPulse, transportUrl, rootContextId }: UIBlockExampleProps) {
+  const pulse = useMemo(() => {
+    if (providedPulse) return providedPulse;
+    return new PulseRuntime({
+      webSocketUrl: transportUrl ?? resolveTransportUrl(),
+      maxMessagesPerFlow: 20,
+      terminalFlowTtlMs: 30000,
+    });
+  }, [providedPulse, transportUrl]);
+
+  return (
+    <PulseProvider pulse={pulse}>
+      <UIBlockExampleInner rootContextId={rootContextId} />
+    </PulseProvider>
+  );
+}
+
+function UIBlockExampleInner({ rootContextId }: { rootContextId?: string }) {
+  const pulse = usePulse();
+  const targetContext = rootContextId ?? "/root/<context_path>";
+
+  // --- Pattern 1: fire, track via subscription (non-blocking) ---
+  // Use when the UI should stay responsive while a capacity runs, and you
+  // want live status/payload updates as they arrive (including intermediate
+  // "running" responses from long-running capacities).
+  const [trackedIntentionId, setTrackedIntentionId] = useState<string | null>(null);
+  const trackedState = useIntentionSubscription(trackedIntentionId);
+
+  async function handleFireAndTrack() {
+    const id = await pulse.emitUIIntention({
+      to: { context: targetContext, cap: "<capacity.name>", type: "user" },
+      targetPathUI: "/<context_path>/example/response",
+      identity: { id: "<context>-user", kind: "human" },
+      params: { /* exactly what the capacity's descriptor declares under functional.#root.inputs.params */ },
+    });
+    setTrackedIntentionId(id);
+  }
+
+  // --- Pattern 2: emit and await the terminal response directly ---
+  // Use when the calling code needs the result inline (e.g. to chain a
+  // second call), not just to display state. Rejects after responseTimeoutMs
+  // (configured once on the PulseRuntime instance above, default 30s if
+  // unset) — there is no per-call timeout field on UIIntentionInput; the
+  // wait is refreshed automatically on each intermediate "running" response,
+  // so a slow-but-alive capacity is not penalized by that shared timeout.
+  const [awaitedResult, setAwaitedResult] = useState<unknown>(null);
+  const [awaiting, setAwaiting] = useState(false);
+
+  async function handleEmitAndWait() {
+    setAwaiting(true);
+    try {
+      const response = await pulse.emitUIIntentionAndWait({
+        to: { context: targetContext, cap: "<capacity.name>", type: "user" },
+        targetPathUI: "/<context_path>/example/await_response",
+        identity: { id: "<context>-user", kind: "human" },
+        params: {},
+      });
+      setAwaitedResult(response.payload ?? response.error);
+    } finally {
+      setAwaiting(false);
+    }
+  }
+
+  // --- Pattern 3: the idiomatic action hook — prefer this over hand-rolled
+  // useState + emitUIIntention for a simple "button triggers one capacity"
+  // flow. Handles stale-response guarding internally.
+  //
+  // IMPORTANT: action.status turns "success" as soon as the intention is
+  // SENT (same fire-and-forget semantics as emitUIIntention/pattern 1) — it
+  // does NOT mean the capacity finished running. To reflect the capacity's
+  // actual completion in the UI, feed action.intentionId into
+  // useIntentionSubscription (as done for Pattern 1 above) rather than
+  // relying on action.status alone for anything but "was it sent ok".
+  const action = useBriqueAction({
+    to: { context: targetContext, cap: "<capacity.name>", type: "user" },
+    targetPathUI: "/<context_path>/example/action_response",
+    identity: { id: "<context>-user", kind: "human" },
+  });
+  const actionState = useIntentionSubscription(action.intentionId);
+
+  // --- Pattern 4: read/subscribe to a matter directly (no intention needed
+  // for display-only state a capacity elsewhere maintains). ---
+  const matter = useMatter(
+    { context: targetContext, matterId: "<matter_id>" },
+    { subscribe: true, refetchOnEvent: true },
+  );
+
+  return (
+    <main style={styles.root}>
+      <header style={styles.header}>
+        <span style={styles.title}>&lt;Bloc title&gt;</span>
+        <span style={styles.status}>{trackedState.status !== "idle" ? trackedState.status : ""}</span>
+      </header>
+
+      <section style={styles.pane}>
+        <button style={styles.button} onClick={() => void handleFireAndTrack()}>
+          Fire &amp; track
+        </button>
+        {trackedState.error && <div style={styles.error}>{JSON.stringify(trackedState.error)}</div>}
+        {trackedState.payload != null && <pre>{JSON.stringify(trackedState.payload, null, 2)}</pre>}
+      </section>
+
+      <section style={styles.pane}>
+        <button
+          style={{ ...styles.button, ...(awaiting ? styles.buttonDisabled : undefined) }}
+          onClick={() => void handleEmitAndWait()}
+          disabled={awaiting}
+        >
+          {awaiting ? "Waiting…" : "Emit & wait"}
+        </button>
+        {awaitedResult != null && <pre>{JSON.stringify(awaitedResult, null, 2)}</pre>}
+      </section>
+
+      <section style={styles.pane}>
+        {/* Disable/label off actionState (the capacity's real progress via
+            subscription), not action.status (only "was it sent ok"). */}
+        <button
+          style={{ ...styles.button, ...(actionState.status === "running" ? styles.buttonDisabled : undefined) }}
+          onClick={() => void action.emit({ /* optional per-call param override */ })}
+          disabled={actionState.status === "running"}
+        >
+          {actionState.status === "running" ? "Running…" : "Run action"}
+        </button>
+        {action.status === "error" && <div style={styles.error}>{JSON.stringify(action.error)}</div>}
+        {actionState.error && <div style={styles.error}>{JSON.stringify(actionState.error)}</div>}
+      </section>
+
+      <section style={styles.pane}>
+        <label style={styles.label}>Matter (live)</label>
+        <pre>{JSON.stringify(matter.data, null, 2)}</pre>
+      </section>
+    </main>
+  );
+}
+
+function resolveTransportUrl(): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  return env?.SPARK_UI_TRANSPORT_URL ?? "ws://localhost:8080/<context_path>/ws";
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  root: {
+    fontFamily: "system-ui, sans-serif",
+    padding: 20,
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    minHeight: "100vh",
+    background: "var(--syn-surface-overlay, #1a1b1e)",
+    color: "var(--syn-text-primary, #e8eaed)",
+    boxSizing: "border-box",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: 700,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: "var(--syn-text-muted, rgba(232,234,237,0.55))",
+  },
+  status: {
+    fontSize: 11,
+    color: "var(--syn-text-muted, rgba(232,234,237,0.45))",
+  },
+  pane: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: "var(--syn-text-muted, rgba(232,234,237,0.55))",
+  },
+  button: {
+    alignSelf: "flex-start",
+    padding: "7px 20px",
+    border: "1px solid var(--syn-selected-border, rgba(138,180,248,0.6))",
+    borderRadius: 6,
+    background: "var(--syn-feedback-info, #8ab4f8)",
+    color: "var(--syn-text-inverse, #071014)",
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
+  error: {
+    fontSize: 11,
+    padding: "6px 10px",
+    borderRadius: 4,
+    background: "var(--syn-feedback-error-bg)",
+    color: "var(--syn-feedback-error)",
+  },
+};
+
+export default UIBlockExample;

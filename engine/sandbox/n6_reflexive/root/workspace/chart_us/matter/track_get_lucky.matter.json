@@ -1,0 +1,76 @@
+{
+  "_comment": "US chart matter for contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_get_lucky",
+    "description": "Get Lucky in the US chart selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Get Lucky",
+      "artist": "Daft Punk",
+      "album": "Random Access Memories",
+      "genre": "electronic",
+      "classification": {
+        "genres": [
+          "electronic",
+          "pop"
+        ],
+        "styles": [
+          "nu-disco",
+          "radio"
+        ]
+      },
+      "release": {
+        "year": "2013",
+        "date": "2013-04-19"
+      },
+      "chart": {
+        "market": "us",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "5",
+          "weekly": "2"
+        }
+      },
+      "tags": [
+        "dance",
+        "radio",
+        "summer"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "chart track",
+    "impression": "cross-market classic",
+    "emojis": [
+      "🔥",
+      "🌎"
+    ],
+    "tags": [
+      "festival",
+      "daylight"
+    ]
+  }
+}

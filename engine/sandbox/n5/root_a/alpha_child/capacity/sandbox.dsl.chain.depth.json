@@ -1,0 +1,96 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.chain.depth",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.chain.depth",
+    "description": "Sequential DSL chain of fixed depth used to measure per-hop latency cost in N8 stress tests."
+  },
+  "functional": {
+    "#root": {
+      "role": "Execute 5 sequential wrapper calls and return the accumulated hop count.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "hops": {
+            "type": "integer"
+          },
+          "last_echo": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_wrapper_runtime": "The local wrapper runtime is invoked 5 times sequentially."
+      },
+      "transformation_contract": {
+        "morphing": "Each DSL step invokes the local wrapper echo once, producing a chain of 5 sequential round-trips through the execution family.",
+        "invariants": [
+          "The chain always executes exactly 5 steps regardless of input.",
+          "Each step passes the previous echo result as input to the next.",
+          "The final response carries hops=5 and the last echoed message."
+        ],
+        "success": [
+          "On success, returns hops=5 and last_echo equal to the input message echoed through the final step."
+        ],
+        "failure": [
+          "Fails terminally if any wrapper step fails."
+        ],
+        "notes": [
+          "Used exclusively by N8_STRESS_02 to measure DSL sequential chain latency scaling."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": { "message": "$input.message" },
+                "as": "hop1"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": { "message": "$hop1.payload.echo" },
+                "as": "hop2"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": { "message": "$hop2.payload.echo" },
+                "as": "hop3"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": { "message": "$hop3.payload.echo" },
+                "as": "hop4"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": { "message": "$hop4.payload.echo" },
+                "as": "hop5"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

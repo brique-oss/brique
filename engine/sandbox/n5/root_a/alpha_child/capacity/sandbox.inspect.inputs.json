@@ -1,0 +1,68 @@
+{
+  "brique": {
+    "cap_name": "sandbox.inspect.inputs",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.inspect.inputs",
+    "description": "Return exactly the params visible by a wrapper capacity, including injected @matter refs."
+  },
+  "functional": {
+    "#root": {
+      "role": "Expose the effective params and matter refs observed by the wrapper runtime.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "primary": {
+            "required": false
+          },
+          "secondary": {
+            "required": false
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Wrapper inputs become an explicit reflection of the params and matter refs observed by the wrapper runtime.",
+        "invariants": [
+          "The capability reflects params exactly as observed by the wrapper runtime after Execution-side injection.",
+          "Incoming @matter bindings are visible to the wrapper as part of received_params when present.",
+          "The capability does not resolve matter contents; it only reflects the received envelope."
+        ],
+        "success": [
+          "On success, sandbox.inspect.inputs returns received_params together with ctx_id and wrapper_name.",
+          "This makes the wrapper-visible contract surface directly assertable from tests."
+        ],
+        "failure": [
+          "sandbox.inspect.inputs has no contract-level validation failure for missing label or @matter entries because it is purely observational.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This capability is an introspection oracle for wrapper input plumbing in N7.",
+          "Use sandbox.inspect.resolved.inputs when resolved matter content is needed in addition to the raw envelope.",
+          "The returned ctx_id and wrapper_name make it possible to verify which wrapper instance observed the injected envelope."
+        ]
+      }
+    }
+  }
+}

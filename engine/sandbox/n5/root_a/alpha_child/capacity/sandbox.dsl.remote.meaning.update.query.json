@@ -1,0 +1,130 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.remote.meaning.update.query",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.remote.meaning.update.query",
+    "description": "Refresh the local root meaning projection incrementally, query it through a projected filter, and branch on the resulting selected element."
+  },
+  "functional": {
+    "#root": {
+      "role": "Ask the local root to incrementally refresh one projected capacity descriptor, query the refreshed projection with a projected objective.description filter, and branch on the selected element name.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "root_meaning_update": "The local root projection is incrementally refreshed for one element.",
+        "root_meaning_query": "The local root projection is queried after refresh.",
+        "branch_terminal_route": "The terminal route depends on the refreshed local reflective value."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes a branch-specific terminal response after refreshing the local root projection and selecting the matching element through a projected query filter.",
+        "invariants": [
+          "The local root projection is incrementally refreshed for sandbox.echo before meaning.query applies its projected objective.description filter.",
+          "The branch decision is taken from the first projected query row name returned after update."
+        ],
+        "success": [
+          "The terminal payload exposes echo and ctx_id from the selected local sandbox.echo branch.",
+          "When the updated projection exposes sandbox.echo under the patched description, the flow terminates through message meaning-updated."
+        ],
+        "failure": [
+          "The flow fails if meaning.update or meaning.query cannot complete after their retry policy is exhausted.",
+          "The flow can terminate through the stale else branch if the refreshed projection does not expose the expected selected row."
+        ],
+        "notes": [
+          "Despite its name, this scenario exercises local root-level reflexive update/query after the descriptor is patched by the test harness.",
+          "N7 validates both the terminal branch payload and an explicit follow-up meaning.query on the refreshed projection."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.update",
+                "to_type": "reflexive",
+                "with": {
+                  "elements": [
+                    {
+                      "ctx_id": "/root/alpha_child",
+                      "element_kind": "capacity",
+                      "name": "sandbox.echo"
+                    }
+                  ]
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_update"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/alpha_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "patched-local-n7"
+                    }
+                  ]
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_query"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$remote_query.payload.result.0.name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "meaning-updated"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "meaning-stale"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

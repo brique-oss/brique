@@ -1,0 +1,74 @@
+{
+  "_comment": "Root context fixture for N3 sandbox tests.",
+  "brique": {
+    "ctx_name": "sandbox-n3-root",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n3-root",
+    "children_list": [
+      "n3_child"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "websocket_listener": {
+          "addr": ":19081"
+        },
+        "interfaces": [
+          {
+            "name": "ui_root",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/ui_root"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": true,
+        "repo_name": "brique-sandbox-root"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n3-root",
+    "description": "Root fixture used to host one child runtime context for N3 pipeline tests"
+  },
+  "functional": {
+    "role": "root",
+    "test_scope": [
+      "context startup",
+      "child context creation",
+      "root ingress and egress ownership"
+    ]
+  },
+  "subjective": {
+    "intent": "sandbox root fixture",
+    "impression": "minimal"
+  }
+}

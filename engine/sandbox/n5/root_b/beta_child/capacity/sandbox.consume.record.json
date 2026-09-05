@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "sandbox.consume.record",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.consume.record",
+    "description": "Consume a structured record and return a compact summary."
+  },
+  "functional": {
+    "#root": {
+      "role": "Consume a few structured params and return one summary string.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "source_ctx": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A structured record view becomes one compact summary string.",
+        "invariants": [
+          "sandbox.consume.record must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.consume.record returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.consume.record fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  }
+}

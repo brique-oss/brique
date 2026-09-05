@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "edit.delete",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_edit.go",
+    "function": "capEditDelete"
+  },
+  "objective": {
+    "name": "edit.delete",
+    "description": "Delete one or more local Brique elements from the current context tree."
+  },
+  "functional": {
+    "#root": {
+      "role": "Validate one delete batch, remove the targeted local elements, and return one aggregated per-item result payload.",
+      "inputs": {
+        "params": {
+          "items": {
+            "type": "array",
+            "_comment": "Required non-empty delete batch. Each item: { type (string: context|capacity|schema|document), name (string) }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item: { ok (bool), type (string), name (string) } on success, or { ok: false, type, name, error: { code, message, reason } } on failure."
+          }
+        }
+      },
+      "effects": {
+        "context_tree": "Local files or directories in the current context tree may be removed."
+      },
+      "transformation_contract": {
+        "morphing": "A batch of local element delete requests becomes a per-item deletion result set, with successful items removing the targeted local meaning or context state.",
+        "invariants": [
+          "edit.delete is batch-oriented and returns one result entry per parsed item.",
+          "Context deletion removes a whole child context tree and updates the parent child list.",
+          "Document deletion removes the meaning descriptor and best-effort removes the local content file when the document is local."
+        ],
+        "success": [
+          "On success, each result item reports ok=true with the normalized type and name of the deleted element.",
+          "Mixed batches can succeed partially because missing, unsupported, or refused items are returned as item-level errors."
+        ],
+        "failure": [
+          "The capacity fails when params.items is missing or cannot be parsed into a valid edit batch.",
+          "Individual items return errors when the target is unsupported, missing, outside scope, or cannot be deleted or reflected into the parent child list."
+        ],
+        "notes": [
+          "Matter and structure deletes are refused here because those element kinds are owned by MatterLoop.",
+          "Context deletion is limited to child contexts under the current context."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

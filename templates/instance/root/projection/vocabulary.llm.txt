@@ -1,0 +1,20 @@
+objective
+  description
+  name
+functional
+  content_kind
+  external_retrieval
+  format
+  mime_type
+  operations
+    read
+      enabled
+      modes
+    write
+      enabled
+      metadata_only
+      payload_allowed_only_when_mode_is
+  owns_wrappers
+  role
+  source_kind
+subjective

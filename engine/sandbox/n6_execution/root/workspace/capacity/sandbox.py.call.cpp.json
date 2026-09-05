@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "sandbox.py.call.cpp",
+    "wrapper": "sandbox_py",
+    "kind": "interpreted",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.py.call.cpp",
+    "description": "Python wrapper-backed capacity that awaits a user capacity served by the C++ wrapper"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit a wrapper-to-wrapper user-capacity call from Python to C++ and return the awaited remote result.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "remote": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The interpreted Python wrapper runtime may be started lazily.",
+        "cross_wrapper_route": "The Python wrapper emits an awaited user-capacity call toward the C++ wrapper."
+      },
+      "transformation_contract": {
+        "morphing": "A Python wrapper request becomes a remote C++ wrapper response returned through one awaited cross-wrapper engine route.",
+        "invariants": [
+          "sandbox.py.call.cpp must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.py.call.cpp returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.py.call.cpp fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "prove wrapper to wrapper call through the engine"
+  }
+}

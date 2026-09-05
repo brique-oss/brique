@@ -1,0 +1,73 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "meaning.update",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteUpdate"
+  },
+  "objective": {
+    "name": "meaning.update",
+    "description": "Incrementally refresh the root meaning projection for selected elements or contexts."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only incremental projection update for selected elements or contexts and expose update statistics.",
+      "inputs": {
+        "params": {
+          "elements": {
+            "type": "array",
+            "_comment": "Optional list of element refs to refresh. Each item: { ctx_id (string), element_kind (string), name (string) }. At least one of elements or context must be provided."
+          },
+          "context": {
+            "type": "array",
+            "_comment": "Optional list of context ids (absolute paths from /root). When provided without elements, all elements in those contexts are refreshed."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "updated_elements_count": {
+            "type": "integer",
+            "_comment": "Number of elements refreshed in the projection."
+          },
+          "affected_vocab_paths": {
+            "type": "array",
+            "_comment": "Vocabulary paths touched by the update."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "_comment": "Update duration in milliseconds."
+          }
+        }
+      },
+      "effects": {
+        "projection_db": "The root meaning projection database may be updated transactionally.",
+        "vocabulary_overlay": "The root vocabulary overlay may be refreshed best-effort for affected paths."
+      },
+      "transformation_contract": {
+        "morphing": "A root incremental update request becomes a refreshed projection state for the targeted elements or contexts, with explicit update statistics and affected vocabulary paths.",
+        "invariants": [
+          "meaning.update is root-only and runs against the current projection database transactionally.",
+          "At least one of params.elements or params.context must be provided to define the update target set.",
+          "Elements that cannot be resolved or parsed are skipped rather than aborting the entire update transaction."
+        ],
+        "success": [
+          "On success, meaning.update returns updated_elements_count, affected_vocab_paths, and duration_ms.",
+          "Successful updates refresh projection rows for the targeted set and apply add-only vocabulary enrichment for observed affected paths."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when both params.elements and params.context are absent, when the projection database cannot be opened, or when the update transaction cannot commit."
+        ],
+        "notes": [
+          "meaning.update is incremental and does not rebuild the whole projection.",
+          "Projection removals are not handled by this capability; it mainly refreshes or enriches projected content for targeted elements.",
+          "Nothing in the engine calls meaning.update automatically — edit.create, edit.patch_meaning, edit.delete, matter.write, and every other descriptor-mutating capacity write only to the filesystem and never touch the projection. This is deliberate: descriptor JSON is not required to be edited only through engine capacities (direct filesystem writes by a human or a wrapper are legitimate), so the engine cannot assume capacity calls are the only source of change and must not auto-trigger updates from them alone. Keeping the projection current after edits is an operational hygiene concern for the caller/instance, on whatever cadence or trigger fits how that instance is actually edited — there is no engine-side default.",
+          "If the projection database has no schema yet (e.g. meaning.rebuild has never run in this world, or its file was removed), meaning.update returns status=ok with updated_elements_count=0 for every targeted element instead of an error — a silent no-op, not a failure signal. A zero-update success is not proof the target elements are already up to date; if in doubt whether a rebuild has ever run, call meaning.rebuild instead of retrying meaning.update."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,76 @@
+{
+  "_comment": "French chart matter for contextualized music selection tests.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "track_instant_crush",
+    "description": "Instant Crush in the French chart selection",
+    "domain": "sandbox_n6_music",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "format": "text",
+    "schema_ref": "../../schema/sample_payload.json",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      }
+    },
+    "music": {
+      "kind": "track",
+      "title": "Instant Crush",
+      "artist": "Daft Punk",
+      "album": "Random Access Memories",
+      "genre": "electronic",
+      "classification": {
+        "genres": [
+          "electronic",
+          "indie"
+        ],
+        "styles": [
+          "synth-pop",
+          "melancholic"
+        ]
+      },
+      "release": {
+        "year": "2013",
+        "date": "2013-05-17"
+      },
+      "chart": {
+        "market": "fr",
+        "week": "2026-W13",
+        "snapshot_date": "2026-03-28",
+        "position": {
+          "global": "8",
+          "weekly": "3"
+        }
+      },
+      "tags": [
+        "melancholic",
+        "featured",
+        "classic"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "chart track",
+    "impression": "catalog crossover",
+    "emojis": [
+      "🫶",
+      "🌫️"
+    ],
+    "tags": [
+      "late-night",
+      "nostalgia"
+    ]
+  }
+}

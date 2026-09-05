@@ -1,0 +1,23 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_chain_local",
+    "description": "Seed local chain matter for N7 composite write/read scenarios"
+  },
+  "functional": {
+    "label": "seed-local-chain",
+    "message": "seed",
+    "source_ctx": "/root/alpha_child"
+  },
+  "subjective": {
+    "tags": [
+      "n7",
+      "local"
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "structure.delete",
+    "family": "matter",
+    "file": "engine/matter/matter_lifecycle_structure.go",
+    "function": "capStructureDelete"
+  },
+  "objective": {
+    "name": "structure.delete",
+    "description": "Delete one local structure descriptor and remove it from the runtime catalog."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one structure identifier, remove the local structure descriptor, and delete its runtime catalog entry.",
+      "inputs": {
+        "params": {
+          "structure_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "structure_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "structure_descriptor": "The local structure file is removed best-effort.",
+        "catalog": "The local structure catalog entry is removed."
+      },
+      "transformation_contract": {
+        "morphing": "A structure identifier becomes an explicit deletion of the corresponding local structure descriptor and catalog entry.",
+        "invariants": [
+          "structure.delete operates on one local catalog identity only.",
+          "Runtime catalog presence is authoritative for deletion eligibility."
+        ],
+        "success": [
+          "On success, structure.delete returns ok=true and echoes the deleted structure_id.",
+          "Successful deletion removes the structure from the runtime catalog even when filesystem cleanup is only best-effort."
+        ],
+        "failure": [
+          "The capacity fails when structure_id is missing.",
+          "The capacity refuses deletion when the structure is absent from the runtime catalog."
+        ],
+        "notes": [
+          "Deletion is local to the current context.",
+          "The runtime catalog remains the source of truth for local structure existence."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

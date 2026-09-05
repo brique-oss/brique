@@ -1,0 +1,10 @@
+{
+  "brique": {
+    "kind": "document",
+    "file": "overview.md"
+  },
+  "objective": {
+    "name": "py-active-overview",
+    "description": "Overview document for the nested active sandbox context"
+  }
+}

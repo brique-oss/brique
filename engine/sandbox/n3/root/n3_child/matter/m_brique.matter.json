@@ -1,0 +1,38 @@
+{
+  "_comment": "Brique-managed matter used for nominal read/write N3 flows.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_brique",
+    "description": "Inline brique-managed matter"
+  },
+  "functional": {
+    "format": "text",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": false
+      }
+    },
+    "substance": {
+      "local_file": "data.bin",
+      "content_type": "text/plain"
+    }
+  },
+  "subjective": {
+    "intent": "sandbox brique matter",
+    "impression": ""
+  }
+}

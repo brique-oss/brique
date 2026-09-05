@@ -1,0 +1,45 @@
+{
+  "_comment": "Schema used to describe edit.patch_meaning payloads in N6 tests.",
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "meaning_patch",
+    "description": "Schema for meaning patch payloads used during N6 tests",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "fields": {
+      "ops": {
+        "type": "array",
+        "required": true,
+        "description": "List of patch operations"
+      },
+      "path": {
+        "type": "string",
+        "required": false,
+        "description": "JSON path targeted by the patch"
+      },
+      "value": {
+        "type": "object",
+        "required": false,
+        "description": "Replacement or inserted value"
+      }
+    },
+    "rules": {
+      "allow_unknown_fields": true,
+      "required_fields": [
+        "ops"
+      ],
+      "forbidden_fields": [],
+      "constraints": [
+        "ops must not be empty"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "patch schema seed",
+    "impression": "editing payload schema"
+  }
+}

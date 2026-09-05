@@ -1,0 +1,110 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.remote.structure.create.read",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.remote.structure.create.read",
+    "description": "Create and read one remote structure across N5 before terminating locally."
+  },
+  "functional": {
+    "#root": {
+      "role": "Create one remote structure on the other instance, read it back remotely, then consume the returned fields locally in a wrapper-backed terminal capacity.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "remote_structure_create": "One structure is created on the remote instance.",
+        "remote_structure_read": "The committed remote structure is read across the external boundary."
+      },
+      "transformation_contract": {
+        "morphing": "A local label becomes one terminal local summary after a structure is materialized and read on another Brique instance.",
+        "invariants": [
+          "The remote structure is created from the local label and then read back remotely before terminal local consumption.",
+          "The terminal wrapper receives the committed remote functional.title and the remote structure_id, not only the create response."
+        ],
+        "success": [
+          "The terminal payload exposes summary and ctx_id from sandbox.consume.record after the remote structure round-trip.",
+          "The remote read returns the same structure_id created on the remote instance and exposes functional.title equal to the input label."
+        ],
+        "failure": [
+          "The flow fails if remote structure.create or structure.read fails across the external boundary.",
+          "The flow fails if the local terminal wrapper cannot consume the returned remote fields."
+        ],
+        "notes": [
+          "This scenario validates remote structure lifecycle composition inside a local DSL orchestrator.",
+          "The terminal output is still local wrapper output even though the structure lifecycle occurs remotely."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/structure.create",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "s_n7_remote_chain",
+                  "structure": {
+                    "objective": {
+                      "name": "s_n7_remote_chain"
+                    },
+                    "functional": {
+                      "title": "$input.label",
+                      "kind": "playlist"
+                    },
+                    "brique": {
+                      "kind": "structure"
+                    }
+                  }
+                },
+                "as": "created_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/structure.read",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "$created_struct.payload.structure_id",
+                  "want_meaning": false,
+                  "want_functional": true,
+                  "want_brique": true
+                },
+                "as": "read_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.consume.record",
+                "with": {
+                  "message": "$read_struct.payload.functional.title",
+                  "source_ctx": "$read_struct.payload.structure_id",
+                  "revision": "$created_struct.payload.revision"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

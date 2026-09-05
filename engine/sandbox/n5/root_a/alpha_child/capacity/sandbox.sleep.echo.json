@@ -1,0 +1,67 @@
+{
+  "brique": {
+    "cap_name": "sandbox.sleep.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.sleep.echo",
+    "description": "Wrapper-backed delayed echo for N5 stop-during-flight tests"
+  },
+  "functional": {
+    "#root": {
+      "role": "Sleep inside the wrapper runtime, then return an echoed message.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "delay_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "handled_by": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The wrapper runtime holds the request in flight for the requested delay."
+      },
+      "transformation_contract": {
+        "morphing": "A delayed echo request becomes an echoed message only after the wrapper runtime has held the request for the requested delay.",
+        "invariants": [
+          "delay_ms is coerced to an integer and values less than or equal to zero yield no sleep.",
+          "After any optional delay, the capability delegates payload shaping to the same echo semantics as sandbox.echo.",
+          "The capability does not mutate engine or wrapper state beyond holding the request in flight."
+        ],
+        "success": [
+          "On success, sandbox.sleep.echo returns the same payload shape as sandbox.echo after the requested delay has elapsed.",
+          "The returned ctx_id and wrapper_name still identify the active local wrapper runtime."
+        ],
+        "failure": [
+          "sandbox.sleep.echo has no contract-level validation failure for missing message or delay_ms because defaults are applied locally.",
+          "The capability only fails if the underlying async wrapper runtime cannot execute or complete the wait."
+        ],
+        "notes": [
+          "This capability is used to exercise in-flight timing and concurrency scenarios while keeping the payload semantics identical to sandbox.echo.",
+          "delay_ms is measured inside the wrapper runtime, not by the engine scheduler."
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "brique": {
+    "_comment": "Engine-native Execution family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "wrapper.stop",
+    "family": "execution",
+    "file": "engine/execution/execution_cap.go",
+    "function": "execWrapperStartStop"
+  },
+  "objective": {
+    "name": "wrapper.stop",
+    "description": "Stop a named wrapper in the current context. Sends a stop signal to the wrapper process and force-kills after timeout if still running."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve the named wrapper, emit a stop signal to the wrapper transport, schedule a force-kill after StopTimeoutMs, and emit a response.",
+      "inputs": {
+        "params": {
+          "name": {
+            "type": "string",
+            "required": true,
+            "_comment": "Required. Name of the wrapper to stop."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "_comment": "Empty payload. The stop signal has been sent. The wrapper process may still be running until stop_timeout_ms elapses."
+        }
+      },
+      "effects": {
+        "wrapper_runtime": "The wrapper process receives a stop signal. State is marked ProcStopping. Force-kill may follow after StopTimeoutMs."
+      },
+      "transformation_contract": {
+        "morphing": "A stop request becomes a stopping or stopped wrapper process.",
+        "invariants": [
+          "params.name must refer to a wrapper declared in execution config.",
+          "The handler runs asynchronously — it does not block the execution inbox.",
+          "Stop is best-effort: a graceful stop signal is sent, and a force-kill is scheduled after the wrapper's configured stop timeout if the process has not exited."
+        ],
+        "success": [
+          "Emits an OK response with empty payload after the stop signal is dispatched."
+        ],
+        "failure": [
+          "Emits an error response when the wrapper name is missing or not configured."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,132 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.query.read.branch.local",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.query.read.branch.local",
+    "description": "Rebuild the local root meaning projection, query one local element, read its detailed meaning, and branch on the returned descriptor value."
+  },
+  "functional": {
+    "#root": {
+      "role": "Use meaning.query to discover one local capacity through the root projection, reuse that selected element in read.meaning, and branch on the returned objective name.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_projection_refresh": "The local root meaning projection is rebuilt before selection.",
+        "local_projection_query": "The local root meaning projection is queried for one matching element.",
+        "local_detailed_meaning_read": "The selected element is read through local read.meaning before branching."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific terminal response after local projected discovery and local detailed meaning read of the selected element.",
+        "invariants": [
+          "The flow always rebuilds the local root projection before querying it.",
+          "The selected projected name is reused in a detailed local read.meaning call before branching.",
+          "Exactly one terminal wrapper branch is selected from the detailed local meaning value."
+        ],
+        "success": [
+          "On success, the terminal payload is the payload returned by the selected local sandbox.echo branch.",
+          "When the detailed objective name resolves to sandbox.echo, the branch message is query-read-local-branch."
+        ],
+        "failure": [
+          "The flow fails if the rebuild, query, detailed read, or selected terminal branch cannot complete.",
+          "A missing projected or detailed selection closes the scenario fail-closed unless the branch condition still evaluates deterministically."
+        ],
+        "notes": [
+          "This scenario demonstrates the intended reflexive composition pattern query -> read.meaning -> branch within one instance.",
+          "Projected discovery and detailed descriptor read are intentionally kept distinct."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "as": "rebuilt"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/alpha_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.description",
+                      "op": "EQ",
+                      "value": "Wrapper-backed echo capacity for N5 inter-instance tests"
+                    }
+                  ]
+                },
+                "as": "selected"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "$selected.payload.result.0.name",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "as": "detailed"
+              }
+            },
+            {
+              ">if": {
+                "when": {
+                  "left": "$detailed.payload.result.0.descriptor.objective.name",
+                  "op": "eq",
+                  "right": "sandbox.echo"
+                },
+                ">then": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-local-branch"
+                    },
+                    "as": "branch_result"
+                  }
+                },
+                ">else": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "query-read-local-miss"
+                    },
+                    "as": "branch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

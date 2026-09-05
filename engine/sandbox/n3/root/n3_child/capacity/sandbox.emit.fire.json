@@ -1,0 +1,58 @@
+{
+  "_comment": "Wrapper-backed capacity that emits a fire-and-forget intention to another context.",
+  "brique": {
+    "cap_name": "sandbox.emit.fire",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "sandbox.emit.fire",
+    "description": "Emit a fire-and-forget outbound intention through the wrapper runtime"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit an outbound intention to another context without waiting and return a local acknowledgement.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ack": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {
+        "outbound_route": "The wrapper emits a fire-and-forget outbound intention."
+      },
+      "transformation_contract": {
+        "morphing": "A local wrapper request becomes a fire-and-forget outbound intention plus an immediate local acknowledgement.",
+        "invariants": [
+          "sandbox.emit.fire must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.emit.fire returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.emit.fire fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "wrapper outbound fire"
+  }
+}

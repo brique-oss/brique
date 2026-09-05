@@ -1,0 +1,91 @@
+{
+  "_comment": "Canonical response wire format. This is the exact JSON shape received after invoking a Brique capacity. All _note fields are documentation-only.",
+
+  "intention_id": "<uuid>",
+  "_intention_id_note": "Echoes the intention_id of the intention that produced this response. Use it to correlate responses to their originating intention.",
+
+  "to": {
+    "_comment": "The original caller address (echoed from intention.from).",
+    "context": "/root/my_context",
+    "cap": "",
+    "type": "user",
+    "version": ""
+  },
+
+  "from": {
+    "_comment": "The capacity that produced this response.",
+    "context": "/root/my_context",
+    "cap": "matter.read",
+    "type": "matter",
+    "version": ""
+  },
+
+  "identity": {
+    "_comment": "Optional. Present at trust boundaries. Typically empty inside an engine instance.",
+    "id": "",
+    "kind": "",
+    "pubkey": "",
+    "signature": ""
+  },
+
+  "status": "ok",
+  "_status_note": "Required. Always 'ok' or 'error'. Check this field first before reading payload or error.",
+
+  "payload": {
+    "_comment": "Present when status='ok'. Shape is capacity-specific — see the capacity descriptor outputs.payload for the exact fields. Absent or null when status='error'.",
+    "<field_name>": "<field_value>"
+  },
+
+  "error": {
+    "_comment": "Present only when status='error'. Absent when status='ok'.",
+    "origin": "matter",
+    "_origin_note": "The engine family that produced the error. Accepted values: 'communication', 'execution', 'matter', 'trace', 'reflexive', 'control', 'user', 'wrapper'.",
+    "code": "not_found",
+    "_code_note": "Accepted values: 'refused' (capacity declined the request), 'invalid' (bad params or shape), 'not_found' (addressed resource does not exist), 'unauthorized' (identity or permission failure), 'conflict' (state conflict, e.g. revision mismatch), 'timeout' (execution exceeded allowed time), 'unavailable' (dependency or resource not available), 'canceled' (intentionally stopped), 'internal' (unexpected engine error), 'configuration' (misconfigured descriptor or engine), 'read_fail' (read operation failed).",
+    "message": "Human-readable error description.",
+    "details": {
+      "_comment": "Optional. Free-form key-value pairs providing structured error context. Common keys: 'reason' (short machine-readable cause string).",
+      "reason": "<machine_readable_reason>"
+    }
+  },
+
+  "_reading_a_response": {
+    "_comment": "Decision tree for reading a response.",
+    "step_1": "Check status. If 'error', read error.code and error.message. Do not read payload.",
+    "step_2": "If status='ok', read payload fields as declared in the capacity descriptor outputs.payload.",
+    "step_3": "Some payload fields are conditionally present (e.g. data in matter.read only when 'data' was in read_mode). Check the capacity descriptor invariants and success conditions."
+  },
+
+  "_error_response_example": {
+    "_comment": "A response when matter_id is missing.",
+    "intention_id": "a1b2c3d4-...",
+    "to": { "context": "/root", "cap": "", "type": "user" },
+    "from": { "context": "/root", "cap": "matter.read", "type": "matter" },
+    "identity": { "id": "" },
+    "status": "error",
+    "error": {
+      "origin": "matter",
+      "code": "invalid",
+      "message": "params.matter_id is required",
+      "details": { "reason": "missing_matter_id" }
+    }
+  },
+
+  "_ok_response_example": {
+    "_comment": "A successful matter.read response with inline data.",
+    "intention_id": "a1b2c3d4-...",
+    "to": { "context": "/root", "cap": "", "type": "user" },
+    "from": { "context": "/root", "cap": "matter.read", "type": "matter" },
+    "identity": { "id": "" },
+    "status": "ok",
+    "payload": {
+      "matter_id": "config",
+      "meaning": { "description": "Configuration matter" },
+      "data": {
+        "kind": "inline",
+        "bytes": "eyJ2ZXJzaW9uIjogMn0=",
+        "size": 14
+      }
+    }
+  }
+}

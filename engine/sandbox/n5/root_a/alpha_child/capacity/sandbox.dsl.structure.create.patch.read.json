@@ -1,0 +1,143 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.structure.create.patch.read",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.structure.create.patch.read",
+    "description": "Create, patch, and read one local structure before consuming it in a wrapper."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build one local structure from input params, patch it, read it back, then pass committed fields into a wrapper-backed terminal capacity.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "local_structure_create": "One new local structure descriptor is created.",
+        "local_structure_patch": "The created structure is revised once by structure.patch.",
+        "local_structure_read": "The committed structure is read back before terminal consumption."
+      },
+      "transformation_contract": {
+        "morphing": "A simple label becomes one terminal wrapper summary after a structure is created, revised, and re-read in the same DSL flow.",
+        "invariants": [
+          "The committed structure patch replaces functional.source_message with patched-source before the structure is read back.",
+          "The terminal wrapper consumes the committed structure fields returned by structure.read and the revision returned by structure.patch."
+        ],
+        "success": [
+          "The terminal payload exposes summary and ctx_id from sandbox.consume.record.",
+          "The resulting summary reflects the patched source_message and the input label carried through structure.read."
+        ],
+        "failure": [
+          "The flow fails if structure.create, structure.patch, or structure.read fails before the terminal wrapper call.",
+          "The flow fails if the final wrapper cannot consume the committed structure fields."
+        ],
+        "notes": [
+          "This scenario validates local structure lifecycle composition and committed readback inside the DSL runtime.",
+          "The N7 harness verifies the terminal summary prefix rather than every structure field."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/structure.create",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "s_n7_local_chain",
+                  "structure": {
+                    "objective": {
+                      "name": "s_n7_local_chain"
+                    },
+                    "functional": {
+                      "title": "$input.label",
+                      "source_message": "seed-structure",
+                      "items": [
+                        {
+                          "matter_id": "m_chain_local",
+                          "role": "primary"
+                        }
+                      ]
+                    },
+                    "brique": {
+                      "kind": "structure"
+                    }
+                  }
+                },
+                "as": "created_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/structure.patch",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "$created_struct.payload.structure_id",
+                  "patches": [
+                    {
+                      "path": [
+                        "functional",
+                        "title"
+                      ],
+                      "value": "$input.label"
+                    },
+                    {
+                      "path": [
+                        "functional",
+                        "source_message"
+                      ],
+                      "value": "patched-source"
+                    }
+                  ]
+                },
+                "as": "patched_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/structure.read",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "$created_struct.payload.structure_id",
+                  "want_meaning": false,
+                  "want_functional": true,
+                  "want_brique": true
+                },
+                "as": "read_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.consume.record",
+                "with": {
+                  "message": "$read_struct.payload.functional.title",
+                  "source_ctx": "$read_struct.payload.functional.source_message",
+                  "revision": "$patched_struct.payload.revision"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

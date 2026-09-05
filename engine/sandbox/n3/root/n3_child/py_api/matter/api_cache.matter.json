@@ -1,0 +1,30 @@
+{
+  "_comment": "Wrapper-backed matter exposing mutable API cache state.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "api_cache",
+    "description": "Mutable cache value owned by the API wrapper"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "data"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": false
+      }
+    }
+  },
+  "subjective": {
+    "intent": "api cache state"
+  }
+}

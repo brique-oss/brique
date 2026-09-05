@@ -1,0 +1,33 @@
+{
+  "brique": {
+    "cap_name": "uppercase_text",
+    "kind": "interpreted",
+    "wrapper": "text_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "uppercase_text",
+    "description": "Uppercase text_buffer.value."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "matter": "Writes text_buffer."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "uppercase text"
+  }
+}

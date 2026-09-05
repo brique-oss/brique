@@ -1,0 +1,68 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.delete",
+    "family": "matter",
+    "file": "engine/matter/matter_lifecycle_matter.go",
+    "function": "capMatterDelete"
+  },
+  "objective": {
+    "name": "matter.delete",
+    "description": "Delete one local matter, remove it from the runtime catalog, and notify local brique subscribers."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one matter identifier, remove its local storage and runtime catalog entry, and emit a deletion acknowledgement.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "matter_id": {
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "delete": {
+            "deleted": {
+              "_comment": "The concrete deleted matter is the one designated by params.matter_id in the current context."
+            }
+          }
+        }
+      },
+      "effects": {
+        "matter_descriptor": "The local matter directory is removed best-effort.",
+        "catalog": "The local matter catalog entry is removed.",
+        "subscriptions": "Local brique subscribers may be notified of the deletion."
+      },
+      "transformation_contract": {
+        "morphing": "A local matter identifier becomes an explicit deletion of the corresponding matter state from disk, catalog, and local brique subscription visibility.",
+        "invariants": [
+          "matter.delete operates on one local catalog identity only.",
+          "Catalog presence is authoritative for deletion eligibility; disk absence alone does not prevent deletion once the catalog entry exists."
+        ],
+        "success": [
+          "On success, matter.delete returns ok=true and echoes the deleted matter_id.",
+          "Successful deletion removes the matter from the runtime catalog and triggers local brique deletion notifications when local subscriptions existed."
+        ],
+        "failure": [
+          "The capacity fails when matter_id is missing.",
+          "The capacity refuses deletion when the matter is absent from the runtime catalog.",
+          "Best-effort filesystem cleanup does not by itself turn a successful catalog deletion into a refusal."
+        ],
+        "notes": [
+          "Disk removal is best-effort because the runtime catalog is treated as the authority for local existence.",
+          "Deletion is local to the current context."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

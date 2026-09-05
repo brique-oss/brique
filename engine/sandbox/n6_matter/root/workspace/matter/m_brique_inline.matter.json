@@ -1,0 +1,26 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "brique",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_brique_inline",
+    "description": "Brique-managed small payload matter"
+  },
+  "functional": {
+    "format": "text",
+    "domain": "matter-test",
+    "label": "seed-inline",
+    "classification": {
+      "family": "brique"
+    }
+  },
+  "subjective": {
+    "tags": [
+      "inline",
+      "seed"
+    ]
+  }
+}

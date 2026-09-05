@@ -1,0 +1,56 @@
+{
+  "_comment": "Wrapper-backed class-method capacity used by the sandbox Python runtime.",
+  "brique": {
+    "cap_name": "sandbox.class.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "class_echo",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "sandbox.class.echo",
+    "description": "Wrapper-backed class method capacity"
+  },
+  "functional": {
+    "#root": {
+      "role": "Return an echoed message through a class-method binding in the wrapper runtime.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "An inbound message becomes an echoed payload returned through a wrapper class-method binding.",
+        "invariants": [
+          "sandbox.class.echo must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.class.echo returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.class.echo fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "reflexive meaning"
+  }
+}

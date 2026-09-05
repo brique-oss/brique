@@ -1,0 +1,60 @@
+{
+  "_comment": "French chart child context used to validate contextualized meaning.query selections.",
+  "brique": {
+    "ctx_name": "sandbox-n6-chart-fr",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n6-chart-fr",
+    "children_list": [
+      "editorial"
+    ],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": [],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-n6-chart-fr"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n6-chart-fr",
+    "description": "French chart workspace slice for contextualized music selections"
+  },
+  "functional": {
+    "role": "chart_market",
+    "market": "fr",
+    "test_scope": [
+      "meaning.query contextualized matter selection",
+      "matter.read follow-up on filtered selection"
+    ]
+  },
+  "subjective": {
+    "intent": "music chart fixture",
+    "impression": "localized market slice"
+  }
+}

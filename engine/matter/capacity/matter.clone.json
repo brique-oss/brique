@@ -1,0 +1,79 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.clone",
+    "family": "matter",
+    "file": "engine/matter/matter_lifecycle_matter.go",
+    "function": "capMatterClone"
+  },
+  "objective": {
+    "name": "matter.clone",
+    "description": "Clone one existing local matter into a new local target matter."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve a source matter and a target matter identifier, duplicate the descriptor and compatible substance state, and register the cloned target in the local catalog.",
+      "inputs": {
+        "params": {
+          "source_matter_id": {
+            "type": "string",
+            "_comment": "Required. Name of the source matter within the addressed context."
+          },
+          "target_matter_id": {
+            "type": "string",
+            "_comment": "Optional. Name of the clone. Auto-generated if absent."
+          },
+          "destination_ctx_id": {
+            "type": "string",
+            "_comment": "Optional. Absolute context path (from /root) for the clone. Defaults to the addressed context."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "source_matter_id": {
+            "type": "string"
+          },
+          "target_matter_id": {
+            "type": "string",
+            "_comment": "Name of the created clone."
+          }
+        }
+      },
+      "effects": {
+        "source_descriptor": "The source matter descriptor is read.",
+        "source_substance": "Brique-managed source substance may be read and copied.",
+        "target_descriptor": "A new target matter descriptor is written.",
+        "catalog": "The local matter catalog gains the cloned target."
+      },
+      "transformation_contract": {
+        "morphing": "A source matter identity plus a target matter identity becomes a new committed target matter carrying the cloned descriptor and compatible local substance semantics.",
+        "invariants": [
+          "When cloning within the same context (no destination_ctx_id, or destination_ctx_id equal to the addressed context), source_matter_id and target_matter_id must identify distinct matters.",
+          "When cloning to a different context, source_matter_id and target_matter_id may be identical, since the destination context is a distinct namespace.",
+          "The source matter must already exist in the local runtime catalog before cloning begins.",
+          "Only brique-managed substance is duplicated as bytes; non-brique substance modes remain metadata-only at clone time."
+        ],
+        "success": [
+          "On success, matter.clone returns ok=true, the source_matter_id, and the concrete target_matter_id.",
+          "Successful cloning writes a new target matter descriptor, registers the target in the local catalog, and reproduces a brique-mode data.bin when applicable."
+        ],
+        "failure": [
+          "The capacity fails when source_matter_id is missing.",
+          "The capacity fails when source_matter_id and target_matter_id are identical and the clone is within the same context.",
+          "The capacity refuses cloning when the source matter is absent or the destination matter_id already exists in the runtime catalog.",
+          "The capacity fails when the source descriptor is unreadable, invalid JSON, or when destination filesystem commits fail."
+        ],
+        "notes": [
+          "If target_matter_id is omitted, the engine generates a fresh local destination identifier.",
+          "If destination_ctx_id is provided, the clone is written into that context instead of the addressed context; the destination context must already exist.",
+          "Cloning does not dereference wrapper-managed external substance."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

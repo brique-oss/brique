@@ -1,0 +1,8 @@
+node_modules/
+dist/
+bin/
+*.DS_Store
+*.jsonl
+*.bin
+validation/
+*.vsix

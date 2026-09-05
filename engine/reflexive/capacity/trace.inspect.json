@@ -1,0 +1,103 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "trace.inspect",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite_trace.go",
+    "function": "capTraceInspect"
+  },
+  "objective": {
+    "name": "trace.inspect",
+    "description": "Inspect the local trace history through a request-scoped temporary projection."
+  },
+  "functional": {
+    "#root": {
+      "role": "Build a temporary trace projection from local JSONL trace segments, query it in events or facets mode, and return the matching inspection payload.",
+      "inputs": {
+        "params": {
+          "mode": {
+            "type": "string",
+            "_comment": "Required. Accepted values: 'events' (returns ordered list of trace events), 'facets' (returns aggregated counts grouped by kind, cap, and ctx)."
+          },
+          "limit": {
+            "type": "integer",
+            "_comment": "Optional. Maximum number of events to return. Applies to events mode only."
+          },
+          "offset": {
+            "type": "integer",
+            "_comment": "Optional. Zero-based event offset for pagination. Applies to events mode only."
+          },
+          "order_by": {
+            "type": "string",
+            "_comment": "Optional. Sort order for events. Accepted values: 'ts_ns ASC' (oldest first), 'ts_ns DESC' (newest first, default)."
+          },
+          "include_payloads": {
+            "type": "boolean",
+            "_comment": "Optional. When true, includes full intention/response payloads in each event entry. Applies to events mode only."
+          },
+          "filters": {
+            "type": "object",
+            "_comment": "Optional. Each key narrows the result set. Accepted keys: ctx_id (string — restrict to one context path), kind (string — restrict to one trace event kind), cap (string — restrict to one capacity name), intention_id (string — restrict to one intention chain)."
+          },
+          "time_range": {
+            "type": "object",
+            "_comment": "Optional. Time window to restrict scanned trace segments. Fields: from (string — RFC3339, required when time_range is present), to (string — RFC3339, required when time_range is present). Both fields are required together; providing only one is invalid."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "events": {
+            "type": "array",
+            "_comment": "Present in events mode. Ordered list of trace events. Each event: { ts (string — RFC3339Nano timestamp), kind (string — trace event kind), cap (string — capacity name), ctx_id (string — context path), intention_id (string), payload (object — present only when include_payloads is true, contains raw intention and response JSON) }."
+          },
+          "facets": {
+            "type": "object",
+            "_comment": "Present in facets mode. Aggregated occurrence counts. Keys: by_kind (object — maps trace kind to count), by_cap (object — maps capacity name to count), by_ctx (object — maps context path to count)."
+          },
+          "window_applied": {
+            "type": "object",
+            "_comment": "Present when a time_range was resolved. Echoes the effective bounds: { from (string — RFC3339), to (string — RFC3339) }."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "_comment": "Total query duration in milliseconds."
+          },
+          "diagnostics": {
+            "type": "object",
+            "_comment": "Present when the trace folder was accessible. Contains: { trace_folder (string — absolute path of the trace folder scanned) }."
+          }
+        }
+      },
+      "effects": {
+        "trace_projection": "A request-scoped temporary SQLite projection is created in memory and discarded after the response.",
+        "trace_segments": "Local JSONL trace segment files are read from the current context trace folder."
+      },
+      "transformation_contract": {
+        "morphing": "A local trace inspection request becomes either an ordered events list or aggregated facets counts over the selected local trace history, with timing and diagnostics.",
+        "invariants": [
+          "trace.inspect is context-scoped: it reads only the local context trace folder, not parent or child contexts.",
+          "When time_range is absent, all available local trace segments are scanned.",
+          "When time_range is present, both 'from' and 'to' RFC3339 strings are required; providing only one is invalid.",
+          "Exactly one of events or facets is populated in the response, depending on the requested mode.",
+          "An empty trace folder is treated as a valid empty result, not as an error."
+        ],
+        "success": [
+          "On success, returns either events or facets, together with duration_ms and diagnostics.",
+          "window_applied is included when a time_range was resolved."
+        ],
+        "failure": [
+          "The capacity fails when mode is missing or not one of the accepted values.",
+          "The capacity fails when time_range is present but missing either 'from' or 'to'.",
+          "The capacity fails when limit, offset, or order_by have invalid formats.",
+          "The capacity fails when the local trace projection cannot be built or queried."
+        ],
+        "notes": [
+          "The temporary projection is request-scoped and is not part of authoritative trace state.",
+          "include_payloads has no effect in facets mode."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

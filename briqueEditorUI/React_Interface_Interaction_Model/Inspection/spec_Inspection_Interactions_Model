@@ -1,0 +1,119 @@
+# Inspection Space - Interaction Model
+
+## Purpose
+
+Inspection Space gives the user access to a Brique element:
+
+* directly from another space;
+* through a semantic-navigation result;
+* through a textual-search result.
+
+Inspection Space is an access and reading space. It does not edit Brique
+files directly. Opening the corresponding source file delegates editing to
+VS Code.
+
+## Access Modes
+
+Inspection Space has three modes:
+
+```text
+Inspect
+Browse
+Search
+```
+
+Each mode represents a different way to access a Brique element.
+
+## Inspect Mode
+
+Inspect Mode displays the currently opened Brique element.
+
+The element may be a Context, Capacity, Matter, Schema, Document, Trace, or any
+other Brique element.
+
+The display is oriented toward reading:
+
+* information is presented as readable semantic sections rather than raw JSON;
+* Brique, Objective, Subjective, and Functional are the four expandable
+  sections;
+* the four sections are expanded by default;
+* content inside a section is displayed as a simple textual key-value list;
+* nested object and list keys are expandable, but collapsed by default;
+* each object key uses its disclosure triangle for Expand One Level and a
+  second downward-arrow icon immediately beside it for Expand All;
+* Expand All is available only when the key contains a deeper nested subtree.
+
+Inspection preserves the user's reading orientation when the inspected element
+changes:
+
+* opened sections remain opened;
+* the first opened key inside a section remains opened;
+* deeper opened paths and recursive expansion are not preserved.
+
+Expand One Level reveals only the direct children of the selected key. Nested
+subtrees remain collapsed. Expand All recursively reveals the complete subtree
+of the selected key. Activating Expand All again collapses the recursive
+subtrees while keeping the selected key open at one level.
+
+The user can open the source file corresponding to the inspected element in
+VS Code.
+
+## Browse Mode
+
+Browse Mode lets the user navigate the semantic field.
+
+The semantic field is composed of categories and values. The user progressively
+selects categories and values to qualify the elements being sought.
+
+Every selection change updates the result list. Results are Brique elements
+that satisfy the current semantic criteria.
+
+Opening a result temporarily switches Inspection Space to Inspect Mode.
+
+## Search Mode
+
+Search Mode provides textual search over the names and identifiers of Brique
+elements.
+
+Changing the textual query updates the result list.
+
+Opening a result temporarily switches Inspection Space to Inspect Mode.
+
+## Inspection Navigation
+
+Inspection Space preserves the exploration state from which an element was
+opened:
+
+```text
+Browse -> Result -> Inspect
+Search -> Result -> Inspect
+```
+
+The user can return from temporary Inspect Mode to the originating exploration.
+
+Returning to Browse Mode restores:
+
+* selected categories;
+* selected values;
+* results;
+* scroll position.
+
+Returning to Search Mode restores:
+
+* textual query;
+* results;
+* scroll position.
+
+Inspecting a result therefore does not interrupt the current exploration
+context.
+
+## Principles
+
+```text
+Inspect  See an element.
+Browse   Find an element through semantic navigation.
+Search   Find an element through textual search.
+```
+
+Inspection Space provides access to and readable inspection of Brique
+elements. Editing their real files belongs to VS Code.

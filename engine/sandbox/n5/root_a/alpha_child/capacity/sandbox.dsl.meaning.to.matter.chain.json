@@ -1,0 +1,114 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.meaning.to.matter.chain",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.meaning.to.matter.chain",
+    "description": "Read local meaning, materialize part of it into a matter revision, read that matter back, and terminate through a wrapper."
+  },
+  "functional": {
+    "#root": {
+      "role": "Use local read.meaning as the source of one matter.write, then read that matter back and pass the committed fields to a local wrapper consumer.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "summary": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "meaning_driven_write": "A local meaning descriptor value is materialized into a matter revision.",
+        "matter_readback": "The newly written matter is read back before wrapper termination."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one terminal wrapper response after a local meaning descriptor is materialized into a matter revision and read back.",
+        "invariants": [
+          "The local matter write uses objective.name as functional.message and objective.description as functional.source_ctx.",
+          "The terminal wrapper consumes the committed matter values returned by matter.read, not the pre-commit meaning alias directly."
+        ],
+        "success": [
+          "The terminal payload exposes summary and ctx_id from sandbox.consume.record.",
+          "The committed local matter revision stores sandbox.echo as functional.message and the objective description as functional.source_ctx."
+        ],
+        "failure": [
+          "The flow fails if read.meaning, matter.write, or matter.read cannot complete before terminal consumption.",
+          "The flow fails if the local matter cannot be updated with the meaning-derived fields."
+        ],
+        "notes": [
+          "This scenario validates that meaning can be materialized into matter and then consumed through a later committed read.",
+          "The matter side effect is part of the scenario and is verified directly by the N7 harness."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.meaning",
+                "to_type": "reflexive",
+                "with": {
+                  "input": [
+                    {
+                      "element_kind": "capacity",
+                      "element_name": "sandbox.echo",
+                      "sections": [
+                        "objective"
+                      ]
+                    }
+                  ]
+                },
+                "as": "meaning"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.write",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "m_chain_local",
+                  "functional": {
+                    "message": "$meaning.payload.result.0.descriptor.objective.name",
+                    "source_ctx": "$meaning.payload.result.0.descriptor.objective.description"
+                  }
+                },
+                "as": "write_local"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "$write_local.payload.matter_id",
+                  "read_mode": "functional|brique"
+                },
+                "as": "read_local"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.consume.record",
+                "with": {
+                  "message": "$read_local.payload.functional.message",
+                  "source_ctx": "$read_local.payload.functional.source_ctx",
+                  "revision": "$write_local.payload.revision"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

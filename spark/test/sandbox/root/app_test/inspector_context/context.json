@@ -1,0 +1,110 @@
+{
+  "_comment": "Inspector sandbox context.",
+  "brique": {
+    "ctx_name": "inspector_context",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "inspector_context",
+    "children_list": [],
+    "ui_config": {
+      "root_view": "FlowPlayground",
+      "adapter": "react",
+      "host": "vscode",
+      "ws_path": "/app_test/inspector/ws"
+    },
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [
+          "inspector_sandbox_py"
+        ],
+        "interfaces": [
+          {
+            "name": "main",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/app_test/inspector/ws"
+            }
+          },
+          {
+            "name": "inspector_sandbox_py",
+            "type": "wrapper",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/wrapper/inspector_sandbox_py"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": [
+          {
+            "wrapper_name": "inspector_sandbox_py",
+            "mode": "interpreted",
+            "ready_timeout_ms": 2000,
+            "stop_timeout_ms": 1000,
+            "build": {
+              "shell": false,
+              "timeout_ms": 1000,
+              "artifact": "",
+              "artifact_kind": "file",
+              "cmd": []
+            },
+            "run": {
+              "shell": false,
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "inspector_sandbox_py"
+              }
+            }
+          }
+        ]
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "spark-pulse-sandbox-inspector"
+      }
+    }
+  },
+  "objective": {
+    "name": "inspector_context",
+    "description": "Context used to validate generic flow behavior, delayed responses, and structured errors."
+  },
+  "functional": {
+    "role": "inspector",
+    "test_scope": [
+      "echo",
+      "delayed echo",
+      "error response"
+    ]
+  },
+  "subjective": {
+    "intent": "flow inspection validation"
+  }
+}

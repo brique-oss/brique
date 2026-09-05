@@ -1,0 +1,35 @@
+{
+  "_comment": "Canonical document descriptor template (document/<name>.json). Documents exactly what the reflexive layer reads from the brique section when resolving a document via read.document.",
+
+  "brique": {
+    "_comment": "Required. The reflexive layer reads this section to resolve the document target. Exactly one of 'ref' or 'file' must be present.",
+
+    "kind": "document",
+    "_kind_note": "Required. Always 'document'.",
+
+    "ref": "",
+    "_ref_note": "Use when the document lives at an external URI (HTTP, S3, etc.). When non-empty, the engine returns kind='ref' and the ref value — it never fetches the content itself. Mutually exclusive with 'file': if ref is non-empty, file is ignored.",
+
+    "file": "document/my_file.md",
+    "_file_note": "Use when the document content is a local file. Must be a relative path that stays under the context directory. Accepted forms: 'document/my_file.md' (explicit prefix) or 'my_file.md' (the engine prepends 'document/' automatically). Must not start with '/' or contain '../'. The referenced file must exist on disk — the engine stat-checks it at resolution time. Mutually exclusive with 'ref': only set one."
+  },
+
+  "objective": {
+    "_comment": "Optional. Projected by the reflexive meaning layer.",
+    "name": "<document_name>",
+    "_name_note": "Conventionally matches the descriptor filename without .json.",
+    "description": "One sentence describing what this document contains."
+  },
+
+  "functional": {
+    "_comment": "Opaque to the engine. Describe content type and source for tooling and wrappers.",
+    "content_kind": "markdown",
+    "_content_kind_note": "Informational. Accepted values: 'markdown', 'text', 'json', 'html', 'other'.",
+    "source_kind": "local",
+    "_source_kind_note": "Informational. 'local' when file is set; 'ref' when ref is set.",
+    "mime_type": "text/markdown"
+  },
+
+  "subjective": {},
+  "_subjective_note": "Optional. Free-form space for subjective categorization. Add any key-value pairs meaningful to you or your team — tags, priority, notes, author opinions. The engine ignores this section entirely."
+}

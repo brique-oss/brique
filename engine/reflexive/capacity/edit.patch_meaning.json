@@ -1,0 +1,62 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "edit.patch_meaning",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_edit.go",
+    "function": "capEditPatchMeaning"
+  },
+  "objective": {
+    "name": "edit.patch_meaning",
+    "description": "Patch one or more local meaning descriptors by top-level section replacement or terminal semantic value add/remove."
+  },
+  "functional": {
+    "#root": {
+      "role": "Validate one edit batch, patch local meaning descriptors item by item, and return one aggregated per-item result payload.",
+      "inputs": {
+        "params": {
+          "items": {
+            "type": "array",
+            "_comment": "Required non-empty patch batch. Each item: { type (string: context|capacity|schema|document), name (string), patch (optional object — top-level section replacement map), patch_json (optional string — JSON-encoded patch, preserves key order; authoritative over patch when both present), semantic_patch (optional object — { add: [{path: string[], value: any}], remove: [{path: string[], value: any}] }) }. At least one of patch, patch_json, or semantic_patch required per item. path in semantic_patch is always a JSON array of string segments, never dot-notation. Example item using all three: { \"type\": \"capacity\", \"name\": \"audio.stream\", \"patch\": { \"objective\": { \"description\": \"Stream audio.\" } }, \"patch_json\": \"{\\\"functional\\\":{\\\"tags\\\":{\\\"domain\\\":\\\"audio\\\"}}}\", \"semantic_patch\": { \"add\": [{ \"path\": [\"functional\", \"tags\", \"status\"], \"value\": \"active\" }], \"remove\": [{ \"path\": [\"functional\", \"tags\", \"status\"], \"value\": \"experimental\" }] } }."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "array",
+            "_comment": "Per-item result list. Each item: { ok (bool), type (string), name (string) } on success, or { ok: false, ..., error: { code, message, reason } } on failure."
+          }
+        }
+      },
+      "effects": {
+        "meaning_descriptors": "Meaning descriptor files under the current context may be rewritten."
+      },
+      "transformation_contract": {
+        "morphing": "A batch of meaning patch requests becomes a per-item patch result set, with each successful item materializing a new local meaning descriptor state.",
+        "invariants": [
+          "edit.patch_meaning is batch-oriented and returns one result entry per parsed item.",
+          "Only supported local edit types can be patched; matter and structure items are explicitly refused because they are owned by MatterLoop.",
+          "Each successful item replaces only the provided top-level sections and/or applies semantic_patch terminal value add/remove operations before re-validating meaning invariants.",
+          "semantic_patch.add and semantic_patch.remove operate only on terminal values expressed as {path: string[], value: any}; intermediate vocabulary/category paths are not edited directly.",
+          "Existing descriptor keys retain their source order, replaced sections retain their existing position, and newly introduced sections are appended.",
+          "patch_json is authoritative when supplied and preserves the order inside replacement sections."
+        ],
+        "success": [
+          "On success, each result item reports ok=true with the normalized type and name of the patched element.",
+          "Mixed batches can succeed partially because invalid or refused items are returned as item-level errors in the same result array."
+        ],
+        "failure": [
+          "The capacity fails when params.items is missing or cannot be parsed into a valid edit batch.",
+          "Individual items return errors when the target is unsupported, missing, outside scope, invalid JSON, fails invariants, or cannot be written atomically."
+        ],
+        "notes": [
+          "Patch semantics remain section replacement semantics for patch/patch_json. semantic_patch is value-terminal add/remove semantics.",
+          "Structured patch objects remain supported for compatibility but cannot preserve caller key order after map decoding; use patch_json when replacement-section order matters.",
+          "Item-level errors are part of the normal payload contract for mixed edit batches."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

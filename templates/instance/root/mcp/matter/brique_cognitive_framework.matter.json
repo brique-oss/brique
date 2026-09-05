@@ -1,0 +1,33 @@
+{
+  "functional": {
+    "external_retrieval": null,
+    "format": "md",
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      },
+      "write": {
+        "enabled": false,
+        "metadata_only": false,
+        "payload_allowed_only_when_mode_is": [
+          "brique"
+        ]
+      }
+    }
+  },
+  "objective": {
+    "description": "The Brique cognitive framework document — ontology, reasoning rules, DSL, and navigation model for LLM interoperability.",
+    "name": "brique_cognitive_framework"
+  },
+  "subjective": {},
+  "brique": {
+    "kind": "matter",
+    "substance_mode": "brique",
+    "substance_type": "text"
+  }
+}

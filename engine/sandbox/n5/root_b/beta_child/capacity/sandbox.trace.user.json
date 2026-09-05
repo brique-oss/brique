@@ -1,0 +1,84 @@
+{
+  "brique": {
+    "cap_name": "sandbox.trace.user",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.trace.user",
+    "description": "Wrapper-backed capacity that emits one user trace through the public trace.user engine capability."
+  },
+  "functional": {
+    "#root": {
+      "role": "Forward one wrapper-originated user note to trace.user and summarize the admission result.",
+      "inputs": {
+        "params": {
+          "user_text": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "intention_id": {
+            "type": "string"
+          },
+          "to_context": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "trace_status": {
+            "type": "string"
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "trace_kind": {
+            "type": "string"
+          },
+          "user_text": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "target_context": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "trace_write_request": "The wrapper emits one outbound intention toward trace.user for the target context."
+      },
+      "transformation_contract": {
+        "morphing": "A wrapper request becomes one trace.user admission attempt and one local summary payload of the resulting trace status.",
+        "invariants": [
+          "The wrapper does not write trace files directly.",
+          "The wrapper always goes through the public trace.user capability.",
+          "The payload summarizes admission rather than durable write completion."
+        ],
+        "success": [
+          "On success, sandbox.trace.user returns the trace status, admission flag, target context, and wrapper identity fields.",
+          "accepted mirrors the payload returned by trace.user."
+        ],
+        "failure": [
+          "The capability fails if the outbound trace.user request cannot complete.",
+          "The capability does not suppress errors returned by trace.user."
+        ],
+        "notes": [
+          "This capacity is used as a wrapper-originated trace producer in N7 system tests."
+        ]
+      }
+    }
+  }
+}

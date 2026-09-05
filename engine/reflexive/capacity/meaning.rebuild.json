@@ -1,0 +1,84 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "meaning.rebuild",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_sqlite.go",
+    "function": "capSQLiteRebuild"
+  },
+  "objective": {
+    "name": "meaning.rebuild",
+    "description": "Rebuild the root meaning and vocabulary projections from the filesystem."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run a root-only staged rebuild of the projection database and optional vocabulary overlay, then expose rebuild statistics.",
+      "inputs": {
+        "params": {
+          "mode": {
+            "type": "string",
+            "_comment": "Optional rebuild scope. Accepted values: full (default — rebuilds meaning projection and vocabulary), meaning-only (meaning projection only), vocabulary-only (vocabulary only)."
+          },
+          "context": {
+            "type": "array",
+            "_comment": "Optional list of context ids (absolute paths from /root) to restrict filesystem scanning. When absent, all contexts are scanned."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "total_elements_indexed": {
+            "type": "integer",
+            "_comment": "Number of elements indexed in the projection. Zero in vocabulary-only mode."
+          },
+          "total_kv_rows": {
+            "type": "integer",
+            "_comment": "Number of key-value rows written. Zero in vocabulary-only mode."
+          },
+          "total_links": {
+            "type": "integer",
+            "_comment": "Number of semantic links indexed. Zero in vocabulary-only mode."
+          },
+          "total_vocab_nodes": {
+            "type": "integer",
+            "_comment": "Number of vocabulary nodes written. Zero in meaning-only mode."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "_comment": "Rebuild duration in milliseconds."
+          },
+          "mode": {
+            "type": "string",
+            "_comment": "Effective rebuild mode applied."
+          }
+        }
+      },
+      "effects": {
+        "projection_db": "The root projection database may be rebuilt and atomically swapped.",
+        "vocabulary_overlay": "The root vocabulary overlay may be rebuilt and atomically swapped."
+      },
+      "transformation_contract": {
+        "morphing": "A root rebuild request becomes a freshly staged and swapped meaning projection state, with explicit rebuild statistics for the selected rebuild mode.",
+        "invariants": [
+          "meaning.rebuild is root-only and treats filesystem descriptors as the authoritative source during projection rebuild.",
+          "Projection database replacement is staged and atomically swapped on success.",
+          "Vocabulary overlay rebuild deep-merges observed projected vocabulary with the current overlay, letting the current overlay win."
+        ],
+        "success": [
+          "On success, meaning.rebuild returns rebuild counters plus the effective mode and duration_ms.",
+          "Successful execution may rebuild meaning rows, vocabulary rows, or both depending on the requested mode."
+        ],
+        "failure": [
+          "The capacity is refused outside the root context.",
+          "The capacity fails when mode is invalid, the projection directory cannot be prepared, the temporary database cannot be built, or the final atomic swap fails."
+        ],
+        "notes": [
+          "meaning.rebuild operates on derived projection state and never mutates source descriptors.",
+          "A vocabulary-only rebuild can succeed without reindexing meaning rows.",
+          "No engine capability ever calls meaning.rebuild automatically — not at process startup, not on any schedule, not as a side effect of edit.create/edit.patch_meaning/matter.write or any other descriptor-mutating capacity. This is a deliberate absence, not a gap: descriptor JSON files are not required to be edited only through engine capacities — a human or a wrapper may legitimately write matter.json/capacity JSON/etc. directly to disk, outside any edit.*/matter.* call, and the engine must not assume otherwise. Auto-triggering a rebuild from capacity calls alone would give a false sense of freshness while missing exactly that class of edit. vocabulary.get/vocabulary.query and meaning.query only ever see whatever the most recent meaning.rebuild (or meaning.update, for the elements it targeted) has told the projection, however old that is relative to the current filesystem — there is no engine-side freshness guarantee or default cadence. Keeping the projection current is an operational hygiene concern left to the caller/instance, not a fixed policy — what cadence or trigger makes sense (per edit, on a timer, only before navigation-heavy work) depends on the instance's actual editing patterns, particularly how much direct filesystem editing it does outside capacities. Before relying on vocabulary/meaning queries to navigate an unfamiliar or long-lived world, run meaning.rebuild (mode=vocabulary-only is enough when only vocabulary.get/vocabulary.query matter) unless you already have recent evidence the projection is current — a sparse-looking vocabulary is far more often a stale projection than a sparse world."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,23 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "text_sandbox_py"
+  },
+  "objective": {
+    "name": "text_buffer",
+    "description": "Mutable text buffer used by the Spark/Pulse sandbox."
+  },
+  "functional": {
+    "shape": {
+      "value": {
+        "type": "string"
+      }
+    },
+    "owner": "text_context"
+  },
+  "subjective": {
+    "intent": "text state fixture"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "_comment": "Seed schema descriptor for N6 reflexive tests.",
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "sample_payload",
+    "description": "Seed payload schema for sandbox N6 workspace",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "fields": {
+      "message": {
+        "type": "string",
+        "required": true,
+        "description": "Input message to be echoed"
+      },
+      "echo": {
+        "type": "string",
+        "required": false,
+        "description": "Echo result payload"
+      },
+      "uppercase": {
+        "type": "boolean",
+        "required": false,
+        "description": "Whether the echoed message should be uppercased"
+      },
+      "metadata": {
+        "type": "object",
+        "required": false,
+        "description": "Optional metadata carried with the request"
+      }
+    },
+    "rules": {
+      "allow_unknown_fields": true,
+      "required_fields": [
+        "message"
+      ],
+      "forbidden_fields": [],
+      "constraints": [
+        "message must not be empty",
+        "metadata.version if present must be a string"
+      ]
+    }
+  },
+  "subjective": {
+    "intent": "schema seed",
+    "impression": "simple payload schema",
+    "notes": [
+      "used by reflexive structure and meaning reads",
+      "should generate projection rows during meaning rebuild"
+    ]
+  }
+}

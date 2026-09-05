@@ -1,0 +1,69 @@
+{
+  "brique": {
+    "cap_name": "trace.user",
+    "_comment": "Native engine capability owned by the Trace family. Wrapper/runtime metadata fields do not apply here."
+  },
+  "objective": {
+    "name": "trace.user",
+    "description": "Accept a user trace request and admit it into the local trace pipeline when the context trace policy allows it."
+  },
+  "functional": {
+    "#root": {
+      "role": "Persist or decline one user-level trace request expressed as a capability call.",
+      "inputs": {
+        "params": {
+          "trace_kind": {
+            "type": "string"
+          },
+          "user_text": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "intention_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "status": {
+            "type": "string"
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "trace_kind": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "trace_storage": "May append one local user trace event to the context trace history when tracing is enabled and the user trace gate admits it."
+      },
+      "transformation_contract": {
+        "morphing": "A user trace request becomes either one admitted local user trace event in the trace pipeline or a no-op acknowledgement when trace policy declines persistence.",
+        "invariants": [
+          "The capability never exposes the trace JSONL internals to the caller.",
+          "The trace event, when admitted, is local to the addressed context.",
+          "The response reports admission into the trace pipeline, not durable write completion."
+        ],
+        "success": [
+          "On success, the response payload contains status, accepted, and trace_kind.",
+          "When accepted is true, one user trace event has entered the local trace ingestion pipeline.",
+          "When accepted is false, the request was well-formed but local trace policy declined persistence."
+        ],
+        "failure": [
+          "The capability fails invalid when required user trace params are missing or malformed.",
+          "The capability fails not_found when the trace family receives an unknown trace capability name through the same path.",
+          "The capability fails unavailable when the local trace ingestion ring cannot admit the requested user trace."
+        ],
+        "notes": [
+          "This capability is intended to be called through a normal intention, including from wrappers.",
+          "trace.inspect remains the read surface for persisted traces and is not used to create user trace events."
+        ]
+      }
+    }
+  }
+}

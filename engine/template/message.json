@@ -1,0 +1,35 @@
+{
+  "_comment": "Documentation schema for the generic message envelope.",
+  "version": "0.0.0",
+  "fields": {
+    "kind": {
+      "type": "string",
+      "required": true,
+      "enum": ["intention", "response", "trace"]
+    },
+
+    "ts": {
+      "type": "string",
+      "required": false
+    },
+
+    "intention": {
+      "type": "object",
+      "required": false,
+      "kv": true
+    },
+
+    "response": {
+      "type": "object",
+      "required": false,
+      "kv": true
+    },
+
+    "trace": {
+      "type": "object",
+      "required": false,
+      "kv": true
+    },
+    "_routing_comment": "Depending on kind, only one payload among intention, response, or trace is expected."
+  }
+}

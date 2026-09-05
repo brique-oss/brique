@@ -1,0 +1,81 @@
+{
+  "_comment": "Spark/Pulse/Brique sandbox root context.",
+  "brique": {
+    "type": "local",
+    "ctx_name": "root",
+    "ctx_type": "root",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "root",
+    "children_list": [
+      "app_test"
+    ],
+    "ui_config": {
+      "root_view": "BriqueEditorRoot",
+      "adapter": "react",
+      "host": "vscode",
+      "name": "main",
+      "ws_path": "/ws"
+    },
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "websocket_listener": {
+          "addr": ":8080"
+        },
+        "interfaces": [
+          {
+            "name": "main",
+            "type": "ui",
+            "driver": "ws",
+            "config": {
+              "ingress_enabled": true,
+              "egress_enabled": true,
+              "path": "/ws"
+            }
+          }
+        ],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": true,
+        "repo_name": "spark-pulse-sandbox"
+      }
+    }
+  },
+  "objective": {
+    "name": "root",
+    "description": "Root fixture for the Spark/Pulse/Brique sandbox. Editor connects here."
+  },
+  "functional": {
+    "role": "root",
+    "test_scope": [
+      "editor ui websocket startup",
+      "child context startup"
+    ]
+  },
+  "subjective": {
+    "intent": "brique editor sandbox"
+  }
+}

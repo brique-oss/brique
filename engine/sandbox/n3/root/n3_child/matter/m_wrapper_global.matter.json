@@ -1,0 +1,27 @@
+{
+  "_comment": "Wrapper-backed matter bound to a Python global variable.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "m_wrapper_global",
+    "description": "Wrapper-backed matter using a global variable binding"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "data"
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "sandbox wrapper global matter",
+    "impression": ""
+  }
+}

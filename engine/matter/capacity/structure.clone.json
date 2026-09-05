@@ -1,0 +1,81 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "structure.clone",
+    "family": "matter",
+    "file": "engine/matter/matter_lifecycle_structure.go",
+    "function": "capStructureClone"
+  },
+  "objective": {
+    "name": "structure.clone",
+    "description": "Clone one existing local structure descriptor into a new local target structure."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve a source structure and a target structure identifier, duplicate the source descriptor, and register the cloned target in the local catalog.",
+      "inputs": {
+        "params": {
+          "source_structure_id": {
+            "type": "string",
+            "_comment": "Required. Name of the source structure (without .json extension)."
+          },
+          "target_structure_id": {
+            "type": "string",
+            "_comment": "Optional. Name of the clone. Auto-generated if absent."
+          },
+          "destination_ctx_id": {
+            "type": "string",
+            "_comment": "Optional. Absolute context path (from /root) for the clone. Defaults to the addressed context."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "source_structure_id": {
+            "type": "string"
+          },
+          "target_structure_id": {
+            "type": "string",
+            "_comment": "Name of the created clone."
+          },
+          "revision": {
+            "type": "integer",
+            "_comment": "Revision of the created clone."
+          }
+        }
+      },
+      "effects": {
+        "source_descriptor": "The source structure descriptor is read.",
+        "target_descriptor": "A new target structure descriptor is written.",
+        "catalog": "The local structure catalog gains the cloned target."
+      },
+      "transformation_contract": {
+        "morphing": "A source structure identity plus a target structure identity becomes a new committed target structure descriptor copied from the local source and registered in the local catalog.",
+        "invariants": [
+          "When cloning within the same context (no destination_ctx_id, or destination_ctx_id equal to the addressed context), source_structure_id and target_structure_id must identify distinct structures.",
+          "When cloning to a different context, source_structure_id and target_structure_id may be identical, since the destination context is a distinct namespace.",
+          "The source structure must already exist in the local runtime catalog before cloning begins.",
+          "Cloning duplicates the local descriptor only; there is no separate substance plane for structures."
+        ],
+        "success": [
+          "On success, structure.clone returns ok=true, the source_structure_id, the concrete target_structure_id, and the committed revision of the target.",
+          "Successful cloning writes a new target structure descriptor and registers it in the local catalog."
+        ],
+        "failure": [
+          "The capacity fails when source_structure_id is missing.",
+          "The capacity fails when source_structure_id and target_structure_id are identical and the clone is within the same context.",
+          "The capacity refuses cloning when the source structure is absent or the destination structure_id already exists in the runtime catalog.",
+          "The capacity fails when the source descriptor is unreadable, invalid JSON, or cannot be committed for the target."
+        ],
+        "notes": [
+          "If target_structure_id is omitted, the engine generates a fresh local destination identifier.",
+          "If destination_ctx_id is provided, the clone is written into that context instead of the addressed context; the destination context must already exist."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

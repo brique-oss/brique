@@ -1,0 +1,178 @@
+{
+  "_comment": "Canonical context descriptor template (context.json). This is the literal file materialized by edit.create when creating a new context, and the reference for every field LoadContextDescriptor and the engine family loops read at startup. When writing a new context.json, reproduce this template's top-level structure as-is (all keys shown here, including interfaces/wrappers/websocket_listener/scattered/trace tuning), only adjusting values to fit the new context — do not drop keys based on an assumption that the engine won't need them. Fields prefixed with _ are documentation only and must be stripped before writing the real context.json — the engine ignores any key starting with '_' inside a family config or interface/wrapper object, but 'brique', 'objective', 'functional' and 'subjective' at the root, and the five family names inside engine_config, are read literally.",
+
+  "brique": {
+    "_comment": "Required section. Read by the engine at startup via LoadContextDescriptor. A missing 'brique' key aborts context startup immediately.",
+
+    "ctx_name": "my-context",
+    "_ctx_name_note": "Required. Logical name of this context, used for identity and logging.",
+
+    "engine_version": "0.0.0",
+    "_engine_version_note": "Required. Minimum engine binary version this context needs (semantic version string). The engine refuses to start this context if its own binary version is lower.",
+
+    "ctx_version": "1",
+    "_ctx_version_note": "Required. Context schema version, non-empty string. Used for registry identity.",
+
+    "ctx_ext_name": "",
+    "_ctx_ext_name_note": "Optional. Public alias for this context, used as an alternate name in external routing. Leave empty if this context is only ever addressed by its path.",
+
+    "children_list": [],
+    "_children_list_note": "Optional. List of child context directory name segments expected under this context (e.g. ['workspace', 'services']). Informational only — the engine does not enforce their presence at startup, and a child not listed here can still be created later and brought up with context.start.",
+
+    "engine_config": {
+      "_comment": "Family-specific configuration, one key per engine family loop. The key itself (communication, execution, trace, reflexive) MUST be present and be a JSON object for the context to start — an empty {} is a valid, complete answer for a family this context does not use. matter is the only family with no presence requirement: it may be omitted entirely. Only the family whose loop is running reads its own sub-object; the four checked families never read each other's config.",
+
+      "communication": {
+        "_comment": "Read by CommunicationLoop. Key presence required (empty {} is enough to start a context with no wrapper and no UI attached — a pure logic child context that only reacts to intentions routed to it from its parent). Everything below is optional and only needed once this context must exchange messages with a wrapper process or a UI over WebSocket/HTTP.",
+
+        "instance_key_name": "main",
+        "_instance_key_name_note": "Root context only. Logical key name used to load the instance private key from the local Brique config directory. Non-root contexts omit this field entirely.",
+
+        "websocket_listener": {
+          "_comment": "Root context only — the engine never reads this key from a non-root context.json (setting it there is a silent no-op). Optional even on root: only needed if this instance must expose one shared physical WebSocket listener for wrappers and UIs across the whole context tree to connect to. Child contexts never open their own listener; they only declare logical paths on 'ws' interfaces below, which are served by this single root listener.",
+          "addr": ":8080",
+          "_addr_note": "Required inside this block if websocket_listener is present at all. host:port the shared listener binds to."
+        },
+
+        "interfaces": [
+          {
+            "_comment": "This whole array is optional and only needed if a wrapper process or a UI must connect to this context over WebSocket/HTTP. A context with no wrapper and no UI omits 'interfaces' entirely, or leaves it []. One entry = one named route this context can be reached on.",
+
+            "name": "main",
+            "_name_note": "Required per interface. Unique name within this context.",
+
+            "type": "ui",
+            "_type_note": "Required. Who connects through this interface: 'ui' (an editor/UI client), 'wrapper' (a wrapper process of this context), 'outerCtx' (another context instance). All three route through the 'ws' driver. 'http'/'https' interfaces don't use this distinction the same way. For 'wrapper': this entry's 'name' must equal the wrapper_name of a matching engine_config.execution.wrappers[] entry AND that same wrapper_name must be listed in engine_config.communication.wrapper_boundary below — all three (this interface, the wrapper_boundary entry, the execution.wrappers entry) are required together for wrapper.start to ever succeed. Declaring wrapper_boundary and execution.wrappers without a matching 'wrapper' interface here does not fail fast: the wrapper process starts, cannot find its websocket route, and wrapper.start only fails once ready_timeout_ms below is exhausted — the readiness timeout is the only symptom, so if wrapper.start times out, checking for a missing 'wrapper' interface entry here is the first thing to verify.",
+
+            "driver": "ws",
+            "_driver_note": "Required. Transport for this interface: 'ws' (routes through the shared root websocket_listener above), 'http', or 'https' (this context opens its own HTTP(S) server).",
+
+            "config": {
+              "ingress_enabled": true,
+              "_ingress_note": "Allow inbound messages through this interface.",
+              "egress_enabled": true,
+              "_egress_note": "Allow outbound messages through this interface.",
+              "path": "/ws",
+              "_path_note": "Required for 'ws' interfaces. Logical route on the shared root listener. Only the root context also sets 'addr' via websocket_listener above; every other context only ever sets 'path'.",
+              "allow_any_origin": false,
+              "_origin_note": "Optional. CORS allow-any-origin, only meaningful for 'http'/'https' interfaces.",
+              "read_limit": 0,
+              "_read_limit_note": "Optional. Max inbound message size in bytes. 0 means the engine default.",
+              "request_timeout_ms": 0,
+              "write_timeout_ms": 0,
+              "read_timeout_ms": 0,
+              "idle_timeout_ms": 0,
+              "_timeouts_note": "Optional. 0 means no timeout / engine default for each. Only meaningful for 'http'/'https' interfaces.",
+              "tls_cert_file": "",
+              "tls_key_file": "",
+              "tls_insecure_skip_verify": false,
+              "tls_server_name": "",
+              "_tls_note": "Optional. Only read for 'https' interfaces."
+            }
+          }
+        ],
+
+        "wrapper_boundary": ["my_wrapper"],
+        "_wrapper_boundary_note": "Optional. Only needed if this context owns wrappers declared under engine_config.execution.wrappers below — list the same wrapper_name(s) here so this context is recognized as their communication boundary and receives intentions routed to them. Omit entirely (or leave []) if this context has no wrapper. Listing a wrapper_name here only enables routing — it does NOT by itself open the channel the wrapper process connects through. Each wrapper_name here also needs its own 'interfaces' entry above with type='wrapper' and the same name (see interfaces[]._type_note); without it, wrapper.start fails silently with a generic readiness timeout instead of naming the missing interface.",
+
+        "scattered": {
+          "_comment": "Optional. Controls which capacities this context allows to be invoked in scatter mode (fan-out to multiple targets in one call). Omit entirely if this context never needs scatter invocations.",
+          "scattered_allowed": {
+            "matter": ["matter.read"]
+          },
+          "_scattered_allowed_note": "Map of family name to the list of capacity names within that family allowed to be scattered.",
+          "scattered_max_items": 8,
+          "_scattered_max_items_note": "Maximum number of targets a single scattered call may fan out to."
+        }
+      },
+
+      "execution": {
+        "_comment": "Read by ExecutionLoop. Key presence required (empty {} is enough to start a context that runs no wrapper process — capacities that don't invoke a wrapper still work normally). 'wrappers' below is optional and only needed if this context launches its own process (Python/Node/compiled binary, etc.) to act as an effector.",
+
+        "default_invoke_timeout_ms": 0,
+        "_timeout_note": "Optional. Default timeout in ms applied to DSL invoke nodes that don't declare their own timeout. 0 means no default timeout.",
+
+        "wrappers": [
+          {
+            "_comment": "This whole array is optional. Only needed if this context manages a wrapper process. Omit entirely (or leave []) if this context has no wrapper. If present, engine_config.communication.wrapper_boundary above must list this same wrapper_name, AND engine_config.communication.interfaces above must contain a matching entry with type='wrapper' and the same name (see interfaces[]._type_note) — all three declarations are required together, or wrapper.start times out with a generic 'wrapper readiness timeout' instead of naming the missing piece.",
+
+            "wrapper_name": "my_wrapper",
+            "_wrapper_name_note": "Required. Unique wrapper identifier within this context. Referenced by brique.wrapper in capacity descriptors and by matter.json brique.wrapper_name.",
+
+            "mode": "interpreted",
+            "_mode_note": "Required. 'interpreted' (a running process that receives intentions over its lifetime) or 'compiled' (same communication model, for a compiled artifact).",
+
+            "ready_timeout_ms": 2000,
+            "_ready_timeout_note": "Optional. Max ms to wait for the wrapper to signal readiness after process start.",
+
+            "stop_timeout_ms": 1000,
+            "_stop_timeout_note": "Optional. Ms to wait for graceful stop before force-killing the process.",
+
+            "build": {
+              "_comment": "Optional. Build step run once before the wrapper process is first started. Omit if the wrapper needs no build (e.g. a plain script).",
+              "shell": false,
+              "timeout_ms": 0,
+              "artifact": "",
+              "_artifact_note": "Path to the build output artifact, if any.",
+              "artifact_kind": "file",
+              "cmd": [],
+              "_cmd_note": "Write the build command as if always on macOS/Linux — never type '.exe'. When mode is 'compiled', the engine locates the path right after a '-o' flag (if any) and appends the platform's executable suffix itself ('.exe' on Windows, nothing elsewhere) before running the command, so 'go build -o code/wrapper/bin/wrapper .' produces the right file on every OS unchanged. A build command with no '-o' flag is left untouched — the engine only corrects a path it can identify."
+            },
+
+            "run": {
+              "_comment": "Required if this wrapper entry exists at all. Command that launches the wrapper process.",
+              "shell": false,
+              "_shell_note": "When true, cmd is joined and run through the shell. When false, cmd[0] is the executable and cmd[1:] are args.",
+              "cmd": ["python3", "main.py"],
+              "_cmd_note": "For mode 'compiled', write cmd[0] as the macOS/Linux binary path (no '.exe') — the engine appends the platform's executable suffix to cmd[0] itself, the same way and using the same path it corrected in build.cmd (see build.cmd._cmd_note), so the same config launches the file the build step actually produced on every OS. Not applied to mode 'interpreted' (e.g. the python3/python rewrite below).",
+              "cwd": "",
+              "_cwd_note": "Optional. Working directory for the process. Defaults to the context directory.",
+              "env_name": "",
+              "_env_name_note": "Optional. Name of a shared Python virtualenv to run this wrapper under, hand-maintained (pip install -r requirements.txt) outside the engine. When cmd[0] is 'python3' or 'python', the engine rewrites it to that venv's interpreter. Empty => <instance_root_parent>/venv/<bin-dir>/<python-exe> (single default env, if it exists). Non-empty (e.g. 'data_science') => <instance_root_parent>/envs/data_science/venv/<bin-dir>/<python-exe> (named env, for wrappers whose dependencies conflict with the default env). <bin-dir> is 'Scripts' and <python-exe> is 'python.exe' on Windows; <bin-dir> is 'bin' and <python-exe> is 'python3' on macOS/Linux. instance_root_parent is the directory sibling to the context whose brique.ctx_type == \"root\", found by walking up from this context. If the resolved venv bin directory does not exist, the engine falls back to the system interpreter unchanged.",
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "my_wrapper",
+                "_env_note": "Free-form environment variables injected into the wrapper process, in addition to BRIQUE_WS_ADDR/BRIQUE_WS_URL which the engine always injects automatically."
+              }
+            }
+          }
+        ]
+      },
+
+      "matter": {},
+      "_matter_note": "Read by MatterLoop. The only family with no presence requirement at all — omit this key entirely if unused. Currently no standard keys; reserved for future matter-family configuration.",
+
+      "trace": {
+        "_comment": "Read by TraceLoop. Key presence required (empty {} is enough to start — every field below has a safe default if omitted, and 'enabled' defaults to false, meaning tracing is off unless you explicitly turn it on).",
+        "enabled": true,
+        "_enabled_note": "Whether this context records trace events at all.",
+        "level": "normal",
+        "_level_note": "'minimal', 'normal', or 'debug'.",
+        "ring_capacity": 64,
+        "_ring_note": "In-memory ring buffer size (number of trace events kept before older ones are evicted).",
+        "flush_every_n": 8,
+        "_flush_n_note": "Flush to disk every N events.",
+        "flush_every_interval": 20,
+        "_flush_interval_note": "Flush to disk every N seconds regardless of event count.",
+        "segment_max_bytes": 1048576,
+        "_segment_note": "Max size in bytes of one JSONL trace segment file before rotation."
+      },
+
+      "reflexive": {},
+      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Currently no standard keys; reserved for future reflexive-family configuration."
+    }
+  },
+
+  "objective": {
+    "_comment": "Optional. Not read by the engine at startup — projected by the reflexive layer for indexing/search. Safe to omit entirely.",
+    "name": "my-context",
+    "description": "One sentence describing the role of this context."
+  },
+
+  "functional": {
+    "_comment": "Optional. Opaque to the engine entirely — free-form description of this context's business role, for humans and tooling only.",
+    "role": "root | child | boundary | worker"
+  },
+
+  "subjective": {},
+  "_subjective_note": "Optional. Free-form space for subjective categorization — tags, priority, notes, author opinions. The engine ignores this section entirely."
+}

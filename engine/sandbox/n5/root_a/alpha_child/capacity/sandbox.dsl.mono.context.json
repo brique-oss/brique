@@ -1,0 +1,79 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.mono.context",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.mono.context",
+    "description": "Mono-instance cross-context DSL flow from alpha child to local root and back to a local wrapper-backed terminal result."
+  },
+  "functional": {
+    "#root": {
+      "role": "Read root context state through the engine and return a local wrapper echo using the remote mono-instance context id.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "mono_instance_route": "A same-instance cross-context reflexive call is awaited.",
+        "local_wrapper_runtime": "The local wrapper runtime is invoked for the terminal response."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one terminal wrapper response after a same-instance cross-context state read.",
+        "invariants": [
+          "The flow always performs one same-instance cross-context read.state before the terminal wrapper call.",
+          "The terminal wrapper message is derived from root_state.payload.context.context_id.",
+          "Only one terminal wrapper invocation occurs."
+        ],
+        "success": [
+          "On success, the terminal payload is the payload returned by the final local sandbox.echo call.",
+          "Successful execution proves mono-instance cross-context routing before local wrapper termination."
+        ],
+        "failure": [
+          "The flow fails terminally if the cross-context read.state step cannot complete.",
+          "The flow also fails if the terminal local wrapper call cannot execute."
+        ],
+        "notes": [
+          "This scenario exercises same-instance context routing without using the external boundary.",
+          "The capacity is intentionally simple and serves as a mono-instance orchestration oracle."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "root_state"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.echo",
+                "with": {
+                  "message": "$root_state.payload.context.context_id"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

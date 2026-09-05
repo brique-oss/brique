@@ -1,0 +1,31 @@
+{
+  "brique": {
+    "cap_name": "read_counter",
+    "kind": "interpreted",
+    "wrapper": "counter_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "read_counter",
+    "description": "Read counter_value.value without mutation."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "number"
+          }
+        }
+      },
+      "effects": {}
+    }
+  },
+  "subjective": {
+    "intent": "read counter"
+  }
+}

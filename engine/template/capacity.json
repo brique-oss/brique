@@ -1,0 +1,144 @@
+{
+  "_comment": "Canonical capacity descriptor template. Copy this file and fill in the blanks. See capacity.dsl.reference.json for the complete DSL operator reference.",
+
+  "brique": {
+    "cap_name": "<cap_name>",
+    "_cap_name_note": "Required. Must exactly match the filename without .json (e.g. file 'audio.stream.json' → cap_name 'audio.stream').",
+    "kind": "dsl",
+    "_kind_note": "Required. 'dsl' = engine executes the resolution plan. 'interpreted' or 'compiled' = wrapper executes; resolution is declarative guidance only.",
+    "wrapper": "",
+    "_wrapper_note": "Required when kind='interpreted' or 'compiled'. Must match a wrapper_name declared in THIS capacity's OWN context.json engine_config.execution.wrappers — resolution is strictly local per context, never inherited from a parent context's execution.wrappers, however architecturally close. A capacity cannot reference a wrapper declared one level up; fails with reason=wrapper_not_configured otherwise. To share one wrapper process across several contexts, declare the capacity itself in the wrapper-owning context's own tree and aggregate the contributing code there (see Wrapper.md §11.1) — do not expect a cross-context wrapper reference to work. Empty for kind='dsl'.",
+    "rel_ctx": "",
+    "_rel_ctx_note": "Optional. Logical sub-context inside the wrapper domain. Leave empty when not needed.",
+    "lang": "brique_dsl",
+    "_lang_note": "Informational. 'brique_dsl' for kind='dsl'. Actual language (e.g. 'python', 'go') for kind='interpreted' or 'compiled'."
+  },
+
+  "objective": {
+    "name": "<cap_name>",
+    "description": "One sentence describing what this capacity does."
+  },
+
+  "functional": {
+    "_comment": "Exactly one root section required (key starting with '#'). Additional named sub-sections (#name) may appear inside resolution at any depth.",
+
+    "#root": {
+      "role": "One sentence describing the transformation performed by this capacity.",
+      "_role_note": "Required for kind='dsl'.",
+
+      "inputs": {
+        "params": {
+          "<param_name>": {
+            "type": "string | integer | boolean | array | object | any"
+          }
+        },
+        "@matter": {
+          "_comment": "Optional. Declare matter slots the caller must bind. Keys are logical slot names, not concrete matter IDs.",
+          "<slot_name>": {
+            "required": true,
+            "schema": "/root/schema/<schema_name>"
+          }
+        }
+      },
+
+      "outputs": {
+        "payload": {
+          "<field_name>": {
+            "type": "string | integer | boolean | array | object | any"
+          }
+        },
+        "@matter": {
+          "_comment": "Optional. Declare matter effects. Three mutually exclusive slots.",
+          "new": {
+            "<effect_name>": { "schema": "/root/schema/<schema_name>" }
+          },
+          "modify": {
+            "<effect_name>": { "schema": "/root/schema/<schema_name>" }
+          },
+          "delete": {
+            "<effect_name>": {}
+          }
+        }
+      },
+
+      "effects": {
+        "<surface_name>": "One sentence describing what happens to this surface."
+      },
+
+      "compensated_by": "/root/ctx/<cap_name>.undo",
+      "_compensated_by_note": "Optional, and only meaningful when this capacity declares effects. Absolute reference to the capacity that reverses this capacity's effects. Declaring it makes the effect compensable: an orchestrating flow (or the LLM implementing one) can, when a later step fails, invoke the declared compensations of the already-completed effectful steps in reverse order. The engine does not run compensations automatically — this is a declarative contract that orchestration exploits. Omit entirely for effect-free capacities or when no meaningful reversal exists (in which case the failure sections of the transformation_contract should say what remains behind).",
+
+      "transformation_contract": {
+        "morphing": "A <subject> becomes a <result>.",
+        "_morphing_note": "Required for kind='dsl'. Engine validates this is a non-empty string.",
+        "invariants": [
+          "A condition always true regardless of inputs."
+        ],
+        "success": [
+          "What is guaranteed when this section succeeds."
+        ],
+        "failure": [
+          "Conditions under which this section fails."
+        ],
+        "notes": [
+          "Optional implementation constraints not captured elsewhere."
+        ]
+      },
+
+      "resolution": {
+        "_comment": "For kind='dsl': executed by the engine. Must contain exactly one runtime node at top level. For kind='interpreted'/'compiled': declarative guidance only, not engine-executed. See capacity.dsl.reference.json for all available nodes.",
+
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/ctx/cap.name",
+                "with": {
+                  "<param>": "$input.<field>"
+                },
+                "as": "result_alias",
+                "await_response": true
+              }
+            },
+            {
+              "#<sub_section>": {
+                "_comment": "A sub-section is declared inline here, inside the parent resolution. It shares the same structure as #root: role, inputs, outputs, transformation_contract, resolution. Its own resolution can contain further sub-sections — the nesting is recursive.",
+                "role": "One sentence describing what this stage does.",
+                "inputs": { "params": {} },
+                "outputs": { "payload": {} },
+                "transformation_contract": {
+                  "morphing": "A <subject> becomes a <result>."
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "invoke": {
+                          "@capacity": "/root/ctx/other.cap",
+                          "with": {},
+                          "as": "sub_result"
+                        }
+                      },
+                      {
+                        "#<nested_sub_section>": {
+                          "role": "...",
+                          "inputs": { "params": {} },
+                          "outputs": { "payload": {} },
+                          "transformation_contract": { "morphing": "..." },
+                          "resolution": { ">sequence": { "items": [] } }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+
+  "subjective": {},
+  "_subjective_note": "Optional. Free-form space for subjective categorization. Add any key-value pairs meaningful to you or your team — tags, priority, notes, author opinions. The engine ignores this section entirely."
+}

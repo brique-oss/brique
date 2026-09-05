@@ -1,0 +1,33 @@
+{
+  "_comment": "Wrapper-backed matter used to validate Matter -> wrapper transport routing.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "m_wrapper",
+    "description": "Wrapper-backed matter"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "meaning",
+          "data",
+          "brique"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": true
+      }
+    }
+  },
+  "subjective": {
+    "intent": "sandbox wrapper matter",
+    "impression": ""
+  }
+}

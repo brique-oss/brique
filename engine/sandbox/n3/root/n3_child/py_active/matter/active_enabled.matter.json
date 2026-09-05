@@ -1,0 +1,30 @@
+{
+  "_comment": "Wrapper-backed matter exposing the active runtime enable flag.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "active_enabled",
+    "description": "Boolean enable flag of the active runtime"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "data"
+        ]
+      },
+      "write": {
+        "enabled": true,
+        "metadata_only": false
+      }
+    }
+  },
+  "subjective": {
+    "intent": "active enabled state"
+  }
+}

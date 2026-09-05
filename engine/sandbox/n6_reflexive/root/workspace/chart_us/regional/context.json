@@ -1,0 +1,54 @@
+{
+  "_comment": "Nested US regional context for complex contextualized music selections.",
+  "brique": {
+    "ctx_name": "sandbox-n6-chart-us-regional",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-n6-chart-us-regional",
+    "children_list": [],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": [],
+        "scattered": {
+          "scattered_max_items": 8,
+          "scattered_allowed": {
+            "matter": [
+              "matter.read"
+            ],
+            "reflexive": [
+              "reflexive.read"
+            ]
+          }
+        }
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 64,
+        "flush_every_n": 8,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-n6-chart-us-regional"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-n6-chart-us-regional",
+    "description": "Nested US regional slice for verbose contextual queries"
+  },
+  "functional": {
+    "role": "regional_slice",
+    "market": "us"
+  },
+  "subjective": {
+    "intent": "nested chart fixture",
+    "impression": "regional deep path"
+  }
+}

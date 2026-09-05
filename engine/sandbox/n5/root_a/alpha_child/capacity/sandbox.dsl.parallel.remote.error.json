@@ -1,0 +1,75 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.parallel.remote.error",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.parallel.remote.error",
+    "description": "Run one successful remote branch and one failing remote branch in parallel and close fail-closed."
+  },
+  "functional": {
+    "#root": {
+      "role": "Launch one successful remote wrapper call and one failing remote matter read concurrently, then terminate with one propagated error response.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "effects": {
+        "parallel_remote_success": "One remote branch succeeds.",
+        "parallel_remote_failure": "One remote branch fails.",
+        "terminal_error": "The composite flow closes with one propagated terminal error."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one terminal propagated error after concurrent remote success and failure branches are evaluated together.",
+        "invariants": [
+          "One remote wrapper branch is expected to succeed while one remote matter.read branch is expected to fail.",
+          "The parallel flow stays fail-closed and emits a single terminal error instead of exposing partial success payloads."
+        ],
+        "success": [
+          "This scenario has no nominal success payload contract because its intended observable result is a propagated terminal error.",
+          "If all branches unexpectedly succeed, the test fixture would no longer represent the intended fail-closed composition case."
+        ],
+        "failure": [
+          "The terminal response fails with a structured error when the remote matter.read branch cannot resolve the requested matter.",
+          "Only one terminal error response is emitted even though another parallel branch may have succeeded."
+        ],
+        "notes": [
+          "This scenario exists to prove terminal closure semantics for >parallel in the presence of one remote branch failure.",
+          "The successful remote branch is part of the setup and should not leak its payload as a second terminal response."
+        ]
+      },
+      "resolution": {
+        ">parallel": {
+          "limit": 2,
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                "with": {
+                  "message": "parallel-remote-ok"
+                },
+                "as": "remote_ok"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "missing_parallel_remote",
+                  "read_mode": "functional"
+                },
+                "as": "remote_fail"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

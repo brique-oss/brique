@@ -1,0 +1,42 @@
+{
+  "_comment": "Seed document descriptor for N6 reflexive tests.",
+  "brique": {
+    "kind": "document",
+    "file": "document/overview.md",
+    "ref": ""
+  },
+  "objective": {
+    "name": "overview",
+    "description": "Seed overview document for sandbox N6 workspace",
+    "domain": "sandbox_n6",
+    "owner": "engine_test_suite"
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "source_kind": "local",
+    "mime_type": "text/markdown",
+    "tags": [
+      "seed",
+      "workspace",
+      "overview"
+    ],
+    "sections": [
+      "purpose",
+      "inventory",
+      "expected_usage"
+    ],
+    "used_by": [
+      "read.document",
+      "edit.duplicate",
+      "meaning.rebuild"
+    ]
+  },
+  "subjective": {
+    "intent": "document seed",
+    "impression": "reference artifact",
+    "notes": [
+      "used as an existing local document during N6 tests",
+      "should appear in meaning and structure introspection"
+    ]
+  }
+}

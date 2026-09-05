@@ -1,0 +1,56 @@
+{
+  "_comment": "API-style Python capacity backed by a plain function.",
+  "brique": {
+    "cap_name": "api.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "rel_ctx": "api",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "api.echo",
+    "description": "Echoes a message through a Python function"
+  },
+  "functional": {
+    "#root": {
+      "role": "Return an echoed message through a plain function in the wrapper runtime.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "An inbound message becomes an echoed payload returned through a plain function in the wrapper runtime.",
+        "invariants": [
+          "api.echo must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "api.echo returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "api.echo fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "api echo"
+  }
+}

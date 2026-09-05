@@ -1,0 +1,31 @@
+{
+  "brique": {
+    "cap_name": "error_test",
+    "kind": "interpreted",
+    "wrapper": "inspector_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "error_test",
+    "description": "Return a structured sandbox error response."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "error": {
+          "origin": "inspector_context",
+          "code": "TEST_ERROR",
+          "message": "Intentional sandbox error"
+        }
+      },
+      "effects": {}
+    }
+  },
+  "subjective": {
+    "intent": "structured error validation"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.wrapper.matter.inputs",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.wrapper.matter.inputs",
+    "description": "Pass params and direct @matter refs into a wrapper-backed capacity."
+  },
+  "functional": {
+    "#root": {
+      "role": "Call one wrapper-backed capacity with explicit params and explicit local and remote matter refs.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "wrapper_name": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "wrapper_input_contract": "The wrapper receives both params and injected @matter refs."
+      },
+      "transformation_contract": {
+        "morphing": "A DSL request becomes an explicit reflection of the params and matter refs observed by the wrapper runtime.",
+        "invariants": [
+          "The flow consists of a single wrapper invocation with explicit params and explicit local and remote @matter refs.",
+          "The terminal payload is the reflected wrapper input envelope returned by sandbox.inspect.inputs.",
+          "Both the local and remote matter refs are static in this scenario."
+        ],
+        "success": [
+          "On success, the wrapper payload shows the params and @matter refs as observed after Execution-side injection.",
+          "Successful execution proves that DSL can pass explicit params plus explicit matter refs into a wrapper-backed call.",
+          "The terminal payload exposes received_params together with ctx_id and wrapper_name from sandbox.inspect.inputs."
+        ],
+        "failure": [
+          "The flow fails if the single wrapper-backed inspection call cannot execute.",
+          "Invalid matter routing or wrapper execution errors close the scenario fail-closed."
+        ],
+        "notes": [
+          "This is the direct static @matter injection oracle used by N7.",
+          "The scenario does not resolve matter content; it validates envelope construction."
+        ]
+      },
+      "resolution": {
+        "invoke": {
+          "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+          "with": {
+            "label": "$input.label",
+            "@matter": {
+              "primary": "/root/alpha_child/m_chain_local",
+              "secondary": "@ext_REMOTE_PUBKEY:/beta-child/m_chain_remote"
+            }
+          },
+          "as": "final_result"
+        }
+      }
+    }
+  }
+}

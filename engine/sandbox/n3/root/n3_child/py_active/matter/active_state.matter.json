@@ -1,0 +1,26 @@
+{
+  "_comment": "Wrapper-backed matter exposing the current runtime snapshot of the active component.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "active_state",
+    "description": "Current state snapshot of the active runtime"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "data"
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "active runtime state"
+  }
+}

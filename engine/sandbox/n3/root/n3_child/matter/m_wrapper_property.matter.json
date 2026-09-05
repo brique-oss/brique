@@ -1,0 +1,27 @@
+{
+  "_comment": "Wrapper-backed matter bound to a Python class property.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "wrapper",
+    "wrapper_name": "sandbox_py"
+  },
+  "objective": {
+    "name": "m_wrapper_property",
+    "description": "Wrapper-backed matter using a class property binding"
+  },
+  "functional": {
+    "operations": {
+      "read": {
+        "enabled": true,
+        "modes": [
+          "data"
+        ]
+      }
+    }
+  },
+  "subjective": {
+    "intent": "sandbox wrapper class property matter",
+    "impression": ""
+  }
+}

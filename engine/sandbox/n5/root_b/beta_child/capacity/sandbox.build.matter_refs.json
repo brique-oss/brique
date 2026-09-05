@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "sandbox.build.matter_refs",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.build.matter_refs",
+    "description": "Build concrete matter refs for later DSL @matter instantiation."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return local and optional remote matter refs as plain strings that a later DSL step can instantiate into @matter bindings.",
+      "inputs": {
+        "params": {
+          "local_matter_id": {
+            "type": "string"
+          },
+          "remote_matter_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "local_ref": {
+            "type": "string"
+          },
+          "remote_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Simple ids become explicit matter refs reusable in later DSL @matter bindings.",
+        "invariants": [
+          "sandbox.build.matter_refs must remain bounded by its declared inputs, outputs, and effects.",
+          "Internal implementation strategy may vary, but the declared contract surface must remain stable."
+        ],
+        "success": [
+          "sandbox.build.matter_refs returns payload and matter effects consistent with the declared outputs when it succeeds.",
+          "Successful execution preserves the semantic change described by morphing."
+        ],
+        "failure": [
+          "sandbox.build.matter_refs fails when required inputs or matter contracts are not satisfied.",
+          "The capacity fails when the underlying runtime or wrapper cannot satisfy the declared contract."
+        ],
+        "notes": [
+          "This contract constrains expected behavior and observable effects, not the internal implementation decomposition.",
+          "Humans and LLMs should interpret the capacity through the declared interface and semantic guarantees first."
+        ]
+      }
+    }
+  }
+}

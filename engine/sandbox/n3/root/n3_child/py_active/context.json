@@ -1,0 +1,48 @@
+{
+  "_comment": "Nested N3 sandbox context representing continuously running Python code addressed through the parent wrapper boundary.",
+  "brique": {
+    "ctx_name": "sandbox-py-active",
+    "engine_version": "0.0.1",
+    "ctx_version": "1",
+    "ctx_ext_name": "sandbox-py-active",
+    "children_list": [],
+    "engine_config": {
+      "communication": {
+        "wrapper_boundary": [],
+        "interfaces": []
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "trace": {
+        "enabled": true,
+        "level": "debug",
+        "ring_capacity": 32,
+        "flush_every_n": 4,
+        "flush_every_interval": 20,
+        "segment_max_bytes": 1048576
+      },
+      "reflexive": {
+        "root_repo": false,
+        "repo_name": "brique-sandbox-py-active"
+      }
+    }
+  },
+  "objective": {
+    "name": "sandbox-py-active",
+    "description": "Nested sandbox context exposing an always-running Python component through the parent wrapper"
+  },
+  "functional": {
+    "role": "child",
+    "test_scope": [
+      "code-only nested context",
+      "active runtime model",
+      "wrapper-linked activation capacities",
+      "wrapper-linked matter state"
+    ]
+  },
+  "subjective": {
+    "intent": "nested active sandbox",
+    "impression": "stateful"
+  }
+}

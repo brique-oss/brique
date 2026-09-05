@@ -1,0 +1,37 @@
+{
+  "brique": {
+    "cap_name": "set_text",
+    "kind": "interpreted",
+    "wrapper": "text_sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "set_text",
+    "description": "Replace text_buffer.value with params.value."
+  },
+  "functional": {
+    "#root": {
+      "inputs": {
+        "params": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "matter": "Writes text_buffer."
+      }
+    }
+  },
+  "subjective": {
+    "intent": "set text"
+  }
+}

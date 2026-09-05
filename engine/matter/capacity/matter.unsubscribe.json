@@ -1,0 +1,77 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "matter.unsubscribe",
+    "family": "matter",
+    "file": "engine/matter/matter_event.go",
+    "function": "capMatterUnsubscribe"
+  },
+  "objective": {
+    "name": "matter.unsubscribe",
+    "description": "Remove a matter subscription locally in brique mode or delegate the removal to the owning wrapper in wrapper mode."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve one matter identifier and subscription identifier, then remove or delegate the subscription according to the matter ownership mode.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string",
+            "_comment": "Required. Name of the matter to unsubscribe from."
+          },
+          "sub_id": {
+            "type": "string",
+            "_comment": "Required. Subscription identifier to remove."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "matter_id": {
+            "type": "string"
+          },
+          "sub_id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean",
+            "_comment": "True if the subscription was found and removed."
+          },
+          "substance_mode": {
+            "type": "string",
+            "_comment": "Substance mode of the matter."
+          }
+        }
+      },
+      "effects": {
+        "subscriptions": "A local brique-mode subscription may be removed from MatterLoop memory.",
+        "wrapper_transport": "Wrapper-mode unsubscribe requests are forwarded to the wrapper boundary."
+      },
+      "transformation_contract": {
+        "morphing": "A matter identifier plus a subscription identifier becomes an explicit unsubscription acknowledgement, either local in brique mode or delegated to the owning wrapper.",
+        "invariants": [
+          "Unsubscription first resolves the matter through the runtime catalog to decide between local removal and wrapper delegation.",
+          "Local brique-mode unsubscription is idempotent at the payload level: removed=false is returned when the sub_id was not present.",
+          "Wrapper-mode unsubscribe requests are forwarded unchanged to the owning wrapper boundary."
+        ],
+        "success": [
+          "On success, matter.unsubscribe returns ok=true, the matter_id, the sub_id, and the resolved substance_mode.",
+          "For local brique-mode unsubscription, removed reports whether a subscription entry was actually deleted."
+        ],
+        "failure": [
+          "The capacity fails when matter_id or sub_id is missing.",
+          "The capacity refuses unsubscription when the matter is absent from the runtime catalog.",
+          "The capacity refuses wrapper-mode unsubscription when the owning wrapper boundary cannot be resolved to a running wrapper."
+        ],
+        "notes": [
+          "Only local brique-mode subscriptions are tracked in MatterLoop memory.",
+          "Wrapper-mode unsubscription semantics beyond forwarding are owned by the wrapper implementation."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

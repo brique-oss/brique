@@ -1,0 +1,21 @@
+{
+  "_comment": "Local document descriptor for reflexive tests.",
+  "brique": {
+    "kind": "document",
+    "file": "document/overview.md",
+    "ref": ""
+  },
+  "objective": {
+    "name": "overview",
+    "description": "Sandbox overview document"
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "source_kind": "local",
+    "mime_type": "text/markdown"
+  },
+  "subjective": {
+    "intent": "sandbox documentation",
+    "impression": ""
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "brique": {
+    "_comment": "Engine-native Reflexive family capacity. kind/wrapper/rel_ctx/lang do not apply here.",
+    "cap_name": "read.state",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_read.go",
+    "function": "capReadState"
+  },
+  "objective": {
+    "name": "read.state",
+    "description": "Return a runtime snapshot of the current context: identity, trace settings, wrapper states, and family states."
+  },
+  "functional": {
+    "#root": {
+      "role": "Snapshot selected local runtime facets of the current context and return one aggregated state payload.",
+      "inputs": {
+        "params": {
+          "include": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Explicit allow-list of sections to include. Valid values: 'context', 'trace', 'wrappers', 'families'. When absent, all four sections are included."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "context": {
+            "_include_key": "context",
+            "type": "object",
+            "description": "Identity fields of the current context, sourced from the live frame.",
+            "fields": {
+              "context_id": "string — absolute context path (e.g. /root/workspace)",
+              "context_name": "string — short name from context.json brique.context_name",
+              "ctx_ext_name": "string — extended name from context.json brique.ctx_ext_name",
+              "ctx_version": "string — version from context.json brique.ctx_version",
+              "engine_version": "string — engine version from frame",
+              "context_dir": "string — absolute filesystem path of the context directory"
+            }
+          },
+          "trace": {
+            "_include_key": "trace",
+            "type": "object",
+            "description": "Current trace settings from the live frame.",
+            "fields": {
+              "trace_enabled": "boolean — whether trace is active",
+              "trace_level": "string — trace level (e.g. 'normal')"
+            }
+          },
+          "wrappers": {
+            "_include_key": "wrappers",
+            "type": "array",
+            "description": "Snapshot of all wrappers registered in the current frame, sorted by name. Each item describes one wrapper process.",
+            "item_fields": {
+              "name": "string — wrapper name",
+              "proc_state": "string — lowercase process state (e.g. 'running', 'stopped', 'building')",
+              "pid": "integer — OS process ID (0 if not running)",
+              "ready": "boolean — whether the wrapper is ready to handle requests",
+              "building": "boolean — whether the wrapper is currently building",
+              "starting": "boolean — whether the wrapper is currently starting",
+              "build_at": "string — RFC3339Nano UTC timestamp of last build, empty if never built",
+              "started_at": "string — RFC3339Nano UTC timestamp of last start, empty if never started",
+              "ready_at": "string — RFC3339Nano UTC timestamp when last became ready, empty if never ready",
+              "last_exit_at": "string — RFC3339Nano UTC timestamp of last exit, empty if never exited",
+              "stop_requested_at": "string — RFC3339Nano UTC timestamp when stop was requested (field absent if no stop was requested)",
+              "last_error": "string — last error message (field absent if no error)",
+              "ready_error": "string — readiness error message (field absent if no readiness error)"
+            }
+          },
+          "families": {
+            "_include_key": "families",
+            "type": "object",
+            "description": "Runtime lifecycle state of each family registered in the current context.",
+            "keys": "Family name string. Known families: 'communication', 'execution', 'matter', 'trace', 'reflexive'. Only registered families appear.",
+            "values": {
+              "type": "string",
+              "description": "Lifecycle state string derived from shared.FamilyState.String(). Possible values:",
+              "initializing": "family loop started, not yet running",
+              "running": "family loop active and processing",
+              "stopping": "shutdown in progress",
+              "stopped": "family loop exited cleanly",
+              "failed": "family loop exited with error",
+              "unknown": "state not recognized"
+            },
+            "ordering": "Keys sorted alphabetically.",
+            "empty_case": "Empty object when no families are registered in the current context."
+          }
+        }
+      },
+      "effects": {
+        "runtime_snapshot": "Live frame and runtime state are read (read-only)."
+      },
+      "transformation_contract": {
+        "morphing": "A local state query becomes an explicit runtime snapshot of the current context across four orthogonal facets: identity, trace configuration, wrapper process states, and family lifecycle states.",
+        "invariants": [
+          "read.state is strictly scoped to the current context. It does not access child context runtimes.",
+          "When params.include is absent, all four sections are included: context, trace, wrappers, families.",
+          "Unknown include keys are silently ignored.",
+          "All sections reflect live frame state at the moment of execution."
+        ],
+        "success": [
+          "Returns a payload containing only the requested sections.",
+          "Each section reflects the current live runtime state of the context."
+        ],
+        "failure": [
+          "Fails only when frame access required for the requested sections cannot be completed."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

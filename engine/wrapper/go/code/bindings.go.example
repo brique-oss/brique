@@ -1,0 +1,21 @@
+package main
+
+import "brique/wrapper/wrapper"
+
+// BuildBindings declares the static capacity and matter bindings for this wrapper.
+// Copy this file to bindings.go and implement your own handlers.
+func BuildBindings(rt *wrapper.Runtime) wrapper.BindingsFragment {
+	return wrapper.BindingsFragment{
+		Capacities: []wrapper.CapacityBinding{
+			{
+				Context: "",
+				Name:    "go.echo",
+				Handler: func(params wrapper.Params) (any, error) {
+					return map[string]any{"echo": params.String("message")}, nil
+				},
+			},
+		},
+		Matters:  []wrapper.MatterBinding{},
+		Shutdown: []func(){},
+	}
+}

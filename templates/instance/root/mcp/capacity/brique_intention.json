@@ -1,0 +1,147 @@
+{
+  "brique": {
+    "cap_name": "brique.intention",
+    "kind": "compiled",
+    "wrapper": "mcp_server_go",
+    "rel_ctx": "",
+    "lang": "go"
+  },
+  "objective": {
+    "name": "brique.intention",
+    "description": "Extract a Brique intention from an MCP message received from the LLM, forward it to the Brique engine, and wrap the response into an MCP-compliant message returned to the LLM."
+  },
+  "functional": {
+    "#root": {
+      "role": "Transform an MCP message carrying a Brique intention into an MCP response carrying the Brique engine result.",
+      "inputs": {
+        "params": {
+          "mcp_message": {
+            "type": "object"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "mcp_response": {
+            "type": "object"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "An MCP message carrying a Brique intention becomes an MCP response carrying the Brique engine result.",
+        "invariants": [
+          "The intention is forwarded to Brique without modification.",
+          "The Brique response semantic content is preserved without alteration in the MCP wrapper."
+        ],
+        "success": [
+          "The LLM receives a valid MCP response containing the Brique engine response payload."
+        ],
+        "failure": [
+          "The capacity fails when the MCP message does not carry a valid Brique intention.",
+          "The capacity fails when the Brique engine returns an error or times out."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#extract_intention": {
+                "role": "Extract the Brique intention payload from the incoming MCP message.",
+                "inputs": {
+                  "params": {
+                    "mcp_message": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "intention": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A raw MCP message becomes an explicit Brique intention payload ready for dispatch.",
+                  "invariants": [
+                    "The intention payload is extracted without modification."
+                  ],
+                  "success": [
+                    "intention contains a valid non-empty Brique intention object."
+                  ],
+                  "failure": [
+                    "The section fails when the MCP message does not contain a Brique intention payload."
+                  ]
+                }
+              }
+            },
+            {
+              "#dispatch": {
+                "role": "Forward the extracted intention to the Brique engine and await the response.",
+                "inputs": {
+                  "params": {
+                    "intention": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "brique_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A Brique intention becomes an explicit Brique engine response after synchronous dispatch.",
+                  "invariants": [
+                    "The intention is transmitted to Brique without modification."
+                  ],
+                  "success": [
+                    "brique_response contains the response payload returned by the Brique engine."
+                  ],
+                  "failure": [
+                    "The section fails when Brique returns an error or the request times out."
+                  ]
+                }
+              }
+            },
+            {
+              "#wrap_response": {
+                "role": "Wrap the Brique engine response into an MCP-compliant message to be returned to the LLM.",
+                "inputs": {
+                  "params": {
+                    "brique_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "mcp_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A raw Brique engine response becomes a well-formed MCP response message ready to be returned to the LLM.",
+                  "invariants": [
+                    "The Brique response semantic content is preserved without alteration."
+                  ],
+                  "success": [
+                    "mcp_response conforms to the MCP protocol response structure.",
+                    "mcp_response carries the full Brique engine response payload."
+                  ],
+                  "failure": [
+                    "The section fails when the Brique response is empty or malformed."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

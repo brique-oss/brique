@@ -1,0 +1,34 @@
+{
+  "_comment": "Physical matter used to validate no-wrapper N3 branches.",
+  "brique": {
+    "kind": "matter",
+    "revision": 1,
+    "substance_mode": "physical",
+    "wrapper_name": ""
+  },
+  "objective": {
+    "name": "m_physical",
+    "description": "Physical matter"
+  },
+  "functional": {
+    "external_retrieval": {
+      "physical": {
+        "kind": "sensor",
+        "address": "/dev/null",
+        "protocol": "custom",
+        "sampling": {
+          "mode": "pull",
+          "interval_ms": 1000
+        },
+        "decoder": {
+          "kind": "raw",
+          "config": {}
+        }
+      }
+    }
+  },
+  "subjective": {
+    "intent": "sandbox physical matter",
+    "impression": ""
+  }
+}

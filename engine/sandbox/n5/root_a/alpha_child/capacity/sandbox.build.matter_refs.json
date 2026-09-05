@@ -1,0 +1,59 @@
+{
+  "brique": {
+    "cap_name": "sandbox.build.matter_refs",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.build.matter_refs",
+    "description": "Build concrete matter refs for later DSL @matter instantiation."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return local and optional remote matter refs as plain strings that a later DSL step can instantiate into @matter bindings.",
+      "inputs": {
+        "params": {
+          "local_matter_id": {
+            "type": "string"
+          },
+          "remote_matter_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "local_ref": {
+            "type": "string"
+          },
+          "remote_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Simple ids become explicit matter refs reusable in later DSL @matter bindings.",
+        "invariants": [
+          "local_ref is always derived from the current wrapper ctx_id plus the normalized local_matter_id.",
+          "remote_ref is returned only when a non-empty remote_matter_ref is supplied.",
+          "The capability constructs string refs only; it does not validate remote reachability or read matter content."
+        ],
+        "success": [
+          "On success, sandbox.build.matter_refs returns a local_ref and optionally a remote_ref.",
+          "The returned refs are intended to be re-instantiated later into @matter bindings by DSL or wrapper logic."
+        ],
+        "failure": [
+          "sandbox.build.matter_refs has no contract-level validation failure for missing params because defaults are applied locally.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This is a helper for mixed local/remote matter binding scenarios in N7.",
+          "The local_ref format is intentionally simple and wrapper-context-relative."
+        ]
+      }
+    }
+  }
+}

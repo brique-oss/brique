@@ -1,0 +1,67 @@
+{
+  "brique": {
+    "cap_name": "sandbox.remote.echo",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.remote.echo",
+    "description": "Wrapper outbound call toward a remote wrapper-backed capacity"
+  },
+  "functional": {
+    "#root": {
+      "role": "Emit an outbound cross-instance wrapper call and return the remote echo payload.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": {
+            "type": "boolean"
+          },
+          "remote_status": {
+            "type": "string"
+          },
+          "remote_from": {
+            "type": "object"
+          },
+          "remote_payload": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "external_route": "The wrapper emits an outbound cross-instance capacity call."
+      },
+      "transformation_contract": {
+        "morphing": "A local wrapper request becomes a remote wrapper-backed response returned through the inter-instance path.",
+        "invariants": [
+          "The wrapper emits exactly one outbound sandbox.echo user call to the requested remote context.",
+          "The returned payload reflects remote response metadata instead of flattening the remote payload into local fields.",
+          "ok is hard-coded to true by the wrapper when the outbound call itself returns."
+        ],
+        "success": [
+          "On success, sandbox.remote.echo returns ok, remote_status, remote_from, and remote_payload.",
+          "remote_payload contains the payload returned by the remote wrapper-backed sandbox.echo capacity."
+        ],
+        "failure": [
+          "The capability fails if the outbound inter-instance emit_and_wait call cannot complete.",
+          "Missing message is normalized to an empty string instead of causing a contract failure."
+        ],
+        "notes": [
+          "This is a wrapper-side remote-call oracle used in inter-instance tests.",
+          "The contract intentionally exposes the remote response envelope to test routing fidelity."
+        ]
+      }
+    }
+  }
+}

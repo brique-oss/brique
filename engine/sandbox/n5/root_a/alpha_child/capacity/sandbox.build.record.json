@@ -1,0 +1,60 @@
+{
+  "brique": {
+    "cap_name": "sandbox.build.record",
+    "kind": "interpreted",
+    "wrapper": "sandbox_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "sandbox.build.record",
+    "description": "Build a structured record payload from simple params."
+  },
+  "functional": {
+    "#root": {
+      "role": "Turn simple string params into a structured record object reusable by DSL flows.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "record": {
+            "type": "object",
+            "_comment": "The record object contains message, target_id, composed, ctx_id, and wrapper_name."
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Simple params become a structured record payload suitable for later DSL parameter construction.",
+        "invariants": [
+          "message, target_id, and prefix are coerced to trimmed strings before record construction.",
+          "The output record always includes ctx_id and wrapper_name from the active wrapper runtime.",
+          "The composed field is deterministically built as prefix:message."
+        ],
+        "success": [
+          "On success, sandbox.build.record returns a single record object ready for later DSL field extraction.",
+          "The record is self-contained and does not require additional wrapper state to interpret."
+        ],
+        "failure": [
+          "sandbox.build.record has no contract-level validation failure for missing params because absent values are normalized to empty or default strings.",
+          "The capability only fails if the underlying wrapper runtime cannot execute."
+        ],
+        "notes": [
+          "This capability is a pure payload shaper used by N7 aggregation scenarios.",
+          "The output is intended to be dereferenced by DSL runtime paths such as $alias.payload.record.message."
+        ]
+      }
+    }
+  }
+}

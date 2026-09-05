@@ -1,0 +1,129 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.switch.remote.meaning",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.switch.remote.meaning",
+    "description": "Use remote meaning.query and a DSL switch to choose the terminal route."
+  },
+  "functional": {
+    "#root": {
+      "role": "Refresh the remote meaning projection, query one remote element, then use >switch on the selected remote name to choose the terminal wrapper route.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {
+          "result": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "remote_projection_refresh": "The remote meaning projection is refreshed before selection.",
+        "remote_projection_query": "One remote projected element is selected.",
+        "switch_terminal_route": "The terminal route is chosen by a DSL switch over the selected remote value."
+      },
+      "transformation_contract": {
+        "morphing": "A local DSL request becomes one branch-specific terminal response after a remote projected discovery feeds a DSL switch.",
+        "invariants": [
+          "The flow refreshes and queries the remote projection before evaluating the DSL switch.",
+          "The switch discriminator is remote_query.payload.result.0.name.",
+          "Exactly one terminal route is selected between the explicit case branch and the default branch."
+        ],
+        "success": [
+          "On success, the terminal payload is the payload returned by the branch selected by the DSL switch.",
+          "When the selected remote name is sandbox.echo, the terminal route is the remote wrapper branch."
+        ],
+        "failure": [
+          "The flow fails if the remote rebuild, remote query, or selected terminal route cannot complete.",
+          "Inter-instance reflective routing errors close the scenario fail-closed."
+        ],
+        "notes": [
+          "This scenario is the primary N7 switch oracle over remote projected meaning.",
+          "It complements the if-based branch scenarios by exercising the switch/default runtime path."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.rebuild",
+                "to_type": "reflexive",
+                "with": {
+                  "mode": "full"
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_rebuild"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "@ext_REMOTE_PUBKEY:/root-b/meaning.query",
+                "to_type": "reflexive",
+                "with": {
+                  "ctx_id": "/root/beta_child",
+                  "element_kind": "capacity",
+                  "filters": [
+                    {
+                      "path": "objective.name",
+                      "op": "EQ",
+                      "value": "sandbox.echo"
+                    }
+                  ]
+                },
+                "timeout": {
+                  "ms": 1200
+                },
+                "retry": {
+                  "max": 3,
+                  "delay_ms": 25
+                },
+                "as": "remote_query"
+              }
+            },
+            {
+              ">switch": {
+                "on": "$remote_query.payload.result.0.name",
+                "cases": [
+                  {
+                    "value": "sandbox.echo",
+                    ">then": {
+                      "invoke": {
+                        "@capacity": "@ext_REMOTE_PUBKEY:/beta-child/sandbox.echo",
+                        "with": {
+                          "message": "switch-remote"
+                        },
+                        "as": "switch_result"
+                      }
+                    }
+                  }
+                ],
+                ">default": {
+                  "invoke": {
+                    "@capacity": "/root/alpha_child/sandbox.echo",
+                    "with": {
+                      "message": "switch-local"
+                    },
+                    "as": "switch_result"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

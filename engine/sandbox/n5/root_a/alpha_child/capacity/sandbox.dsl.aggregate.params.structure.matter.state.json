@@ -1,0 +1,132 @@
+{
+  "brique": {
+    "cap_name": "sandbox.dsl.aggregate.params.structure.matter.state",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "sandbox.dsl.aggregate.params.structure.matter.state",
+    "description": "Aggregate final params from one structure, one matter, and one read.state response."
+  },
+  "functional": {
+    "#root": {
+      "role": "Create and read one local structure, read one local matter and one local reflexive state, then synthesize final wrapper params from those three sources.",
+      "inputs": {
+        "params": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "received_params": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {
+        "local_structure_materialization": "One local structure is created and read.",
+        "local_matter_read": "One local matter is read.",
+        "local_reflexive_state": "One local read.state is consumed."
+      },
+      "transformation_contract": {
+        "morphing": "A label becomes one final wrapper payload after structure, matter, and state data are combined into synthesized params.",
+        "invariants": [
+          "The terminal wrapper call receives label from the root input, structure_title from structure.read, matter_message from matter.read, and context_id from read.state.",
+          "The flow reads the committed structure after structure.create and does not derive final params from the create response alone."
+        ],
+        "success": [
+          "The terminal payload exposes received_params.label, received_params.structure_title, received_params.matter_message, and received_params.context_id.",
+          "received_params.context_id matches the local context returned by read.state."
+        ],
+        "failure": [
+          "The flow fails if structure.create, structure.read, matter.read, or read.state fails before the terminal wrapper call.",
+          "The flow fails if the final wrapper cannot consume the synthesized params."
+        ],
+        "notes": [
+          "This scenario is used by N7 to validate mixed aggregation from structure, matter, and reflexive state sources in one DSL flow.",
+          "The local structure is created only as test data for the aggregation chain; the terminal result is still wrapper-produced."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/structure.create",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "s_n7_aggregate",
+                  "structure": {
+                    "objective": {
+                      "name": "s_n7_aggregate"
+                    },
+                    "functional": {
+                      "title": "$input.label",
+                      "kind": "playlist"
+                    },
+                    "brique": {
+                      "kind": "structure"
+                    }
+                  }
+                },
+                "as": "created_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/structure.read",
+                "to_type": "matter",
+                "with": {
+                  "structure_id": "$created_struct.payload.structure_id",
+                  "want_meaning": false,
+                  "want_functional": true,
+                  "want_brique": false
+                },
+                "as": "read_struct"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/matter.read",
+                "to_type": "matter",
+                "with": {
+                  "matter_id": "m_chain_local",
+                  "read_mode": "functional|brique"
+                },
+                "as": "read_matter"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/read.state",
+                "to_type": "reflexive",
+                "with": {
+                  "include": [
+                    "context"
+                  ]
+                },
+                "as": "read_state"
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/alpha_child/sandbox.inspect.inputs",
+                "with": {
+                  "label": "$input.label",
+                  "structure_title": "$read_struct.payload.functional.title",
+                  "matter_message": "$read_matter.payload.functional.message",
+                  "context_id": "$read_state.payload.context.context_id"
+                },
+                "as": "final_result"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
