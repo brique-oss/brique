@@ -181,7 +181,7 @@ const CONTRACTS: CapabilityContract[] = [
   ),
   contract("matter.subscribe", ["matter_id", "sub_id"], ["ok", "matter_id", "sub_id", "substance_mode"]),
   contract("matter.unsubscribe", ["matter_id", "sub_id"], ["ok", "matter_id", "sub_id", "removed", "substance_mode"]),
-  contract("matter.write", ["matter_id", "meaning", "functional", "brique", "semantic_patch", "data", "http_data"], ["ok", "matter_id", "revision", "http_data"]),
+  contract("matter.write", ["matter_id", "expected_revision", "meaning", "functional", "brique", "semantic_patch", "data", "http_data"], ["ok", "matter_id", "revision", "http_data"]),
   contract("structure.clone", ["source_structure_id", "target_structure_id", "destination_ctx_id"], ["ok", "source_structure_id", "target_structure_id", "revision"]),
   contract("structure.create", ["structure_id", "structure"], ["ok", "structure_id", "revision"]),
   contract("structure.delete", ["structure_id"], ["ok", "structure_id"]),

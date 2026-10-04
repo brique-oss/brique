@@ -71,6 +71,10 @@ func TestMatterLoop_N1_MLO_01_Helpers(t *testing.T) {
 	if r1 <= 0 || r2 <= 0 || r2 < r1 {
 		t.Fatalf("unexpected rev sequence: %d -> %d", r1, r2)
 	}
+	future := revNow() + int64(time.Hour)
+	if got, err := nextRevision(future); err != nil || got != future+1 {
+		t.Fatalf("nextRevision must progress beyond a future/current revision: got %d want %d", got, future+1)
+	}
 
 	doc := map[string]any{}
 	setBriqueRev(doc, 42)

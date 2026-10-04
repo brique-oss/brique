@@ -136,17 +136,19 @@ function projectSectionNode(
   });
   addChild(builder, sectionId, contractId, "contract");
 
+  // A named section can be used as a contract-only step inside another
+  // section's resolution. Do not manufacture an empty resolution for it:
+  // the UI would otherwise claim that the descriptor contains an empty
+  // block even though no `resolution` property was supplied at all.
+  if (!isRecord(sectionValue.resolution)) return sectionId;
+
   const resolutionId = addNode(builder, {
     path: `${sectionPath}/Resolution`,
     type: "resolution",
     parentId: sectionId,
-    data: isRecord(sectionValue.resolution)
-      ? { resolution: sectionValue.resolution }
-      : {},
+    data: { resolution: sectionValue.resolution },
   });
   addChild(builder, sectionId, resolutionId, "resolution");
-
-  if (!isRecord(sectionValue.resolution)) return sectionId;
 
   const entry = projectFlowEntry(
     builder,

@@ -36,6 +36,10 @@ import {
   type ExecuteInput,
   type PulseBridge,
 } from "../substrate.ts";
+import {
+  extractWindowSpecsFromSchema,
+  schemaGabaritFromFunctional,
+} from "../../spaces/Projection/Semantic/SchemaImport/schemaImport.ts";
 
 const key: CanonicalKey = {
   context: "/root",
@@ -336,6 +340,69 @@ test("projection dispatch exposes the three derived transform families", () => {
   );
 });
 
+test("flow projection keeps real resolutions and omits phantom ones", () => {
+  const model = transformProjection({
+    key: {
+      context: "/root/llm",
+      kind: "read.meaning",
+      id: meaningElementKeyId("capacity", "infer"),
+    },
+    kind: "flow",
+    raw: {
+      functional: {
+        "#root": {
+          role: "Run inference",
+          resolution: {
+            ">sequence": {
+              items: [
+                {
+                  "#validate_request": {
+                    role: "Validate the request",
+                    inputs: { params: { request: { type: "object" } } },
+                  },
+                },
+                {
+                  "#execute_inference": {
+                    role: "Execute the request",
+                    outputs: { payload: { response: { type: "object" } } },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const root = model.nodesById[model.rootId];
+  const rootSection = model.nodesById[
+    root.children.find((child) => child.role === "section")!.id
+  ];
+  const rootResolution = model.nodesById[
+    rootSection.children.find((child) => child.role === "resolution")!.id
+  ];
+  const sequence = model.nodesById[
+    rootResolution.children.find((child) => child.role === "entry")!.id
+  ];
+  const firstStep = model.nodesById[
+    sequence.children.find((child) => child.role === "entry")!.id
+  ];
+  const secondStep = model.nodesById[firstStep.nextId!];
+
+  assert.equal(sequence.subtype, "sequence");
+  assert.equal(firstStep.type, "section");
+  assert.equal(secondStep.type, "section");
+  assert.equal(
+    firstStep.children.some((child) => child.role === "resolution"),
+    false
+  );
+  assert.equal(
+    secondStep.children.some((child) => child.role === "resolution"),
+    false
+  );
+});
+
 test("mutate executes exactly one intention and retains no refresh contract", async () => {
   const bridge = responseBridge(() => ({
     status: "ok",
@@ -448,6 +515,7 @@ test("targeted read.meaning resolves the requested element descriptor", () => {
         element_name: "counter",
         sections: ["brique", "objective", "subjective", "functional"],
         include_resolution: true,
+        detail: "full",
       }],
     },
   });
@@ -581,4 +649,24 @@ test("CapabilityClient executes and parses typed capability responses", async ()
   assert.equal(result.ok, true);
   assert.deepEqual(result.payload, { matter_id: "seed", exist: true });
   assert.equal(bridge.calls.length, 1);
+});
+
+test("schema import accepts canonical direct gabarits and legacy functional.fields", () => {
+  const canonical = {
+    _comment: "documentation",
+    continuity: {
+      status: ["running", "paused"],
+      messages: { schema_ref: "message", cardinality: "many" },
+    },
+  };
+  assert.equal(schemaGabaritFromFunctional(canonical), canonical);
+  assert.deepEqual(extractWindowSpecsFromSchema(schemaGabaritFromFunctional(canonical)), [
+    { path: ["continuity", "status"], defaultKeys: ["running", "paused"] },
+  ]);
+
+  const legacyFields = { status: ["ready"] };
+  assert.equal(schemaGabaritFromFunctional({ fields: legacyFields, rules: {} }), legacyFields);
+  assert.deepEqual(extractWindowSpecsFromSchema(legacyFields), [
+    { path: ["status"], defaultKeys: ["ready"] },
+  ]);
 });

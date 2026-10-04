@@ -1052,7 +1052,7 @@ func readStringParam(m map[string]any, key string) string {
 // ensureMatterMinimalSections
 //
 // Functional role (Brique DSL):
-// - ensure matter document contains minimal `brique` and `functional` object sections.
+// - ensure matter document contains the four canonical Brique object sections.
 //
 //
 // Expected Message Fields:
@@ -1086,7 +1086,8 @@ func readStringParam(m map[string]any, key string) string {
 //   - none.
 //
 // State/Storage Effects:
-// - mutates the provided matter map by creating missing `brique` and `functional` sections.
+// - mutates the provided matter map by creating missing `brique`, `objective`,
+//   `subjective`, and `functional` sections.
 //
 // Inputs:
 //
@@ -1106,11 +1107,15 @@ func ensureMatterMinimalSections(m map[string]any) {
 	if m == nil {
 		return
 	}
-	if _, ok := m[circulation.KeyBrique]; !ok {
-		m[circulation.KeyBrique] = map[string]any{}
-	}
-	if _, ok := m[circulation.KeyFunctional]; !ok {
-		m[circulation.KeyFunctional] = map[string]any{}
+	for _, section := range []string{
+		circulation.KeyBrique,
+		circulation.KeyObjective,
+		circulation.KeySubjective,
+		circulation.KeyFunctional,
+	} {
+		if _, ok := m[section]; !ok {
+			m[section] = map[string]any{}
+		}
 	}
 }
 

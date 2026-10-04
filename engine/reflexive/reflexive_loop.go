@@ -317,6 +317,11 @@ type ReflexiveLoop struct {
 	// bounded handler admission (inbox never blocks)
 	handlerSlots chan struct{}
 
+	// Descriptor edits are serialized per resolved file so read-modify-write
+	// operations cannot overwrite another successful concurrent patch.
+	editLocksMu sync.Mutex
+	editLocks   map[string]*sync.Mutex
+
 	// lifecycle
 	stateMu sync.RWMutex
 	state   shared.FamilyState
@@ -393,6 +398,7 @@ func NewReflexiveLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 		caps: buildCapTable(),
 
 		handlerSlots: make(chan struct{}, defaultMaxHandlers),
+		editLocks:    make(map[string]*sync.Mutex),
 
 		state: shared.FamilyInitializing,
 		done:  make(chan struct{}),

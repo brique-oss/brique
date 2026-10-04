@@ -4265,7 +4265,7 @@ func parseVocabularyValuePatchOps(items []any) []vocabularyValuePatchOperation {
 		if m == nil {
 			continue
 		}
-		path := parseSemanticStringPath(m[circulation.KeyPath])
+		path := parseVocabularyStringPath(m[circulation.KeyPath])
 		if len(path) == 0 {
 			continue
 		}
@@ -4274,6 +4274,30 @@ func parseVocabularyValuePatchOps(items []any) []vocabularyValuePatchOperation {
 			continue
 		}
 		out = append(out, vocabularyValuePatchOperation{Path: path, Value: value})
+	}
+	return out
+}
+
+func parseVocabularyStringPath(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		if strings, stringsOK := value.([]string); stringsOK {
+			items = make([]any, 0, len(strings))
+			for _, item := range strings {
+				items = append(items, item)
+			}
+		} else {
+			return nil
+		}
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		segment, ok := item.(string)
+		segment = strings.TrimSpace(segment)
+		if !ok || segment == "" {
+			return nil
+		}
+		out = append(out, segment)
 	}
 	return out
 }
@@ -4319,7 +4343,7 @@ func removeVocabularyLeafValue(root map[string]any, path []string, value any) {
 	items := asAnySlice(cur[leaf])
 	next := make([]any, 0, len(items))
 	for _, item := range items {
-		if !semanticValuesEqual(item, value) {
+		if !shared.SemanticValuesEqual(item, value) {
 			next = append(next, item)
 		}
 	}
@@ -4328,7 +4352,17 @@ func removeVocabularyLeafValue(root map[string]any, path []string, value any) {
 	} else {
 		cur[leaf] = next
 	}
-	pruneEmptySemanticParents(parents, keys)
+	pruneEmptyVocabularyParents(parents, keys)
+}
+
+func pruneEmptyVocabularyParents(parents []map[string]any, keys []string) {
+	for index := len(parents) - 1; index >= 0; index-- {
+		child, _ := parents[index][keys[index]].(map[string]any)
+		if len(child) != 0 {
+			return
+		}
+		delete(parents[index], keys[index])
+	}
 }
 
 func addVocabularyLeafValue(root map[string]any, path []string, value any) {
@@ -4347,7 +4381,7 @@ func addVocabularyLeafValue(root map[string]any, path []string, value any) {
 	leaf := path[len(path)-1]
 	items := asAnySlice(cur[leaf])
 	for _, item := range items {
-		if semanticValuesEqual(item, value) {
+		if shared.SemanticValuesEqual(item, value) {
 			cur[leaf] = items
 			return
 		}

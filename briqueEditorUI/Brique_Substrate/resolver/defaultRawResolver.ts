@@ -162,7 +162,9 @@ function defaultParamsForCapability(
           ? [{
               ...element,
               sections: ["brique", "objective", "subjective", "functional"],
-              ...(element.element_kind === "capacity" ? { include_resolution: true } : {}),
+              ...(element.element_kind === "capacity"
+                ? { include_resolution: true, detail: "full" }
+                : {}),
             }]
           : undefined,
       });

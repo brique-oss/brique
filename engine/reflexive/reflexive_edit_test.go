@@ -389,6 +389,25 @@ func TestReflexiveEdit_N1_RED_05_CapEditGetElementTemplate(t *testing.T) {
 	if m.Response.Payload[circulation.KeyElementKind] != circulation.ValueContext || m.Response.Payload[circulation.KeyTemplate] == nil {
 		t.Fatalf("template payload mismatch: %#v", m.Response.Payload)
 	}
+
+	l.capEditGetElementTemplate(circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: "i-tpl-schema",
+			Params:      map[string]any{circulation.KeyItemType: circulation.ValueSchema},
+		},
+	})
+	m = recvReflexiveMsg(t, commCh, "template schema")
+	if m.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("template schema should return ok response: %#v", m)
+	}
+	schemaTemplate, _ := m.Response.Payload[circulation.KeyTemplate].(map[string]any)
+	functional, _ := schemaTemplate[circulation.KeyFunctional].(map[string]any)
+	referenceExample, _ := functional["_schema_reference_example"].(map[string]any)
+	collection, _ := referenceExample["<local_collection_field>"].(map[string]any)
+	if collection["schema_ref"] != "<schema_name>" || collection["cardinality"] != "many" {
+		t.Fatalf("schema template must expose persistent schema_ref/cardinality semantics: %#v", schemaTemplate)
+	}
 }
 
 // A malformed content_json (a trailing comma, in this case) previously

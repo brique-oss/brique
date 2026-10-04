@@ -199,17 +199,11 @@ function BoxView({ box, ...callbacks }: { box: FlowLayoutBox } & Callbacks) {
 
   // Contract
   if (box.kind === "contract") {
-    const contractKey = `${box.node?.id}:contract`;
-    const expanded = (callbacks.sectionExpansions[contractKey] ?? "collapsed") !== "collapsed";
     return (
       <div style={{ ...styles.leaf, ...leafStyle("contract") }}>
         <ContractContent
           node={box.node}
-          expanded={expanded}
           briqueRefCallbacks={callbacks.briqueRefCallbacks}
-          onToggle={() =>
-            callbacks.onSectionExpansionChange(contractKey, expanded ? "collapsed" : "oneLevel")
-          }
         />
       </div>
     );
@@ -423,52 +417,25 @@ function ActionContent({
 
 function ContractContent({
   node,
-  expanded,
   briqueRefCallbacks,
-  onToggle,
 }: {
   node: FlowNode | undefined;
-  expanded: boolean;
   briqueRefCallbacks?: FlowBriqueRefCallbacks;
-  onToggle: () => void;
 }) {
   const sectionValue = readObject(node?.data.entries[0]?.value);
-  const role = readString(flowDataGet(sectionValue, "role"));
-  const transformation = readObject(flowDataGet(sectionValue, "transformation_contract"));
-  const morphing = readString(flowDataGet(transformation, "morphing"));
 
-  if (expanded && sectionValue) {
-    // Expanded: full DSL view, no collapsed header
-    return (
-      <div style={{ width: CONTRACT_MAX_WIDTH, padding: "10px 14px", boxSizing: "border-box" }}>
-        <button onClick={onToggle} style={{ ...styles.sectionIconButton, marginBottom: 10 }} type="button" title="Collapse">
-          ▼
-        </button>
+  return (
+    <div style={{ width: CONTRACT_MAX_WIDTH, padding: "10px 14px", boxSizing: "border-box" }}>
+      <div style={{ ...styles.sectionHeader, marginBottom: sectionValue ? 10 : 0 }}>
+        <span style={{ fontSize: 11, color: "#7dd3fc", fontWeight: 500 }}>contract</span>
+      </div>
+      {sectionValue && (
         <div style={{ display: "grid", gap: 6 }}>
           {sectionValue.entries
             .filter(({ key }) => key !== "resolution")
             .map(({ key, value }) => (
               <DslEntry key={key} entryKey={key} value={value} depth={0} briqueRefCallbacks={briqueRefCallbacks} />
             ))}
-        </div>
-      </div>
-    );
-  }
-
-  // Collapsed: header only (role + morphing) — same as section collapsed header
-  return (
-    <div style={{ width: CONTRACT_MAX_WIDTH, padding: "10px 14px", display: "grid", gap: 6, boxSizing: "border-box" }}>
-      <div style={styles.sectionHeader}>
-        <button onClick={onToggle} style={styles.sectionIconButton} type="button" title="Expand">
-          ▶
-        </button>
-        <span style={{ fontSize: 11, color: "#7dd3fc", fontWeight: 500 }}>contract</span>
-      </div>
-      {role && <div style={{ ...styles.sectionRole, whiteSpace: "normal", wordBreak: "break-word" }}>{role}</div>}
-      {morphing && (
-        <div style={{ ...styles.sectionMorphing, whiteSpace: "normal", wordBreak: "break-word" }}>
-          <span style={styles.sectionMetaLabel}>Morphing</span>
-          {morphing}
         </div>
       )}
     </div>

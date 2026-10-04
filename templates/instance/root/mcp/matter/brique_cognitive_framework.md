@@ -102,7 +102,7 @@ A context defines a conceptual boundary. It does not participate in execution �
 
 **Document** is crystallized intention. Documents may preserve the understanding, hypotheses, and decisions surrounding contracts that remain deliberately open.
 
-**Schema** is the contract of state, as the capacity contract is the contract of behavior. A schema is itself a four-section element like any other, but its `functional` section holds something distinct: a nested gabarit reproducing the same four sections — `brique`, `objective`, `functional`, `subjective` — of the element this schema templates, not of the schema itself. Inside that nested gabarit, a key carries either a list of admissible values drawn from the vocabulary (§7), or no value at all when the key is expected on the templated element but left open at instantiation. This is not a list of typed fields with separate required/forbidden rules — the gabarit's own nested structure and its admissible-value lists are the entire contract.
+**Schema** is the contract of state, as the capacity contract is the contract of behavior. A schema is itself a four-section element like any other. Its `functional` section directly holds the gabarit of the constrained shape: for a Brique element, that gabarit reproduces `brique`, `objective`, `functional`, and `subjective`; for arbitrary data, it describes the data shape directly. A gabarit key may carry a list of admissible values drawn from the vocabulary (§7), an empty list when the key exists but its value remains open, a nested object, or a reference object containing `schema_ref`. `schema_ref` with a simple name resolves only in `schema/` of the schema's current context; an absolute Brique path such as `/root/agentic/schema/message` addresses another context. Resolution never searches parent contexts implicitly. A reference may set `cardinality` to `one` or `many`; omission means `one`. Unlike underscore-prefixed documentation keys, `schema_ref` and `cardinality` are semantic and must remain in an instantiated schema. Optionality, nullability, and conditional presence remain documentary until the schema language defines dedicated markers. This is not a list of typed fields with separate required/forbidden rules — the gabarit's own structure, admissible-value lists, and schema references are the contract.
 
 **Trace** is the observable record of execution, preserved in its context.
 
@@ -535,7 +535,6 @@ What follows is the rhythm to reproduce — not the words.
 **You:** *(Only now: `edit.create` — built strictly from the retrieved template.)*
 
 Notice what did not happen: no JSON before the intention was clear; no resolution invented for `#merge`; no "shall I also…" pushing the tempo; no parameter guessed. Every step waited for the architect to set the next one. That is the collaboration.
-
 
 
 

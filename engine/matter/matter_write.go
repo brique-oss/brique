@@ -33,8 +33,10 @@ package matter
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,6 +165,52 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 		return
 	}
 
+	// Resolve the current revision while holding the per-matter lock. The
+	// runtime catalogue is the concurrency authority; the descriptor is the
+	// fallback for legacy entries whose catalogue revision is absent.
+	descriptorRev := int64(0)
+	if currentBrique, _ := curMatterObj[circulation.KeyBrique].(map[string]any); currentBrique != nil {
+		descriptorRev = shared.AnyToInt64(currentBrique[circulation.KeyRevision])
+	}
+	currentRev := shared.AnyToInt64(entry.Brique[circulation.KeyRevision])
+	if currentRev <= 0 {
+		currentRev = descriptorRev
+	}
+	// Progress beyond both representations. This also protects against a stale
+	// or numerically rounded descriptor/catalogue projection.
+	revisionFloor := currentRev
+	if descriptorRev > revisionFloor {
+		revisionFloor = descriptorRev
+	}
+
+	// Optional optimistic-concurrency guard. The check deliberately happens
+	// after acquiring the entity lock so two writers using the same revision
+	// cannot both commit.
+	if expectedRaw, supplied := params[circulation.KeyExpectedRevision]; supplied {
+		expectedRev, valid := parsePositiveRevision(expectedRaw)
+		if !valid {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{
+					circulation.KeyReason:           circulation.ValueReasonInvalidRequest,
+					circulation.KeyMatterID:         matterID,
+					circulation.KeyExpectedRevision: expectedRaw,
+				},
+				"expected_revision must be a positive integer or base-10 integer string"))
+			return
+		}
+		if expectedRev != currentRev {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{
+					circulation.KeyReason:           circulation.ValueReasonRevisionMismatch,
+					circulation.KeyMatterID:         matterID,
+					circulation.KeyExpectedRevision: expectedRev,
+					circulation.KeyCurrentRevision:  currentRev,
+				},
+				"revision mismatch"))
+			return
+		}
+	}
+
 	// Apply metadata patch (minimal merge semantics).
 	var newMatterObj map[string]any
 	newMatterObj = deepCloneMap(curMatterObj)
@@ -279,7 +327,17 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	// If the commit fails, we don't expose the rev. After successful commit(s), we return it.
 	var stagedRev int64
 	if stageMatterJSON {
-		stagedRev = revNow()
+		stagedRev, err = nextRevision(revisionFloor)
+		if err != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{
+					circulation.KeyReason:    circulation.ValueReasonAlgoFailure,
+					circulation.KeyMatterID:  matterID,
+					circulation.KeyErrorText: err.Error(),
+				},
+				"failed to generate a strictly increasing revision"))
+			return
+		}
 		setBriqueRev(newMatterObj, stagedRev)
 		b, err := json.MarshalIndent(newMatterObj, "", "  ")
 		if err != nil {
@@ -422,6 +480,36 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	if mode == circulation.ValueModeBrique {
 		l.notifyBriqueMatterWritten(matterID, newRev, in.Correlation.RootIntentionID)
 	}
+}
+
+func parsePositiveRevision(v any) (int64, bool) {
+	var revision int64
+	switch typed := v.(type) {
+	case int64:
+		revision = typed
+	case int:
+		revision = int64(typed)
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed != math.Trunc(typed) || typed >= float64(math.MaxInt64) {
+			return 0, false
+		}
+		revision = int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		revision = parsed
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		revision = parsed
+	default:
+		return 0, false
+	}
+	return revision, revision > 0
 }
 
 // finalizeWriteLeaseAfterUpload
@@ -712,6 +800,7 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 	}
 
 	// ---- apply patches ----
+	legacyOperations := make([]any, 0, len(patches))
 	for i, it := range patches {
 		pm, ok := it.(map[string]any)
 		if !ok || pm == nil {
@@ -721,11 +810,11 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 			return
 		}
 
-		pth := parseStringPath(pm["path"])
-		if len(pth) == 0 {
+		pth, ok := pm["path"]
+		if !ok || pth == nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, "index": i},
-				"patch.path must be a non-empty string array"))
+				"patch.path must be a non-empty array of string keys and integer indexes"))
 			return
 		}
 		val, ok := pm["value"]
@@ -736,9 +825,12 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 			return
 		}
 
-		if err := setAtPathStrict(doc, pth, val); err != nil {
+		legacyOperations = append(legacyOperations, map[string]any{"op": "set", "path": pth, "value": val})
+	}
+	if len(legacyOperations) > 0 {
+		if err := applySemanticPatch(doc, map[string]any{"operations": legacyOperations}); err != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPath, "index": i, "path": pth, circulation.KeyErrorText: err.Error()},
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPath, circulation.KeyErrorText: err.Error()},
 				"patch path invalid"))
 			return
 		}
@@ -1154,171 +1246,6 @@ func mergeMapRecursive(dst map[string]any, patch map[string]any) {
 	}
 }
 
-// parseStringPath
-//
-// Functional role (Brique DSL):
-// - normalize patch path value into trimmed string slice.
-//
-//
-// Expected Message Fields:
-// - none.
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - allocates a normalized output slice when path items are accepted.
-//
-// Inputs:
-//
-// - v any.
-//
-//
-// Outputs:
-//
-// - returns []string.
-//
-//
-// Contract:
-// - Unsupported path value types yield `nil`.
-//
-
-func parseStringPath(v any) []string {
-	switch t := v.(type) {
-	case []string:
-		out := make([]string, 0, len(t))
-		for _, s := range t {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, it := range t {
-			s, _ := it.(string)
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-// setAtPathStrict
-//
-// Functional role (Brique DSL):
-// - set one value at object path, creating missing object nodes but refusing to descend through non-object nodes.
-//
-//
-// Expected Message Fields:
-// - none.
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - mutates `doc` in place and may create missing intermediate object nodes.
-//
-// Inputs:
-//
-// - doc map[string]any, path []string, val any.
-//
-//
-// Outputs:
-//
-// - returns error.
-//
-//
-// Contract:
-// - Empty path or nil document is rejected with error.
-//
-
-func setAtPathStrict(doc map[string]any, path []string, val any) error {
-	if doc == nil {
-		return fmt.Errorf("nil doc")
-	}
-	if len(path) == 0 {
-		return fmt.Errorf("empty path")
-	}
-
-	cur := doc
-	for i := 0; i < len(path)-1; i++ {
-		k := path[i]
-		existing, ok := cur[k]
-		if !ok || existing == nil {
-			nxt := map[string]any{}
-			cur[k] = nxt
-			cur = nxt
-			continue
-		}
-		m, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("path segment %q is not an object", k)
-		}
-		cur = m
-	}
-	cur[path[len(path)-1]] = val
-	return nil
-}
-
-type semanticPatchOperation struct {
-	Path  []string
-	Value any
-}
-
 // semanticPatchRootSections lists the only matter.json root keys semantic_patch
 // may target. It exists to reject typos and business-data paths (e.g. a path
 // meant for substance/data, which semantic_patch can never reach) up front
@@ -1328,224 +1255,31 @@ var semanticPatchRootSections = map[string]bool{
 	circulation.KeyObjective:  true,
 	circulation.KeySubjective: true,
 	circulation.KeyFunctional: true,
-	circulation.KeyBrique:    true,
-}
-
-func validateSemanticPatchRoot(path []string) error {
-	root := path[0]
-	if !semanticPatchRootSections[root] {
-		return fmt.Errorf("path root %q is not a semantic_patch-addressable section (must be one of objective, subjective, functional, brique — semantic_patch never reaches matter substance/data)", root)
-	}
-	return nil
+	circulation.KeyBrique:     true,
 }
 
 func applySemanticPatch(doc map[string]any, raw any) error {
-	ops, err := parseSemanticPatch(raw)
+	patch, err := shared.ParseSemanticPatch(raw)
 	if err != nil {
 		return err
 	}
-	for _, op := range ops.add {
-		if err := validateSemanticPatchRoot(op.Path); err != nil {
-			return err
-		}
+	result, err := shared.ApplySemanticPatch(shared.NewSemanticPatchDocument(doc), patch, shared.SemanticPatchOptions{
+		AllowedRoots:   semanticPatchRootSections,
+		ProtectedRoots: semanticPatchRootSections,
+		CreateObjects:  true,
+	})
+	if err != nil {
+		return err
 	}
-	for _, op := range ops.remove {
-		if err := validateSemanticPatchRoot(op.Path); err != nil {
-			return err
-		}
-	}
-	for _, op := range ops.add {
-		if err := addSemanticTerminalValue(doc, op.Path, op.Value); err != nil {
-			return err
-		}
-	}
-	for _, op := range ops.remove {
-		if err := removeSemanticTerminalValue(doc, op.Path, op.Value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func parseSemanticPatch(raw any) (struct {
-	add    []semanticPatchOperation
-	remove []semanticPatchOperation
-}, error) {
-	var out struct {
-		add    []semanticPatchOperation
-		remove []semanticPatchOperation
-	}
-	patch, ok := raw.(map[string]any)
-	if !ok || patch == nil {
-		return out, fmt.Errorf("semantic_patch must be an object")
-	}
-	var err error
-	if out.add, err = parseSemanticPatchOpList(patch["add"], false); err != nil {
-		return out, fmt.Errorf("semantic_patch.add: %w", err)
-	}
-	if out.remove, err = parseSemanticPatchOpList(patch["remove"], false); err != nil {
-		return out, fmt.Errorf("semantic_patch.remove: %w", err)
-	}
-	if len(out.add) == 0 && len(out.remove) == 0 {
-		return out, fmt.Errorf("semantic_patch must include add or remove operations")
-	}
-	return out, nil
-}
-
-func parseSemanticPatchOpList(raw any, required bool) ([]semanticPatchOperation, error) {
-	if raw == nil {
-		if required {
-			return nil, fmt.Errorf("missing operations")
-		}
-		return nil, nil
-	}
-	items, ok := raw.([]any)
+	updated, ok := result.SemanticAny().(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("operations must be an array")
+		return fmt.Errorf("semantic patch result root is not an object")
 	}
-	out := make([]semanticPatchOperation, 0, len(items))
-	for i, item := range items {
-		op, ok := item.(map[string]any)
-		if !ok || op == nil {
-			return nil, fmt.Errorf("operation %d must be an object", i)
-		}
-		path := parseStringPath(op[circulation.KeyPath])
-		if len(path) == 0 {
-			return nil, fmt.Errorf("operation %d path must be a non-empty string array", i)
-		}
-		value, ok := op[circulation.KeyValue]
-		if !ok {
-			return nil, fmt.Errorf("operation %d value is required", i)
-		}
-		out = append(out, semanticPatchOperation{Path: path, Value: value})
+	for key := range doc {
+		delete(doc, key)
 	}
-	return out, nil
-}
-
-func addSemanticTerminalValue(doc map[string]any, path []string, value any) error {
-	if doc == nil {
-		return fmt.Errorf("nil doc")
+	for key, value := range updated {
+		doc[key] = value
 	}
-	if len(path) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	cur := doc
-	for i := 0; i < len(path)-1; i++ {
-		key := path[i]
-		existing, ok := cur[key]
-		if !ok || existing == nil {
-			next := map[string]any{}
-			cur[key] = next
-			cur = next
-			continue
-		}
-		next, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("path segment %q is not an object", key)
-		}
-		cur = next
-	}
-	leaf := path[len(path)-1]
-	existing, ok := cur[leaf]
-	if !ok || existing == nil {
-		cur[leaf] = []any{value}
-		return nil
-	}
-	switch x := existing.(type) {
-	case []any:
-		if semanticValueIndex(x, value) >= 0 {
-			return nil
-		}
-		cur[leaf] = append(x, value)
-		return nil
-	case map[string]any:
-		return fmt.Errorf("path %q is an object, not a terminal value", strings.Join(path, "."))
-	default:
-		if semanticValuesEqual(x, value) {
-			cur[leaf] = []any{x}
-			return nil
-		}
-		cur[leaf] = []any{x, value}
-		return nil
-	}
-}
-
-func removeSemanticTerminalValue(doc map[string]any, path []string, value any) error {
-	if doc == nil {
-		return fmt.Errorf("nil doc")
-	}
-	if len(path) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	parents := make([]map[string]any, 0, len(path))
-	keys := make([]string, 0, len(path))
-	cur := doc
-	for i := 0; i < len(path)-1; i++ {
-		key := path[i]
-		existing, ok := cur[key]
-		if !ok || existing == nil {
-			return nil
-		}
-		next, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("path segment %q is not an object", key)
-		}
-		parents = append(parents, cur)
-		keys = append(keys, key)
-		cur = next
-	}
-	leaf := path[len(path)-1]
-	existing, ok := cur[leaf]
-	if !ok || existing == nil {
-		return nil
-	}
-	switch x := existing.(type) {
-	case []any:
-		index := semanticValueIndex(x, value)
-		if index < 0 {
-			return nil
-		}
-		next := append(append([]any{}, x[:index]...), x[index+1:]...)
-		if len(next) == 0 {
-			delete(cur, leaf)
-		} else {
-			cur[leaf] = next
-		}
-	case map[string]any:
-		return fmt.Errorf("path %q is an object, not a terminal value", strings.Join(path, "."))
-	default:
-		if semanticValuesEqual(x, value) {
-			delete(cur, leaf)
-		}
-	}
-	pruneEmptySemanticParents(parents, keys)
 	return nil
-}
-
-func pruneEmptySemanticParents(parents []map[string]any, keys []string) {
-	for i := len(parents) - 1; i >= 0; i-- {
-		child, _ := parents[i][keys[i]].(map[string]any)
-		if len(child) != 0 {
-			return
-		}
-		delete(parents[i], keys[i])
-	}
-}
-
-func semanticValueIndex(items []any, value any) int {
-	for i, item := range items {
-		if semanticValuesEqual(item, value) {
-			return i
-		}
-	}
-	return -1
-}
-
-func semanticValuesEqual(a, b any) bool {
-	ab, aerr := json.Marshal(a)
-	bb, berr := json.Marshal(b)
-	if aerr == nil && berr == nil && string(ab) == string(bb) {
-		return true
-	}
-	return fmt.Sprint(a) == fmt.Sprint(b)
 }

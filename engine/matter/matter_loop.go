@@ -46,6 +46,7 @@ package matter
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,6 +197,19 @@ func shallowCopyMapAny(in map[string]any) map[string]any {
 // - Returns current Unix nanoseconds; callers persist it into `brique.rev` and runtime catalog entries.
 
 func revNow() int64 { return time.Now().UnixNano() }
+
+// nextRevision returns a revision that is strictly greater than current, even
+// when the wall clock has not advanced or has moved backwards.
+func nextRevision(current int64) (int64, error) {
+	if current == math.MaxInt64 {
+		return 0, fmt.Errorf("revision exhausted at max int64")
+	}
+	rev := revNow()
+	if rev <= current {
+		return current + 1, nil
+	}
+	return rev, nil
+}
 
 // setBriqueRev
 //

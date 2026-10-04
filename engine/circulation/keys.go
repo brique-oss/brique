@@ -111,7 +111,7 @@ const (
 	KeyFormat            = "format"
 	KeyData              = "data"
 	KeyHTTPData          = "http_data"
-	KeyBrique           = "brique"
+	KeyBrique            = "brique"
 	KeyVocabulary        = "vocabulary"
 	KeySections          = "sections"
 	KeyIncludeResolution = "include_resolution"
@@ -124,7 +124,7 @@ const (
 
 	KeyWantMeaning    = "want_meaning"
 	KeyWantFunctional = "want_functional"
-	KeyWantBrique    = "want_brique"
+	KeyWantBrique     = "want_brique"
 
 	KeyStructure         = "structure"
 	KeySourceStructureID = "source_structure_id"
@@ -137,8 +137,10 @@ const (
 	KeyStreamID = "stream_id"
 	KeyChunk    = "chunk"
 
-	KeyMode     = "mode"
-	KeyRevision = "revision"
+	KeyMode             = "mode"
+	KeyRevision         = "revision"
+	KeyExpectedRevision = "expected_revision"
+	KeyCurrentRevision  = "current_revision"
 
 	KeyChild       = "child"
 	KeyName        = "name"

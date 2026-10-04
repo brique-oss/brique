@@ -21,7 +21,7 @@
           },
           "matter": {
             "type": "object",
-            "_comment": "Optional opaque derived matter descriptor seed. Minimal sections are ensured by the engine when absent."
+            "_comment": "Optional opaque derived matter descriptor seed. The four canonical object sections (brique, objective, subjective, functional) are ensured by the engine when absent so the descriptor remains eligible for meaning projection."
           },
           "derived_from": {
             "type": "any",

@@ -36,7 +36,7 @@ type Size = { width: number; height: number };
 const INITIAL_WIDTH = 320;
 const INITIAL_HEIGHT = 360;
 const INITIAL_X = 0;
-const INITIAL_Y = 0;
+const INITIAL_Y_RATIO = 0.05;
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 160;
 const HEADER_HEIGHT = 32;
@@ -53,7 +53,8 @@ export function ContextMapFloatingWindow({
   const [size, setSize] = useState<Size>({ width: INITIAL_WIDTH, height: INITIAL_HEIGHT });
 
   useEffect(() => {
-    setPos({ x: INITIAL_X, y: INITIAL_Y });
+    const parentHeight = containerRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
+    setPos({ x: INITIAL_X, y: parentHeight * INITIAL_Y_RATIO });
   }, []);
 
   // --- drag ---

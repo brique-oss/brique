@@ -165,14 +165,12 @@ function DocumentBrick({
   onOpenRequest,
   onOpenInNewTab,
 }: CategoryBrickProps) {
-  const col1 = group.items.slice(0, DOC_COL_MAX_ITEMS);
-  const col2 = group.items.slice(DOC_COL_MAX_ITEMS, DOC_COL_MAX_ITEMS * 2);
-
   const renderItem = (item: ElementItem) => {
     const isSelected = selectedElement?.key === item.key;
     return (
       <div
         key={item.key}
+        role="listitem"
         style={{ ...styles.documentItem, ...(isSelected ? styles.categoryItemSelected : {}) }}
         onClick={(e) => {
           if (e.shiftKey) onOpenRequest({ elementKind: item.kind, elementName: item.name, context: activeContext });
@@ -198,13 +196,12 @@ function DocumentBrick({
         <span style={styles.categoryLabel}>{group.label}</span>
         <span style={styles.categoryCount}>{group.items.length}</span>
       </div>
-      <div style={styles.documentGrid}>
-        <div style={{ display: "block", flex: 1, maxHeight: DOC_COL_MAX_ITEMS * ITEM_HEIGHT, overflowY: "auto", padding: "4px 0" }}>
-          {col1.map(renderItem)}
-        </div>
-        <div style={{ display: "block", flex: 1, maxHeight: DOC_COL_MAX_ITEMS * ITEM_HEIGHT, overflowY: "auto", padding: "4px 0", borderLeft: "1px solid var(--syn-border-soft)" }}>
-          {col2.map(renderItem)}
-        </div>
+      <div
+        style={styles.documentGrid}
+        role="list"
+        aria-label={`${group.label} (${group.items.length})`}
+      >
+        {group.items.map(renderItem)}
       </div>
     </div>
   );
@@ -226,12 +223,17 @@ function CategoryBrick({
         <span style={styles.categoryLabel}>{group.label}</span>
         <span style={styles.categoryCount}>{group.items.length}</span>
       </div>
-      <div style={styles.categoryItems}>
+      <div
+        style={styles.categoryItems}
+        role="list"
+        aria-label={`${group.label} (${group.items.length})`}
+      >
         {group.items.map((item) => {
           const isSelected = selectedElement?.key === item.key;
           return (
             <div
               key={item.key}
+              role="listitem"
               style={{
                 ...styles.categoryItem,
                 ...(isSelected ? styles.categoryItemSelected : {}),
@@ -277,12 +279,12 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--syn-structure-node-bg)",
   },
   documentGrid: {
-    display: "flex",
-    flexDirection: "row",
-  },
-  documentCol: {
-    flex: 1,
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    maxHeight: DOC_COL_MAX_ITEMS * ITEM_HEIGHT,
+    overflowY: "auto",
     padding: "4px 0",
+    minHeight: 0,
   },
   documentItem: {
     padding: "4px 10px",
@@ -293,6 +295,7 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
     borderBottom: "1px solid var(--syn-border-soft)",
+    minWidth: 0,
   },
   brickGrid: {
     display: "grid",
@@ -332,6 +335,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     padding: "4px 0",
+    maxHeight: LIST_MAX_ITEMS * ITEM_HEIGHT,
+    overflowY: "auto",
+    minHeight: 0,
   },
   categoryItem: {
     padding: "3px 8px",

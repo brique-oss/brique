@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical schema descriptor template (schema/<name>.json). The engine treats the entire document as opaque — no field is consumed at runtime. A schema is itself a four-section element (brique/objective/functional/subjective), and its functional section holds a nested gabarit reproducing the same four sections — brique/objective/functional/subjective — but of the element this schema templates, not of the schema itself. Each key inside that nested gabarit carries either an explicit list of admissible values (drawn from the vocabulary) or no value at all when the key exists but is left open at instantiation. An optional sibling '_comment' key may accompany any field to note its expected type or intent — like every other '_'-prefixed key in this template, it documents and is stripped at instantiation, never copied into the instantiated element.",
+  "_comment": "Canonical schema descriptor template (schema/<name>.json). A schema is a four-section Brique element (brique/objective/functional/subjective). The engine projects the descriptor as meaning but does not interpret or enforce the constraint language stored in functional. That section directly holds the gabarit of the constrained shape: either the four sections of a Brique element or arbitrary functional data. A gabarit field may be an admissible-value list, an empty list for an open value, a nested object, or a schema reference object containing schema_ref. Documentation keys prefixed with '_' are removed at instantiation; schema_ref and cardinality are semantic keys and must be preserved.",
 
   "brique": {
     "_comment": "Required for reflexive projection (meaning queries, read.meaning). No field here is validated by the engine at runtime.",
@@ -16,29 +16,49 @@
   },
 
   "functional": {
-    "_comment": "Opaque to the engine. Holds the nested gabarit of the templated element's own four sections — not a list-of-fields format. Wrappers and tooling may read this for validation logic.",
+    "_comment": "Constraint language opaque to the engine. Holds directly the gabarit of the shape constrained by this schema. For a Brique-element schema, reproduce the target element's brique/objective/functional/subjective sections here. For a data schema, describe the data shape directly here. Wrappers and tooling may interpret this gabarit for validation, composition, or generation.",
 
-    "brique": {
-      "_comment": "The templated element's own brique section, in gabarit form. Rarely constrained by a schema in practice — most schemas leave this empty — but present for structural symmetry.",
-      "<key>": ["<admissible_value_1>", "<admissible_value_2>"],
-      "_key_note": "Example only, remove. A key here carries either a list of admissible values for the templated element's brique.<key>, drawn from the vocabulary, or no value when the key is expected but left open."
+    "_element_gabarit_example": {
+      "brique": {
+        "kind": ["matter"]
+      },
+
+      "objective": {
+        "type": []
+      },
+
+      "functional": {
+        "<key>": []
+      },
+
+      "subjective": {}
     },
 
-    "objective": {
-      "_comment": "The templated element's own objective section, in gabarit form.",
-      "<key>": ["<admissible_value_1>", "<admissible_value_2>"],
-      "_key_note": "Example only, remove. Same rule as above: a list of admissible values, or no value when left open. A sibling '_comment' may document type/intent for any key."
+    "_data_gabarit_example": {
+      "<field>": [],
+
+      "<nested_object>": {
+        "<nested_field>": []
+      }
     },
 
-    "functional": {
-      "_comment": "The templated element's own functional section, in gabarit form.",
-      "<key>": [],
-      "_key_note": "Example only, remove. An empty list or absent value means this key exists on the templated element but its value is unconstrained by this schema."
+    "_schema_reference_example": {
+      "<local_field>": {
+        "schema_ref": "<schema_name>"
+      },
+
+      "<local_collection_field>": {
+        "schema_ref": "<schema_name>",
+        "cardinality": "many"
+      },
+
+      "<external_field>": {
+        "schema_ref": "/root/<context>/schema/<schema_name>",
+        "cardinality": "one"
+      }
     },
 
-    "subjective": {
-      "_comment": "The templated element's own subjective section, in gabarit form. Most schemas leave this entirely empty — subjective content is rarely constrained."
-    }
+    "_gabarit_note": "Examples only; remove underscore-prefixed documentation keys when instantiating the schema. A list containing values expresses admissible values. An empty list means the field exists but its value remains open. A nested object describes a local nested shape. An object containing schema_ref reuses another canonical schema; schema_ref and cardinality are semantic keys and must never be stripped. A simple schema_ref resolves only in schema/ of the current context. An absolute Brique path such as /root/agentic/schema/message addresses a schema in another context. Resolution never searches parent contexts implicitly. cardinality accepts one or many and defaults to one. Optionality, nullability, conditional presence, expected type, intent, and constraints may remain documented with underscore-prefixed notes until dedicated semantic markers are introduced."
   },
 
   "subjective": {},

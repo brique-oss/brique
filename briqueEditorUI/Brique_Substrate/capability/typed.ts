@@ -89,19 +89,34 @@ export type StructureNode = {
 
 export type StructurePatch = {
   op: "add" | "remove" | "replace" | "move" | "copy" | string;
-  path: string | string[];
+  path: string | Array<string | number>;
   value?: unknown;
   from?: string;
 };
 
+export type SemanticPatchPath = Array<string | number>;
+
 export type SemanticPatchOperation = {
-  path: string[];
+  op: "set" | "add" | "remove" | "delete" | "insert" | "test";
+  path: SemanticPatchPath;
+  value?: unknown;
+};
+
+export type LegacySemanticPatchOperation = {
+  path: SemanticPatchPath;
   value: unknown;
 };
 
 export type SemanticValuePatch = {
-  add?: SemanticPatchOperation[];
-  remove?: SemanticPatchOperation[];
+  operations: SemanticPatchOperation[];
+  add?: never;
+  remove?: never;
+} | {
+  operations?: never;
+  /** Legacy compatibility form. Prefer operations. */
+  add?: LegacySemanticPatchOperation[];
+  /** Legacy compatibility form. Prefer operations. */
+  remove?: LegacySemanticPatchOperation[];
 };
 
 // edit items
@@ -141,6 +156,8 @@ export type ReadMeaningInputItem = {
   element_kind: string;
   element_name: string;
   sections?: string[];
+  include_resolution?: boolean;
+  detail?: "invoke" | "full";
 };
 
 // read.meaning result item
@@ -470,6 +487,7 @@ export type MatterUnsubscribePayload = { ok: boolean; matter_id: string; sub_id:
 
 export type MatterWriteParams = {
   matter_id: string;
+  expected_revision?: number | string;
   meaning?: MeaningDescriptor;
   functional?: FunctionalDescriptor;
   brique?: Record<string, unknown>;

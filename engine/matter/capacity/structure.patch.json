@@ -25,11 +25,11 @@
           },
           "patches": {
             "type": "array",
-            "_comment": "Ordered descriptor patch list applied sequentially. Required unless semantic_patch is supplied. Each patch: { path: string[] (array of JSON key segments identifying the target location, e.g. ['functional', 'tags', 'domain']), value: any (new value to set at that path) }. Patches are applied in order; each one navigates the path and sets the value. path is always a JSON array, never dot-notation."
+            "_comment": "Legacy ordered set list, required unless semantic_patch is supplied. Each item is {path: (string|non-negative integer)[], value:any}; numeric segments traverse arrays. Prefer semantic_patch.operations for new callers."
           },
           "semantic_patch": {
             "type": "object",
-            "_comment": "Optional terminal semantic value add/remove operations: { add: [{path: string[] (array of key segments), value: any}], remove: [{path: string[], value: any}] }. path is always a JSON array of strings, never dot-notation. path[0] MUST be one of the structure descriptor root sections — objective, subjective, functional, brique — or the whole call fails with reason=invalid_patch and no operation is applied."
+            "_comment": "Optional atomic semantic patch: {operations:[{op:'set'|'add'|'remove'|'delete'|'insert'|'test', path:(string|non-negative integer)[], value?:any}]}. Numeric segments traverse arrays; delete omits value. Legacy {add:[...],remove:[...]} remains accepted but cannot be mixed with operations. path[0] must be objective, subjective, functional, or brique; these roots cannot be deleted or replaced by non-objects."
           }
         }
       },
@@ -55,7 +55,7 @@
         "morphing": "A structure identifier plus an ordered patch list becomes a new committed structure revision when all patches validate and apply successfully.",
         "invariants": [
           "structure.patch only rewrites the descriptor of an existing local structure.",
-          "patches are applied in order and semantic_patch add/remove operations are applied to terminal values; the commit boundary yields exactly one new revision on success.",
+          "patches and semantic_patch operations are applied in order; semantic_patch is transactional and the commit boundary yields exactly one new revision on success.",
           "At least one of patches or semantic_patch must carry a non-empty mutation intent.",
           "When exp_rev is supplied and non-zero, the current structure revision must match before any patch is committed."
         ],

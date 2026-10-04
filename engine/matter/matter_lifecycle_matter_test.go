@@ -89,8 +89,15 @@ func TestMatterLifecycleMatter_N1_MLM_01_HelperFunctions(t *testing.T) {
 	}
 	obj := map[string]any{}
 	ensureMatterMinimalSections(obj)
-	if obj[circulation.KeyBrique] == nil || obj[circulation.KeyFunctional] == nil {
-		t.Fatalf("ensureMatterMinimalSections should create sections")
+	for _, section := range []string{
+		circulation.KeyBrique,
+		circulation.KeyObjective,
+		circulation.KeySubjective,
+		circulation.KeyFunctional,
+	} {
+		if _, ok := obj[section].(map[string]any); !ok {
+			t.Fatalf("ensureMatterMinimalSections should create object section %q: %#v", section, obj)
+		}
 	}
 
 	if normalizeContextPath("ctx") != "" || normalizeContextPath(" /a/b/ ") != "/a/b" {

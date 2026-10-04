@@ -515,19 +515,22 @@ async function updateMeaningProjectionForTarget(
 }
 
 function buildSemanticValuePatch(selections: SemanticPatchSelection[]): {
-  add?: Array<{ path: string[]; value: string }>;
-  remove?: Array<{ path: string[]; value: string }>;
+  operations: Array<{
+    op: "add" | "remove";
+    path: Array<string | number>;
+    value: string;
+  }>;
 } {
-  const add: Array<{ path: string[]; value: string }> = [];
-  const remove: Array<{ path: string[]; value: string }> = [];
+	const operations: Array<{
+		op: "add" | "remove";
+		path: Array<string | number>;
+		value: string;
+	}> = [];
   for (const selection of selections) {
-    for (const value of selection.add) add.push({ path: selection.path, value });
-    for (const value of selection.remove) remove.push({ path: selection.path, value });
+		for (const value of selection.add) operations.push({ op: "add", path: selection.path, value });
+		for (const value of selection.remove) operations.push({ op: "remove", path: selection.path, value });
   }
-  return {
-    ...(add.length > 0 ? { add } : {}),
-    ...(remove.length > 0 ? { remove } : {}),
-  };
+	return { operations };
 }
 
 function getInspectionResult(

@@ -18,9 +18,12 @@ package matter
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/shared"
@@ -61,18 +64,51 @@ func TestMatterWrite_N1_MWR_01_Helpers(t *testing.T) {
 		t.Fatalf("mergeMapRecursive result mismatch: %#v", dst)
 	}
 
-	if p := parseStringPath([]any{" a ", "", 42, "b"}); len(p) != 2 || p[0] != "a" || p[1] != "b" {
-		t.Fatalf("parseStringPath mismatch: %#v", p)
+	if got, ok := parsePositiveRevision("42"); !ok || got != 42 {
+		t.Fatalf("parsePositiveRevision string mismatch: got=%d ok=%v", got, ok)
 	}
-	doc := map[string]any{}
-	if err := setAtPathStrict(doc, []string{"f", "x"}, 9); err != nil {
-		t.Fatalf("setAtPathStrict unexpected error: %v", err)
+	if _, ok := parsePositiveRevision(1.5); ok {
+		t.Fatalf("parsePositiveRevision should reject fractional numbers")
 	}
-	if doc["f"].(map[string]any)["x"] != 9 {
-		t.Fatalf("setAtPathStrict should set nested value: %#v", doc)
+	if _, ok := parsePositiveRevision("not-a-revision"); ok {
+		t.Fatalf("parsePositiveRevision should reject malformed strings")
 	}
-	if err := setAtPathStrict(nil, []string{"x"}, 1); err == nil {
-		t.Fatalf("setAtPathStrict should fail on nil doc")
+}
+
+func TestApplySemanticPatch_CanonicalArrayPathAndTransaction(t *testing.T) {
+	doc := map[string]any{
+		circulation.KeyBrique: map[string]any{
+			"engine_config": map[string]any{
+				"interfaces": []any{map[string]any{"name": "llm"}},
+				"execution":  map[string]any{"wrappers": []any{map[string]any{"run": map[string]any{"env_name": "old"}}}},
+			},
+		},
+		circulation.KeyObjective: map[string]any{}, circulation.KeySubjective: map[string]any{}, circulation.KeyFunctional: map[string]any{},
+	}
+	patch := map[string]any{"operations": []any{
+		map[string]any{"op": "set", "path": []any{circulation.KeyBrique, "engine_config", "interfaces", 0, "name"}, "value": "llm_llm"},
+		map[string]any{"op": "set", "path": []any{circulation.KeyBrique, "engine_config", "execution", "wrappers", 0, "run", "env_name"}, "value": "prod"},
+	}}
+	if err := applySemanticPatch(doc, patch); err != nil {
+		t.Fatalf("canonical semantic patch: %v", err)
+	}
+	config := doc[circulation.KeyBrique].(map[string]any)["engine_config"].(map[string]any)
+	if got := config["interfaces"].([]any)[0].(map[string]any)["name"]; got != "llm_llm" {
+		t.Fatalf("interface name = %#v", got)
+	}
+	if got := config["execution"].(map[string]any)["wrappers"].([]any)[0].(map[string]any)["run"].(map[string]any)["env_name"]; got != "prod" {
+		t.Fatalf("wrapper env_name = %#v", got)
+	}
+
+	failed := map[string]any{"operations": []any{
+		map[string]any{"op": "set", "path": []any{circulation.KeyBrique, "engine_config", "interfaces", 0, "name"}, "value": "must-not-stick"},
+		map[string]any{"op": "set", "path": []any{circulation.KeyBrique, "engine_config", "interfaces", 9, "name"}, "value": "invalid"},
+	}}
+	if err := applySemanticPatch(doc, failed); err == nil {
+		t.Fatal("out-of-bounds patch should fail")
+	}
+	if got := config["interfaces"].([]any)[0].(map[string]any)["name"]; got != "llm_llm" {
+		t.Fatalf("failed patch mutated source: %#v", got)
 	}
 }
 
@@ -244,6 +280,129 @@ func TestMatterWrite_N1_MWR_03_CapMatterWriteInlineSuccess(t *testing.T) {
 	}
 }
 
+func TestMatterWrite_N1_MWR_03d_ExpectedRevisionSerializesConcurrentWriters(t *testing.T) {
+	l, commCh, ctxDir := newMatterLoopHarness(t)
+	mid := "m-expected-revision"
+	if err := os.MkdirAll(filepath.Join(ctxDir, matterDirName), 0o755); err != nil {
+		t.Fatalf("mkdir matter root: %v", err)
+	}
+
+	// Keep the starting revision ahead of the wall clock and exactly
+	// representable as float64 when matter.json is decoded into map[string]any.
+	// This also proves the strict current+1 fallback.
+	currentRev := (revNow() + int64(time.Hour) + 1023) / 1024 * 1024
+	initial := fmt.Sprintf(`{"functional":{"winner":"none"},"brique":{"substance_mode":"wrapper","revision":%d}}`, currentRev)
+	matterPath := filepath.Join(ctxDir, matterDirName, mid+matterDescriptorSuffix)
+	if err := os.WriteFile(matterPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial matter.json: %v", err)
+	}
+	l.catalogSetMatter(mid, CatalogEntry{Brique: map[string]any{
+		circulation.KeySubstanceMode: circulation.ValueModeWrapper,
+		circulation.KeyRevision:      currentRev,
+	}})
+
+	// A stale guard is refused before the descriptor or revision changes.
+	l.capMatterWrite(circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: "i-stale",
+			Params: map[string]any{
+				circulation.KeyMatterID:         mid,
+				circulation.KeyExpectedRevision: currentRev - 1,
+				circulation.KeyFunctional:       map[string]any{"winner": "stale"},
+			},
+			Correlation: &circulation.Correlation{},
+		},
+	})
+	stale := recvMatterLoopMsg(t, commCh, "matter_write stale expected_revision")
+	if stale.Response.Status != circulation.ValueStatusError || stale.Response.Error == nil ||
+		stale.Response.Error.Code != circulation.ValueCodeRefused ||
+		stale.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonRevisionMismatch ||
+		shared.AnyToInt64(stale.Response.Error.Details[circulation.KeyCurrentRevision]) != currentRev {
+		t.Fatalf("stale expected_revision response mismatch: %#v", stale)
+	}
+
+	type result struct {
+		id    string
+		label string
+	}
+	writers := []result{{id: "i-race-a", label: "a"}, {id: "i-race-b", label: "b"}}
+	var wg sync.WaitGroup
+	for _, writer := range writers {
+		writer := writer
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l.capMatterWrite(circulation.Message{
+				Kind: circulation.ValueKindIntention,
+				Intention: circulation.Intention{
+					IntentionID: writer.id,
+					Params: map[string]any{
+						circulation.KeyMatterID:         mid,
+						circulation.KeyExpectedRevision: currentRev,
+						circulation.KeyFunctional:       map[string]any{"winner": writer.label},
+					},
+					Correlation: &circulation.Correlation{},
+				},
+			})
+		}()
+	}
+	wg.Wait()
+
+	responses := map[string]circulation.Response{}
+	for range writers {
+		msg := recvMatterLoopMsg(t, commCh, "matter_write expected_revision race")
+		responses[msg.Response.IntentionID] = msg.Response
+	}
+
+	successes, refusals := 0, 0
+	winnerID := ""
+	winnerRev := int64(0)
+	for _, writer := range writers {
+		resp := responses[writer.id]
+		switch resp.Status {
+		case circulation.ValueStatusOK:
+			successes++
+			winnerID = writer.id
+			winnerRev = shared.AnyToInt64(resp.Payload[circulation.KeyRevision])
+		case circulation.ValueStatusError:
+			if resp.Error == nil || resp.Error.Code != circulation.ValueCodeRefused || resp.Error.Details[circulation.KeyReason] != circulation.ValueReasonRevisionMismatch {
+				t.Fatalf("writer %s unexpected refusal: %#v", writer.id, resp)
+			}
+			refusals++
+		default:
+			t.Fatalf("writer %s unexpected response: %#v", writer.id, resp)
+		}
+	}
+	if successes != 1 || refusals != 1 {
+		t.Fatalf("expected exactly one success and one refusal, got successes=%d refusals=%d", successes, refusals)
+	}
+	if winnerRev != currentRev+1 {
+		t.Fatalf("strict revision progression mismatch: got %d want %d", winnerRev, currentRev+1)
+	}
+
+	var committed struct {
+		Functional map[string]any `json:"functional"`
+		Brique     struct {
+			Revision int64 `json:"revision"`
+		} `json:"brique"`
+	}
+	b, err := os.ReadFile(matterPath)
+	if err != nil {
+		t.Fatalf("read committed matter.json: %v", err)
+	}
+	if err := json.Unmarshal(b, &committed); err != nil {
+		t.Fatalf("decode committed matter.json: %v", err)
+	}
+	wantLabel := "a"
+	if winnerID == "i-race-b" {
+		wantLabel = "b"
+	}
+	if committed.Brique.Revision != winnerRev || committed.Functional["winner"] != wantLabel {
+		t.Fatalf("committed winner mismatch: winner=%s rev=%d doc=%#v", winnerID, winnerRev, committed)
+	}
+}
+
 func TestMatterWrite_N1_MWR_03b_CapMatterWriteSemanticPatchOnlyCommitsMatterJSON(t *testing.T) {
 	l, commCh, ctxDir := newMatterLoopHarness(t)
 	mid := "m-semantic-only"
@@ -404,7 +563,7 @@ func TestMatterWrite_N1_MWR_04_FinalizeWriteLeaseAfterUpload(t *testing.T) {
 		matterRoot:       mRoot,
 		tmpSubstancePath: tmpPayload,
 		substancePath:    finalPayload,
-		newBrique:       map[string]any{circulation.KeyRevision: int64(8)},
+		newBrique:        map[string]any{circulation.KeyRevision: int64(8)},
 	}
 	if _, _, err := l.finalizeWriteLeaseAfterUpload(lzStale, int64(len("payload-lease"))); err == nil {
 		t.Fatalf("stale rev should fail finalize")
@@ -423,7 +582,7 @@ func TestMatterWrite_N1_MWR_04_FinalizeWriteLeaseAfterUpload(t *testing.T) {
 		matterRoot:       mRoot,
 		tmpSubstancePath: tmpPayload,
 		substancePath:    finalPayload,
-		newBrique:       map[string]any{circulation.KeyRevision: int64(8), circulation.KeySubstanceMode: circulation.ValueModeBrique},
+		newBrique:        map[string]any{circulation.KeyRevision: int64(8), circulation.KeySubstanceMode: circulation.ValueModeBrique},
 	}
 	newRev, warn, err := l.finalizeWriteLeaseAfterUpload(lz, int64(len("payload-lease")))
 	if err != nil || warn != "" || newRev != 8 {
@@ -485,7 +644,7 @@ func TestMatterWrite_N1_MWR_05_CapStructurePatch(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(ctxDir, structureDirName), 0o755); err != nil {
 		t.Fatalf("mkdir structure dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(ctxDir, structureDirName, "s1.json"), []byte(`{"functional":{"x":1,"tags":["keep","drop"]},"brique":{"kind":"structure","revision":1}}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ctxDir, structureDirName, "s1.json"), []byte(`{"functional":{"x":1,"tags":["keep","drop"],"items":[{"name":"old"}]},"brique":{"kind":"structure","revision":1}}`), 0o644); err != nil {
 		t.Fatalf("write structure fixture: %v", err)
 	}
 
@@ -515,11 +674,10 @@ func TestMatterWrite_N1_MWR_05_CapStructurePatch(t *testing.T) {
 					map[string]any{"path": []any{"functional", "x"}, "value": 2},
 				},
 				circulation.KeySemanticPatch: map[string]any{
-					"add": []any{
-						map[string]any{circulation.KeyPath: []any{circulation.KeyFunctional, "tags"}, circulation.KeyValue: "new"},
-					},
-					"remove": []any{
-						map[string]any{circulation.KeyPath: []any{circulation.KeyFunctional, "tags"}, circulation.KeyValue: "drop"},
+					"operations": []any{
+						map[string]any{"op": "add", circulation.KeyPath: []any{circulation.KeyFunctional, "tags"}, circulation.KeyValue: "new"},
+						map[string]any{"op": "remove", circulation.KeyPath: []any{circulation.KeyFunctional, "tags"}, circulation.KeyValue: "drop"},
+						map[string]any{"op": "set", circulation.KeyPath: []any{circulation.KeyFunctional, "items", 0, "name"}, circulation.KeyValue: "changed"},
 					},
 				},
 			},
@@ -541,5 +699,8 @@ func TestMatterWrite_N1_MWR_05_CapStructurePatch(t *testing.T) {
 	tags := fn["tags"].([]any)
 	if len(tags) != 2 || tags[0] != "keep" || tags[1] != "new" {
 		t.Fatalf("structure semantic_patch should add/remove functional.tags: %#v", fn)
+	}
+	if got := fn["items"].([]any)[0].(map[string]any)["name"]; got != "changed" {
+		t.Fatalf("structure semantic_patch should traverse array index: %#v", got)
 	}
 }

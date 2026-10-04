@@ -36,11 +36,14 @@ export function extractWindowSpecsFromSchema(fields: unknown): SchemaWindowSpec[
   function walk(node: unknown, path: string[]): void {
     if (!node || typeof node !== "object" || Array.isArray(node)) return;
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key.startsWith("_")) continue;
       const childPath = [...path, key];
       if (Array.isArray(value)) {
         const defaultKeys = value.filter((v): v is string => typeof v === "string");
         map.set(childPath.join("."), { path: childPath, defaultKeys });
       } else if (value && typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        if (typeof record.schema_ref === "string") continue;
         walk(value, childPath);
       }
     }
@@ -48,4 +51,14 @@ export function extractWindowSpecsFromSchema(fields: unknown): SchemaWindowSpec[
 
   walk(fields, []);
   return Array.from(map.values());
+}
+
+export function schemaGabaritFromFunctional(functional: unknown): unknown {
+  if (!functional || typeof functional !== "object" || Array.isArray(functional)) {
+    return functional;
+  }
+  const record = functional as Record<string, unknown>;
+  return Object.prototype.hasOwnProperty.call(record, "fields")
+    ? record.fields
+    : functional;
 }

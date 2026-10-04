@@ -21,7 +21,7 @@
           },
           "matter": {
             "type": "object",
-            "_comment": "Optional opaque matter descriptor seed. Minimal sections are ensured by the engine when absent."
+            "_comment": "Optional opaque matter descriptor seed. The four canonical object sections (brique, objective, subjective, functional) are ensured by the engine when absent so the descriptor remains eligible for meaning projection."
           },
           "payload": {
             "type": "any",
@@ -58,6 +58,7 @@
         "morphing": "A caller-supplied matter definition becomes a new committed local matter, optionally with initial brique-managed substance, and gains an explicit catalog identity.",
         "invariants": [
           "If matter_id is omitted, the capacity generates a fresh local matter identifier.",
+          "When any canonical section is omitted, the engine adds it as an object so ordinary created descriptors remain eligible for meaning.rebuild and meaning.query.",
           "When the resulting matter uses brique substance mode, the create path always leaves a local data.bin file present, either populated from payload or empty.",
           "When the resulting matter does not use brique substance mode, payload materialization is refused."
         ],
@@ -72,7 +73,7 @@
         ],
         "notes": [
           "The created matter identity is local to the current context.",
-          "The matter document itself remains opaque apart from minimal brique normalization and revision stamping."
+          "The matter document itself remains opaque apart from canonical four-section normalization, brique normalization, and revision stamping."
         ]
       }
     }

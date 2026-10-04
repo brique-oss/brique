@@ -39,13 +39,13 @@ const (
 	ValueModeWrite = "write"
 
 	// params.mode (Matter mode)
-	ValueModeBrique  = "brique"
+	ValueModeBrique   = "brique"
 	ValueModeWrapper  = "wrapper"
 	ValueModeExtRef   = "ext_ref"
 	ValueModePhysical = "physical"
 
 	// param section
-	ValueBrique    = "brique"
+	ValueBrique     = "brique"
 	ValueObjective  = "objective"
 	ValueSubjective = "subjective"
 	ValueFunctional = "functional"
@@ -248,6 +248,8 @@ const (
 	ValueReasonInvalidPath = "invalid path"
 
 	ValueReasonRevMismatch = "revision not coherent"
+
+	ValueReasonRevisionMismatch = "revision_mismatch"
 
 	ValueReasonInvalidRequest = "request invalid"
 

@@ -19,6 +19,10 @@
             "type": "string",
             "_comment": "Required. Name of the matter to write within the addressed context."
           },
+          "expected_revision": {
+            "type": "integer|string",
+            "_comment": "Optional optimistic-concurrency guard. When supplied, it must be a positive integer (or its base-10 string representation) equal to the matter's current revision. The comparison is performed while holding the per-matter lock; a mismatch refuses the write before any metadata or substance mutation. Omit this parameter to retain unconditional last-write-wins behavior. Callers whose number representation cannot preserve arbitrary int64 values should send the decimal string form."
+          },
           "meaning": {
             "type": "object",
             "_comment": "Optional. Replacement for the meaning descriptor section."
@@ -33,7 +37,7 @@
           },
           "semantic_patch": {
             "type": "object",
-            "_comment": "Optional. Terminal semantic value operations: { add: [{path: string[] (array of key segments, e.g. ['functional','tags','domain']), value: any}], remove: [{path: string[], value: any}] }. path is always a JSON array of strings, never dot-notation. add creates missing parent objects and list leaves; remove deletes matching terminal values and prunes empty generated containers. path[0] MUST be one of the matter.json descriptor root sections — objective, subjective, functional, brique — or the whole call fails with reason=invalid_patch; no operation is applied when any op in the same call has an unrecognized root. semantic_patch can never reach matter substance/data — there is no path, however phrased, that touches data.bin. To change the matter's business content (a transcript, a document body, any payload), use params.data (full inline replacement) or an HTTP upload lease, never semantic_patch."
+            "_comment": "Optional atomic semantic patch. Canonical form: { operations: [{ op: 'set'|'add'|'remove'|'delete'|'insert'|'test', path: (string|non-negative integer)[], value?: any }] }. Numeric segments address arrays; string segments address object keys. delete omits value; all other ops require it. Legacy {add:[...], remove:[...]} remains accepted but cannot be mixed with operations. path[0] must be objective, subjective, functional, or brique; those root sections cannot be deleted or replaced by non-objects. semantic_patch never reaches matter substance/data; use params.data or an HTTP upload lease for business content."
           },
           "data": {
             "type": "any",
@@ -72,7 +76,9 @@
         "morphing": "A matter identifier plus metadata or substance patches becomes a new committed matter revision, or an upload lease when the write is deferred through HTTP.",
         "invariants": [
           "matter.write targets exactly one existing cataloged matter designated by matter_id.",
-          "semantic_patch.add and semantic_patch.remove operate only on terminal values; add creates missing object parents and list leaves, remove deletes matching values and prunes empty generated containers.",
+          "Every committed revision is strictly greater than the matter's preceding revision, including when the wall clock does not advance or moves backwards.",
+          "When expected_revision is supplied, the current revision must match it under the per-matter lock before any mutation is staged.",
+          "semantic_patch operations execute in declared order on a clone; any failure rejects the complete patch without mutation. Numeric path segments traverse arrays.",
           "Payload bytes are writable only when the addressed matter remains in brique substance mode."
         ],
         "success": [
@@ -81,11 +87,13 @@
         ],
         "failure": [
           "The capacity fails when matter_id is missing, no patch intent is provided, or a patch payload has the wrong shape.",
+          "The capacity refuses the entire write with a revision-mismatch error when expected_revision differs from the current revision; no requested mutation is applied.",
           "The capacity fails when payload writing is requested outside brique mode or when the commit boundary cannot be completed.",
           "The capacity fails with reason=invalid_patch, and applies none of the requested operations, when any semantic_patch op's path[0] is not one of objective, subjective, functional, brique."
         ],
         "notes": [
-          "metadata patches are merged minimally into matter.json; semantic_patch is add/remove over terminal value leaves.",
+          "metadata patches are merged minimally into matter.json; semantic_patch.operations is the canonical precise mutation form and legacy add/remove remains accepted.",
+          "expected_revision is optional: omitting it preserves unconditional serialized writes, so concurrent valid writes may all succeed in lock-acquisition order.",
           "Subscription notifications happen only after a successful committed write in brique mode."
         ]
       }

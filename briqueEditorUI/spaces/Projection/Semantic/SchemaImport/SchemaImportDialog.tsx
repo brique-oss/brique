@@ -16,7 +16,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ExecuteInput, ExecuteResult } from "../../../../Brique_Substrate/types/index.js";
-import { extractWindowSpecsFromSchema, parseSchemaAddress } from "./schemaImport.js";
+import { extractWindowSpecsFromSchema, parseSchemaAddress, schemaGabaritFromFunctional } from "./schemaImport.js";
 import type { SchemaWindowSpec } from "./schemaImport.js";
 
 export type SchemaImportDialogProps = {
@@ -66,8 +66,8 @@ export function SchemaImportDialog({ mutate, onApply, onClose }: SchemaImportDia
         getRecord(item.descriptor) ?? getRecord(item.desc) ?? getRecord(item.meaning);
       const source = descriptor ?? item;
       const functional = getRecord(source.functional);
-      const fields = functional?.fields;
-      const extracted = extractWindowSpecsFromSchema(fields);
+      const gabarit = schemaGabaritFromFunctional(functional);
+      const extracted = extractWindowSpecsFromSchema(gabarit);
       if (extracted.length === 0) {
         throw new Error("No window paths found in schema fields.");
       }

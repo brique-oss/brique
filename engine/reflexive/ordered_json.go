@@ -24,6 +24,7 @@ import (
 	"sort"
 
 	"brique_engine/circulation"
+	"brique_engine/shared"
 )
 
 type orderedJSONEntry struct {
@@ -36,6 +37,107 @@ type orderedJSONValue struct {
 	object []orderedJSONEntry
 	array  []*orderedJSONValue
 	scalar any
+}
+
+func (v *orderedJSONValue) SemanticClone() shared.SemanticPatchNode {
+	if v == nil {
+		return orderedJSONFromAny(nil)
+	}
+	out := &orderedJSONValue{kind: v.kind, scalar: v.scalar}
+	for _, entry := range v.object {
+		out.object = append(out.object, orderedJSONEntry{key: entry.key, value: entry.value.SemanticClone().(*orderedJSONValue)})
+	}
+	for _, item := range v.array {
+		out.array = append(out.array, item.SemanticClone().(*orderedJSONValue))
+	}
+	return out
+}
+
+func (v *orderedJSONValue) SemanticKind() shared.SemanticNodeKind {
+	if v != nil && v.kind == 'o' {
+		return shared.SemanticNodeObject
+	}
+	if v != nil && v.kind == 'a' {
+		return shared.SemanticNodeArray
+	}
+	return shared.SemanticNodeScalar
+}
+
+func (v *orderedJSONValue) SemanticObjectGet(key string) (shared.SemanticPatchNode, bool) {
+	return v.get(key)
+}
+
+func (v *orderedJSONValue) SemanticObjectSet(key string, value shared.SemanticPatchNode) {
+	v.set(key, orderedJSONFromNode(value))
+}
+
+func (v *orderedJSONValue) SemanticObjectDelete(key string) { v.deleteKey(key) }
+
+func (v *orderedJSONValue) SemanticObjectLen() int {
+	if v == nil || v.kind != 'o' {
+		return 0
+	}
+	return len(v.object)
+}
+
+func (v *orderedJSONValue) SemanticArrayLen() int {
+	if v == nil || v.kind != 'a' {
+		return 0
+	}
+	return len(v.array)
+}
+
+func (v *orderedJSONValue) SemanticArrayGet(index int) (shared.SemanticPatchNode, bool) {
+	if v == nil || v.kind != 'a' || index < 0 || index >= len(v.array) {
+		return nil, false
+	}
+	return v.array[index], true
+}
+
+func (v *orderedJSONValue) SemanticArraySet(index int, value shared.SemanticPatchNode) bool {
+	if v == nil || v.kind != 'a' || index < 0 || index >= len(v.array) {
+		return false
+	}
+	v.array[index] = orderedJSONFromNode(value)
+	return true
+}
+
+func (v *orderedJSONValue) SemanticArrayInsert(index int, value shared.SemanticPatchNode) bool {
+	if v == nil || v.kind != 'a' || index < 0 || index > len(v.array) {
+		return false
+	}
+	v.array = append(v.array, nil)
+	copy(v.array[index+1:], v.array[index:])
+	v.array[index] = orderedJSONFromNode(value)
+	return true
+}
+
+func (v *orderedJSONValue) SemanticArrayDelete(index int) bool {
+	if v == nil || v.kind != 'a' || index < 0 || index >= len(v.array) {
+		return false
+	}
+	v.array = append(v.array[:index], v.array[index+1:]...)
+	return true
+}
+
+func (v *orderedJSONValue) SemanticScalar() any {
+	if v == nil || v.kind != 's' {
+		return nil
+	}
+	return v.scalar
+}
+
+func (v *orderedJSONValue) SemanticNew(value any) shared.SemanticPatchNode {
+	return orderedJSONFromAny(value)
+}
+
+func (v *orderedJSONValue) SemanticAny() any { return v.toAny() }
+
+func orderedJSONFromNode(value shared.SemanticPatchNode) *orderedJSONValue {
+	if ordered, ok := value.(*orderedJSONValue); ok {
+		return ordered
+	}
+	return orderedJSONFromAny(value.SemanticAny())
 }
 
 // jsonParseErrorDetail turns a parseOrderedJSON/orderedJSONForRequest error

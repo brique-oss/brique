@@ -53,6 +53,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
@@ -851,8 +852,22 @@ func atomicWriteFile(absPath string, data []byte, perm os.FileMode) error {
 	if err := ensureDirForFile(absPath); err != nil {
 		return err
 	}
-	tmp := absPath + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(absPath), "."+filepath.Base(absPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := tmpFile.Name()
+	if err := tmpFile.Chmod(perm); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -861,6 +876,18 @@ func atomicWriteFile(absPath string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+func (l *ReflexiveLoop) lockEditPath(absPath string) func() {
+	l.editLocksMu.Lock()
+	mu := l.editLocks[absPath]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		l.editLocks[absPath] = mu
+	}
+	l.editLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // copyFileAtomic
@@ -1494,7 +1521,7 @@ func asMap(v any) (map[string]any, error) {
 }
 
 var allowedMeaningSections = map[string]bool{
-	circulation.KeyBrique:      true,
+	circulation.KeyBrique:       true,
 	circulation.ValueObjective:  true,
 	circulation.ValueFunctional: true,
 	circulation.ValueSubjective: true,
@@ -1647,238 +1674,30 @@ func parseSectionPatch(it editItem) (map[string]any, error) {
 	return p, nil
 }
 
-type semanticPatchOperation struct {
-	Path  []string
-	Value any
-}
-
-func applySemanticPatch(doc map[string]any, raw any) error {
-	ops, err := parseSemanticPatch(raw)
+func applyOrderedSemanticPatch(doc *orderedJSONValue, raw any) (*orderedJSONValue, error) {
+	patch, err := shared.ParseSemanticPatch(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, op := range ops.add {
-		if !isAllowedMeaningSection(op.Path[0]) {
-			return fmt.Errorf("semantic path starts with unsupported section %q", op.Path[0])
-		}
-		if err := addSemanticTerminalValue(doc, op.Path, op.Value); err != nil {
-			return err
-		}
+	result, err := shared.ApplySemanticPatch(doc, patch, semanticMeaningPatchOptions())
+	if err != nil {
+		return nil, err
 	}
-	for _, op := range ops.remove {
-		if !isAllowedMeaningSection(op.Path[0]) {
-			return fmt.Errorf("semantic path starts with unsupported section %q", op.Path[0])
-		}
-		if err := removeSemanticTerminalValue(doc, op.Path, op.Value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func parseSemanticPatch(raw any) (struct {
-	add    []semanticPatchOperation
-	remove []semanticPatchOperation
-}, error) {
-	var out struct {
-		add    []semanticPatchOperation
-		remove []semanticPatchOperation
-	}
-	patch, ok := raw.(map[string]any)
-	if !ok || patch == nil {
-		return out, fmt.Errorf("semantic_patch must be an object")
-	}
-	var err error
-	if out.add, err = parseSemanticPatchOpList(patch["add"]); err != nil {
-		return out, fmt.Errorf("semantic_patch.add: %w", err)
-	}
-	if out.remove, err = parseSemanticPatchOpList(patch["remove"]); err != nil {
-		return out, fmt.Errorf("semantic_patch.remove: %w", err)
-	}
-	if len(out.add) == 0 && len(out.remove) == 0 {
-		return out, fmt.Errorf("semantic_patch must include add or remove operations")
-	}
-	return out, nil
-}
-
-func parseSemanticPatchOpList(raw any) ([]semanticPatchOperation, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	items, ok := raw.([]any)
+	ordered, ok := result.(*orderedJSONValue)
 	if !ok {
-		return nil, fmt.Errorf("operations must be an array")
+		return nil, fmt.Errorf("semantic patch result root is not ordered json")
 	}
-	out := make([]semanticPatchOperation, 0, len(items))
-	for i, item := range items {
-		op, ok := item.(map[string]any)
-		if !ok || op == nil {
-			return nil, fmt.Errorf("operation %d must be an object", i)
-		}
-		path := parseSemanticStringPath(op[circulation.KeyPath])
-		if len(path) == 0 {
-			return nil, fmt.Errorf("operation %d path must be a non-empty string array", i)
-		}
-		value, ok := op[circulation.KeyValue]
-		if !ok {
-			return nil, fmt.Errorf("operation %d value is required", i)
-		}
-		out = append(out, semanticPatchOperation{Path: path, Value: value})
-	}
-	return out, nil
+	return ordered, nil
 }
 
-func parseSemanticStringPath(v any) []string {
-	switch t := v.(type) {
-	case []string:
-		out := make([]string, 0, len(t))
-		for _, s := range t {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, it := range t {
-			s, _ := it.(string)
-			s = strings.TrimSpace(s)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
+func semanticMeaningPatchOptions() shared.SemanticPatchOptions {
+	roots := map[string]bool{
+		circulation.KeyBrique:     true,
+		circulation.KeyObjective:  true,
+		circulation.KeyFunctional: true,
+		circulation.KeySubjective: true,
 	}
-}
-
-func addSemanticTerminalValue(doc map[string]any, path []string, value any) error {
-	if doc == nil {
-		return fmt.Errorf("nil doc")
-	}
-	if len(path) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	cur := doc
-	for i := 0; i < len(path)-1; i++ {
-		key := path[i]
-		existing, ok := cur[key]
-		if !ok || existing == nil {
-			next := map[string]any{}
-			cur[key] = next
-			cur = next
-			continue
-		}
-		next, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("path segment %q is not an object", key)
-		}
-		cur = next
-	}
-	leaf := path[len(path)-1]
-	existing, ok := cur[leaf]
-	if !ok || existing == nil {
-		cur[leaf] = []any{value}
-		return nil
-	}
-	switch x := existing.(type) {
-	case []any:
-		if semanticValueIndex(x, value) >= 0 {
-			return nil
-		}
-		cur[leaf] = append(x, value)
-	case map[string]any:
-		return fmt.Errorf("path %q is an object, not a terminal value", strings.Join(path, "."))
-	default:
-		if semanticValuesEqual(x, value) {
-			cur[leaf] = []any{x}
-			return nil
-		}
-		cur[leaf] = []any{x, value}
-	}
-	return nil
-}
-
-func removeSemanticTerminalValue(doc map[string]any, path []string, value any) error {
-	if doc == nil {
-		return fmt.Errorf("nil doc")
-	}
-	if len(path) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	parents := make([]map[string]any, 0, len(path))
-	keys := make([]string, 0, len(path))
-	cur := doc
-	for i := 0; i < len(path)-1; i++ {
-		key := path[i]
-		existing, ok := cur[key]
-		if !ok || existing == nil {
-			return nil
-		}
-		next, ok := existing.(map[string]any)
-		if !ok {
-			return fmt.Errorf("path segment %q is not an object", key)
-		}
-		parents = append(parents, cur)
-		keys = append(keys, key)
-		cur = next
-	}
-	leaf := path[len(path)-1]
-	existing, ok := cur[leaf]
-	if !ok || existing == nil {
-		return nil
-	}
-	switch x := existing.(type) {
-	case []any:
-		index := semanticValueIndex(x, value)
-		if index < 0 {
-			return nil
-		}
-		next := append(append([]any{}, x[:index]...), x[index+1:]...)
-		if len(next) == 0 {
-			delete(cur, leaf)
-		} else {
-			cur[leaf] = next
-		}
-	case map[string]any:
-		return fmt.Errorf("path %q is an object, not a terminal value", strings.Join(path, "."))
-	default:
-		if semanticValuesEqual(x, value) {
-			delete(cur, leaf)
-		}
-	}
-	pruneEmptySemanticParents(parents, keys)
-	return nil
-}
-
-func pruneEmptySemanticParents(parents []map[string]any, keys []string) {
-	for i := len(parents) - 1; i >= 0; i-- {
-		child, _ := parents[i][keys[i]].(map[string]any)
-		if len(child) != 0 {
-			return
-		}
-		delete(parents[i], keys[i])
-	}
-}
-
-func semanticValueIndex(items []any, value any) int {
-	for i, item := range items {
-		if semanticValuesEqual(item, value) {
-			return i
-		}
-	}
-	return -1
-}
-
-func semanticValuesEqual(a, b any) bool {
-	ab, aerr := json.Marshal(a)
-	bb, berr := json.Marshal(b)
-	if aerr == nil && berr == nil && string(ab) == string(bb) {
-		return true
-	}
-	return fmt.Sprint(a) == fmt.Sprint(b)
+	return shared.SemanticPatchOptions{AllowedRoots: roots, ProtectedRoots: roots, CreateObjects: true}
 }
 
 // capEditPatchMeaning
@@ -1937,6 +1756,7 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 			results = append(results, editErr(base, circulation.ValueCodeRefused, "scope violation", map[string]any{circulation.KeyReason: "scope_violation"}))
 			continue
 		}
+		unlockEdit := l.lockEditPath(abs)
 
 		if _, statErr := os.Stat(abs); statErr != nil {
 			code := circulation.ValueCodeNotFound
@@ -1944,6 +1764,7 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 				code = circulation.ValueCodeReadFail
 			}
 			results = append(results, editErr(base, code, statErr.Error(), map[string]any{circulation.KeyReason: "not_found"}))
+			unlockEdit()
 			continue
 		}
 
@@ -1955,11 +1776,13 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 				code = circulation.ValueCodeReadFail
 			}
 			results = append(results, editErr(base, code, rerr.Error(), map[string]any{circulation.KeyReason: "read_failed"}))
+			unlockEdit()
 			continue
 		}
 		curOrdered, err := parseOrderedJSON(bCur)
 		if err != nil || curOrdered == nil || curOrdered.kind != 'o' {
 			results = append(results, editErr(base, circulation.ValueCodeInvalid, "invalid json", map[string]any{circulation.KeyReason: "invalid_json"}))
+			unlockEdit()
 			continue
 		}
 
@@ -1968,16 +1791,19 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 			if perr != nil {
 				msg, details := jsonParseErrorDetail(perr, it.PatchJSON)
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, msg, details))
+				unlockEdit()
 				continue
 			}
 			if parsedPatch.kind != 'o' {
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, "patch_json must be a json object (top-level value is not an object)", map[string]any{circulation.KeyReason: "invalid_payload"}))
+				unlockEdit()
 				continue
 			}
 			it.Patch = parsedPatch.toAny()
 		}
 		if it.Patch == nil && it.SemanticPatch == nil {
 			results = append(results, editErr(base, circulation.ValueCodeInvalid, "missing patch or semantic_patch", map[string]any{circulation.KeyReason: "invalid_payload"}))
+			unlockEdit()
 			continue
 		}
 
@@ -1985,16 +1811,19 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 			patch, derr := parseSectionPatch(it)
 			if derr != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, derr.Error(), map[string]any{circulation.KeyReason: "invalid_payload"}))
+				unlockEdit()
 				continue
 			}
 			orderedPatch, derr := orderedJSONForRequest(it.PatchJSON, patch)
 			if derr != nil {
 				msg, details := jsonParseErrorDetail(derr, it.PatchJSON)
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, msg, details))
+				unlockEdit()
 				continue
 			}
 			if orderedPatch.kind != 'o' {
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, "patch must be a json object (top-level value is not an object)", map[string]any{circulation.KeyReason: "invalid_payload"}))
+				unlockEdit()
 				continue
 			}
 
@@ -2008,17 +1837,19 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 		}
 
 		if it.SemanticPatch != nil {
-			curMap, _ := curOrdered.toAny().(map[string]any)
-			if serr := applySemanticPatch(curMap, it.SemanticPatch); serr != nil {
+			patched, serr := applyOrderedSemanticPatch(curOrdered, it.SemanticPatch)
+			if serr != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInvalid, serr.Error(), map[string]any{circulation.KeyReason: "invalid_payload"}))
+				unlockEdit()
 				continue
 			}
-			curOrdered = orderedJSONFromAny(curMap)
+			curOrdered = patched
 		}
 
 		cur, _ := curOrdered.toAny().(map[string]any)
 		if ivErr := validateMeaningInvariants(t, cur); ivErr != nil {
 			results = append(results, editErr(base, circulation.ValueCodeInvalid, ivErr.Error(), map[string]any{circulation.KeyReason: "invariants_failed"}))
+			unlockEdit()
 			continue
 		}
 
@@ -2029,10 +1860,12 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 				werr.Error(),
 				map[string]any{circulation.KeyReason: "write_failed"},
 			))
+			unlockEdit()
 			continue
 		}
 
 		results = append(results, editOK(base))
+		unlockEdit()
 		continue
 	}
 
