@@ -85,7 +85,6 @@ const (
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ReflexiveLoop) capTraceInspect(msg circulation.Message) {
 	in := msg.Intention
 	start := time.Now()
@@ -352,7 +351,7 @@ func parseTraceLine(line []byte, includePayloads bool) (tw circulation.TraceWire
 	}
 
 	var m map[string]json.RawMessage
-	if err := json.Unmarshal(line, &m); err != nil {
+	if err := shared.DecodeJSONUseNumber(line, &m); err != nil {
 		return tw, 0, "", "", false
 	}
 

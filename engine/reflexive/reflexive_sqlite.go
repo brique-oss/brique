@@ -56,6 +56,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 
@@ -72,13 +73,14 @@ import (
 // -----------------------------
 
 const (
-	sqliteDriverName    = "sqlite" // modernc
-	projectionDirName   = "projection"
-	meaningDBFilename   = "meaning.sqlite"
-	vocabularyJSONName  = "vocabulary.json" // root-level overlay file
-	vocabularyLLMName   = "vocabulary.llm.txt"
-	tmpSuffix           = ".tmp"
-	defaultBusyTimeoutM = 2000
+	sqliteDriverName       = "sqlite" // modernc
+	projectionDirName      = "projection"
+	meaningDBFilename      = "meaning.sqlite"
+	vocabularyJSONName     = "vocabulary.json" // root-level overlay file
+	vocabularyLLMName      = "vocabulary.llm.txt"
+	tmpSuffix              = ".tmp"
+	defaultBusyTimeoutM    = 2000
+	maxVocabularyTextRunes = 120
 )
 
 // dbPath
@@ -937,8 +939,8 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 	// of walk()), and nested arrays produce one "[]" per level, not only at
 	// the end of the path (e.g. "a.[].b.[]" for an array of objects each
 	// holding another array). The caller of this function only ever supplies
-	// the "[]"-free logical path (the same form vocabulary.query normalizes
-	// to via normalizeObservedVocabPath, which strips every ".[]" regardless
+	// the "[]"-free logical path (the same form materialized in vocabulary
+	// paths by normalizeObservedVocabPath, which strips every ".[]" regardless
 	// of position) — so resolving which real path_text rows it corresponds
 	// to requires asking the paths table which stored variants normalize
 	// back to it, rather than guessing a fixed suffix.
@@ -1237,109 +1239,82 @@ func (l *ReflexiveLoop) capSQLiteVocabularyQuery(msg circulation.Message) {
 		return
 	}
 
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
-	if err != nil {
-		l.emitResponseError(errorResp(in, circulation.ValueCodeUnavailable,
-			map[string]any{circulation.KeyReason: "db_open_failed"},
-			err.Error(),
-		))
-		return
-	}
-	defer db.Close()
-	_ = applySQLitePragmas(db)
-
+	axis := ""
 	pathStr := ""
-	includeValues := true
-	includeSegments := true
 	if in.Params != nil {
+		if s, ok := in.Params[circulation.KeyAxis].(string); ok {
+			axis = strings.TrimSpace(s)
+		}
 		if s, ok := in.Params[circulation.KeyPath].(string); ok {
 			pathStr = strings.TrimSpace(s)
 		}
-		if b, ok := in.Params[circulation.KeyIncludeValues].(bool); ok {
-			includeValues = b
-		}
-		if b, ok := in.Params[circulation.KeyIncludeSegments].(bool); ok {
-			includeSegments = b
-		}
 	}
-
-	parentID, err := resolveVocabNodeID(db, pathStr)
-	if err != nil {
-		l.emitResponseError(errorResp(in, circulation.ValueCodeNotFound,
-			map[string]any{circulation.KeyReason: "path_not_found"},
-			"vocabulary path not found",
+	switch axis {
+	case circulation.KeyBrique, circulation.KeyObjective, circulation.KeyFunctional, circulation.KeySubjective:
+	default:
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: "invalid_axis"},
+			"params.axis must be one of brique|objective|functional|subjective",
 		))
 		return
 	}
 
-	// Query children
-	rows, err := db.Query(`
-SELECT node_id, kind, seg, vtype, v_text, v_num
-FROM vocab_nodes
-WHERE parent_id IS ?
-ORDER BY kind ASC, seg ASC, v_text ASC, v_num ASC
-`, parentID)
+	vocab, err := loadVocabulary(l.frame.ContextDir)
 	if err != nil {
-		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-			map[string]any{circulation.KeyReason: "query_failed"},
+		code := circulation.ValueCodeInternal
+		reason := "vocabulary_read_failed"
+		if os.IsNotExist(err) {
+			code = circulation.ValueCodeUnavailable
+			reason = "vocabulary_unavailable"
+		}
+		l.emitResponseError(errorResp(in, code,
+			map[string]any{circulation.KeyReason: reason},
 			err.Error(),
 		))
 		return
 	}
-	defer rows.Close()
 
-	type Child struct {
-		NodeID int64    `json:"node_id"`
-		Kind   string   `json:"kind"`
-		Seg    *string  `json:"seg,omitempty"`
-		VType  *string  `json:"vtype,omitempty"`
-		VText  *string  `json:"v_text,omitempty"`
-		VNum   *float64 `json:"v_num,omitempty"`
+	axisVocabulary, ok := vocab[axis]
+	if !ok {
+		axisVocabulary = map[string]any{}
 	}
-
-	var out []Child
-	for rows.Next() {
-		var (
-			id    int64
-			kind  string
-			seg   sql.NullString
-			vtype sql.NullString
-			vtext sql.NullString
-			vnum  sql.NullFloat64
-		)
-		if err := rows.Scan(&id, &kind, &seg, &vtype, &vtext, &vnum); err != nil {
-			continue
+	selectedVocabulary := axisVocabulary
+	if pathStr != "" {
+		current := axisVocabulary
+		for _, segment := range strings.Split(pathStr, ".") {
+			segment = strings.TrimSpace(segment)
+			if segment == "" {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+					map[string]any{circulation.KeyReason: "invalid_path"},
+					"params.path must be a dot-separated path relative to params.axis",
+				))
+				return
+			}
+			object, isObject := current.(map[string]any)
+			if !isObject {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeNotFound,
+					map[string]any{circulation.KeyReason: "path_not_found"},
+					"vocabulary path not found under selected axis",
+				))
+				return
+			}
+			next, exists := object[segment]
+			if !exists {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeNotFound,
+					map[string]any{circulation.KeyReason: "path_not_found"},
+					"vocabulary path not found under selected axis",
+				))
+				return
+			}
+			current = next
 		}
-
-		if kind == "seg" && !includeSegments {
-			continue
-		}
-		if kind == "val" && !includeValues {
-			continue
-		}
-
-		c := Child{NodeID: id, Kind: kind}
-		if seg.Valid {
-			s := seg.String
-			c.Seg = &s
-		}
-		if vtype.Valid {
-			s := vtype.String
-			c.VType = &s
-		}
-		if vtext.Valid {
-			s := vtext.String
-			c.VText = &s
-		}
-		if vnum.Valid {
-			f := vnum.Float64
-			c.VNum = &f
-		}
-		out = append(out, c)
+		selectedVocabulary = current
 	}
 
 	l.emitResponseOK(in, map[string]any{
-		circulation.KeyChildren: out,
+		circulation.KeyAxis:       axis,
+		circulation.KeyPath:       pathStr,
+		circulation.KeyVocabulary: selectedVocabulary,
 	})
 }
 
@@ -1463,8 +1438,8 @@ func (l *ReflexiveLoop) capSQLiteVocabularyPatch(msg circulation.Message) {
 	for _, op := range valuePatch.remove {
 		removeVocabularyLeafValue(next, op.Path, op.Value)
 	}
-	next = filterVocabularyValuesWithSpaces(normalizeVocabularyLeafLists(next))
-	mergePatch = filterVocabularyValuesWithSpaces(normalizeVocabularyLeafLists(mergePatch))
+	next = filterVocabulary(normalizeVocabularyLeafLists(next))
+	mergePatch = filterVocabulary(normalizeVocabularyLeafLists(mergePatch))
 
 	// 3) Atomic write overlay file
 	if err := writeVocabularyFiles(l.frame.ContextDir, next, 0o644); err != nil {
@@ -2846,6 +2821,13 @@ func flattenKV(elementRow int64, doc map[string]any) ([]KVRow, []PathRow, error)
 				VNum:          &f,
 			})
 
+		case json.Number:
+			f, err := x.Float64()
+			if err != nil {
+				return
+			}
+			walk(f, keySeg, ordSeg, group)
+
 		case nil:
 			keyP := strings.Join(keySeg, ".")
 			ordP := strings.Join(ordSeg, ".")
@@ -3207,6 +3189,7 @@ func rebuildVocabularyFromJSON(exec any, vocab map[string]any) (int, error) {
 	if !ok {
 		return 0, errors.New("invalid exec")
 	}
+	vocab = filterVocabulary(normalizeVocabularyLeafLists(vocab))
 
 	// Clear table
 	if _, err := q.Exec(`DELETE FROM vocab_nodes;`); err != nil {
@@ -3367,6 +3350,13 @@ func rebuildVocabularyFromJSON(exec any, vocab map[string]any) (int, error) {
 				}
 				return insertValNum(parentID, x)
 
+			case json.Number:
+				f, err := x.Float64()
+				if err != nil {
+					return err
+				}
+				return walkOverlay(f, baseSegPath)
+
 			case int:
 				if baseSegPath == "" {
 					return nil
@@ -3495,7 +3485,7 @@ func buildObservedVocabularyJSON(db interface {
 			continue
 		}
 		p = normalizeObservedVocabPath(strings.TrimSpace(p))
-		if p == "" {
+		if p == "" || !isVocabularyEligiblePath(p) {
 			continue
 		}
 		addObservedPath(out, p)
@@ -3533,7 +3523,7 @@ ORDER BY p.path_text ASC, k.vtype ASC, k.v_text ASC, k.v_num ASC
 			continue
 		}
 		pathText = normalizeObservedVocabPath(strings.TrimSpace(pathText))
-		if pathText == "" {
+		if pathText == "" || !isVocabularyEligiblePath(pathText) {
 			continue
 		}
 		switch vtype {
@@ -3708,10 +3698,33 @@ func observedValueEqual(a, b any) bool {
 		y, ok := b.(string)
 		return ok && x == y
 	case float64:
-		y, ok := b.(float64)
+		y, ok := numericVocabularyValue(b)
 		return ok && x == y
+	case json.Number:
+		xf, err := x.Float64()
+		if err != nil {
+			return false
+		}
+		yf, ok := numericVocabularyValue(b)
+		return ok && xf == yf
 	default:
 		return false
+	}
+}
+
+func numericVocabularyValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		numeric, err := typed.Float64()
+		return numeric, err == nil
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	default:
+		return 0, false
 	}
 }
 
@@ -3847,7 +3860,7 @@ func writeJSONFile(absPath string, v any, perm os.FileMode) error {
 }
 
 func writeVocabularyFiles(rootCtxDir string, vocab map[string]any, perm os.FileMode) error {
-	filtered := filterVocabularyValuesWithSpaces(normalizeVocabularyLeafLists(vocab))
+	filtered := filterVocabulary(normalizeVocabularyLeafLists(vocab))
 	if err := atomicWriteJSON(vocabularyPath(rootCtxDir), filtered, perm); err != nil {
 		return err
 	}
@@ -3855,7 +3868,7 @@ func writeVocabularyFiles(rootCtxDir string, vocab map[string]any, perm os.FileM
 }
 
 func writeVocabularyFilesStaged(rootCtxDir string, vocab map[string]any, perm os.FileMode, suffix string) (string, string, error) {
-	filtered := filterVocabularyValuesWithSpaces(normalizeVocabularyLeafLists(vocab))
+	filtered := filterVocabulary(normalizeVocabularyLeafLists(vocab))
 	jsonTmp := vocabularyPath(rootCtxDir) + suffix
 	llmTmp := vocabularyLLMPath(rootCtxDir) + suffix
 	if err := writeJSONFile(jsonTmp, filtered, perm); err != nil {
@@ -3868,43 +3881,157 @@ func writeVocabularyFilesStaged(rootCtxDir string, vocab map[string]any, perm os
 	return jsonTmp, llmTmp, nil
 }
 
-func filterVocabularyValuesWithSpaces(root map[string]any) map[string]any {
+// filterVocabulary keeps the global vocabulary focused on reusable semantic
+// paths and compact values. The complete meaning projection remains untouched:
+// fields excluded here are still available to meaning.query.
+func filterVocabulary(root map[string]any) map[string]any {
 	if root == nil {
 		return map[string]any{}
 	}
 	out := make(map[string]any, len(root))
 	for key, value := range root {
-		out[key] = filterVocabularyValueWithSpaces(value)
+		path := strings.TrimSpace(key)
+		if !isVocabularyEligiblePath(path) {
+			continue
+		}
+		if filtered, keep := filterVocabularyValue(value, path); keep {
+			out[key] = filtered
+		}
 	}
 	return out
 }
 
-func filterVocabularyValueWithSpaces(value any) any {
+func filterVocabularyValue(value any, path string) (any, bool) {
 	switch x := value.(type) {
 	case map[string]any:
-		return filterVocabularyValuesWithSpaces(x)
+		out := make(map[string]any, len(x))
+		for key, child := range x {
+			key = strings.TrimSpace(key)
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			if key == "" || !isVocabularyEligiblePath(childPath) {
+				continue
+			}
+			if filtered, keep := filterVocabularyValue(child, childPath); keep {
+				out[key] = filtered
+			}
+		}
+		return out, len(out) > 0 || len(x) == 0
 	case []any:
 		out := make([]any, 0, len(x))
 		for _, item := range x {
-			if s, ok := item.(string); ok && strings.Contains(strings.TrimSpace(s), " ") {
-				continue
+			if filtered, keep := filterVocabularyValue(item, path); keep {
+				out = append(out, filtered)
 			}
-			out = append(out, filterVocabularyValueWithSpaces(item))
 		}
-		return out
+		return out, true
 	case string:
-		if strings.Contains(strings.TrimSpace(x), " ") {
-			return []any{}
+		x = strings.TrimSpace(x)
+		if !isVocabularyTextValue(x) {
+			return nil, false
 		}
-		return x
+		return x, true
 	default:
-		return x
+		return x, true
 	}
+}
+
+func isVocabularyEligiblePath(path string) bool {
+	path = normalizeObservedVocabPath(strings.TrimSpace(path))
+	if path == "" {
+		return false
+	}
+	segments := strings.Split(path, ".")
+	switch segments[0] {
+	case circulation.KeyBrique, circulation.KeyObjective, circulation.KeyFunctional, circulation.KeySubjective:
+	default:
+		return false
+	}
+
+	for _, segment := range segments {
+		if isProjectionIgnoredKey(segment) || isVocabularyMetadataSegment(segment) {
+			return false
+		}
+	}
+	if segments[0] == circulation.KeyBrique && len(segments) > 1 {
+		switch segments[1] {
+		case "revision", "cap_name", "rel_ctx", "wrapper", "wrapper_name", "file":
+			return false
+		}
+	}
+	return true
+}
+
+func isVocabularyMetadataSegment(segment string) bool {
+	segment = strings.ToLower(strings.TrimSpace(segment))
+	switch segment {
+	case "name", "revision", "id", "hash", "path", "url", "locator", "description", "comment", "content", "body":
+		return true
+	}
+	for _, suffix := range []string{"_name", "_revision", "_id", "_hash", "_path", "_url"} {
+		if strings.HasSuffix(segment, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVocabularyTextValue(value string) bool {
+	if value == "" || utf8.RuneCountInString(value) > maxVocabularyTextRunes || strings.ContainsAny(value, "\r\n") {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "file://") {
+		return false
+	}
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") || strings.HasPrefix(value, "~/") {
+		return false
+	}
+	if len(value) >= 3 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/') {
+		return false
+	}
+	if isUUIDLikeVocabularyValue(value) || isLongHexVocabularyValue(value) {
+		return false
+	}
+	return true
+}
+
+func isUUIDLikeVocabularyValue(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for i, r := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		if !isHexRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLongHexVocabularyValue(value string) bool {
+	if len(value) < 32 {
+		return false
+	}
+	for _, r := range value {
+		if !isHexRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexRune(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
 }
 
 func renderVocabularyLLM(root map[string]any) string {
 	var b strings.Builder
-	for _, key := range []string{circulation.KeyObjective, circulation.KeyFunctional, circulation.KeySubjective} {
+	for _, key := range []string{circulation.KeyBrique, circulation.KeyObjective, circulation.KeyFunctional, circulation.KeySubjective} {
 		if _, ok := root[key]; !ok {
 			continue
 		}
@@ -4099,6 +4226,7 @@ func vocabularyApplyAddOnly(exec any, patch map[string]any) (int, error) {
 	if patch == nil {
 		return 0, nil
 	}
+	patch = filterVocabulary(normalizeVocabularyLeafLists(patch))
 	q, ok := exec.(interface {
 		Exec(string, ...any) (sql.Result, error)
 		QueryRow(string, ...any) *sql.Row
@@ -4199,6 +4327,13 @@ func vocabularyApplyAddOnly(exec any, patch map[string]any) (int, error) {
 			}
 			tryCount(res)
 			return nil
+
+		case json.Number:
+			f, err := x.Float64()
+			if err != nil {
+				return err
+			}
+			return walk(f, baseSegPath)
 
 		case int:
 			return walk(float64(x), baseSegPath)
@@ -4400,6 +4535,10 @@ func vocabularyApplyValueRemoves(db *sql.DB, ops []vocabularyValuePatchOperation
 			_, _ = db.Exec(`DELETE FROM vocab_nodes WHERE parent_id=? AND kind='val' AND vtype='text' AND v_text=?`, *parentID, value)
 		case float64:
 			_, _ = db.Exec(`DELETE FROM vocab_nodes WHERE parent_id=? AND kind='val' AND vtype='num' AND v_num=?`, *parentID, value)
+		case json.Number:
+			if numeric, err := value.Float64(); err == nil {
+				_, _ = db.Exec(`DELETE FROM vocab_nodes WHERE parent_id=? AND kind='val' AND vtype='num' AND v_num=?`, *parentID, numeric)
+			}
 		case int:
 			_, _ = db.Exec(`DELETE FROM vocab_nodes WHERE parent_id=? AND kind='val' AND vtype='num' AND v_num=?`, *parentID, float64(value))
 		case int64:

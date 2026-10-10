@@ -49,7 +49,7 @@ export {
   type TraceFilters,
   type TraceTimeRange,
   type WrapperSnapshot,
-  type VocabularyChild,
+  type VocabularyAxis,
   type VocabularyPatch,
   type CapabilityMeaningQueryFilter,
   type ReadMeaningInputItem,

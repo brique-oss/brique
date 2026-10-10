@@ -26,7 +26,6 @@ import (
 	"brique_engine/shared"
 )
 
-
 // callN6MeaningUpdate is a thin helper that routes meaning.update to the root context.
 func callN6MeaningUpdate(t *testing.T, h *engineN6Harness, intentionID string, params map[string]any) circulation.Response {
 	t.Helper()
@@ -330,27 +329,14 @@ func TestEngine_N6_REF_34_MeaningUpdateAffectsVocabulary(t *testing.T) {
 
 	// Vocabulary.query should now expose the new path under objective
 	vocResp := callN6Vocabulary(t, h, "n6-upd34-vocab", "vocabulary.query", map[string]any{
-		circulation.KeyPath:            "objective",
-		circulation.KeyIncludeSegments: true,
-		circulation.KeyIncludeValues:   false,
+		circulation.KeyAxis: circulation.KeyObjective,
 	})
 	if vocResp.Status != circulation.ValueStatusOK {
 		t.Fatalf("vocabulary.query status=%q want ok error=%#v", vocResp.Status, vocResp.Error)
 	}
-	children := mustPayloadArray(t, mustPayloadMap(t, vocResp.Payload), circulation.KeyChildren)
-	found = false
-	for _, raw := range children {
-		child, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if seg, _ := child["seg"].(string); seg == "custom_tag_ref34" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("vocabulary.query should expose custom_tag_ref34 under objective, got children=%#v", children)
+	objectiveAxis := mustVocabularyAxis(t, vocResp, circulation.KeyObjective)
+	if _, found = objectiveAxis["custom_tag_ref34"]; !found {
+		t.Fatalf("vocabulary.query should expose custom_tag_ref34 in the complete objective axis: %#v", objectiveAxis)
 	}
 }
 
@@ -466,13 +452,11 @@ func TestEngine_N6_REF_36_MeaningRebuildModes(t *testing.T) {
 			t.Fatalf("response mode=%q want %q", payload["mode"], circulation.ValueVocabOnly)
 		}
 		vocResp := callN6Vocabulary(t, h, "n6-rb36-vocab-query", "vocabulary.query", map[string]any{
-			circulation.KeyPath:            "",
-			circulation.KeyIncludeSegments: true,
-			circulation.KeyIncludeValues:   false,
+			circulation.KeyAxis: circulation.KeyFunctional,
 		})
-		children := mustVocabularyChildren(t, vocResp)
-		if len(children) == 0 {
-			t.Fatalf("vocabulary.query should return segments after vocabulary-only rebuild")
+		functionalAxis := mustVocabularyAxis(t, vocResp, circulation.KeyFunctional)
+		if len(functionalAxis) == 0 {
+			t.Fatalf("vocabulary.query should return the complete selected axis after vocabulary-only rebuild")
 		}
 	})
 

@@ -190,8 +190,10 @@ function defaultParamsForCapability(
 
     // --- vocabulary ---
     case "vocabulary.delete":
-    case "vocabulary.query":
       return compact({ path: id && !isWildcardId(id) ? id : undefined });
+
+    case "vocabulary.query":
+      return compact({ axis: id && !isWildcardId(id) ? id : undefined });
 
     case "vocabulary.get":
       return {};

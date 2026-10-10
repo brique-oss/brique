@@ -8,57 +8,76 @@
   },
   "objective": {
     "name": "vocabulary.query",
-    "description": "Query the root vocabulary projection under one path."
+    "description": "Return one complete semantic axis or one complete subtree selected within it."
   },
   "functional": {
     "#root": {
-      "role": "Run a root-only vocabulary query under the requested path and return the matching child nodes.",
+      "role": "Run a root-only vocabulary query for one selected semantic axis and optionally restrict the response to one relative path, always returning the selected subtree in full.",
       "inputs": {
         "params": {
+          "axis": {
+            "type": "string",
+            "required": true,
+            "accepted_values": [
+              "brique",
+              "objective",
+              "functional",
+              "subjective"
+            ],
+            "_comment": "Required semantic axis. The complete filtered subtree of this axis is returned in one response."
+          },
           "path": {
             "type": "string",
-            "_comment": "Optional dot-separated vocabulary path (e.g. domain.status). Empty or absent resolves the root node."
-          },
-          "include_values": {
-            "type": "boolean",
-            "_comment": "Optional. When true, includes leaf values at the resolved node."
-          },
-          "include_segments": {
-            "type": "boolean",
-            "_comment": "Optional. When true, includes path segment metadata."
+            "required": false,
+            "_comment": "Optional dot-separated path relative to params.axis, for example music.classification with axis=functional. When absent or empty, the complete axis is returned. When present, the complete subtree rooted at that path is returned; this is not a one-level child traversal."
           }
         }
       },
       "outputs": {
         "payload": {
-          "children": {
-            "type": "array",
-            "_comment": "Child nodes at the resolved vocabulary path. Each item: { key (string — child segment name), has_children (bool — true if this node has further children), values (array of scalar values associated with this node, present only when include_values is true) }."
+          "axis": {
+            "type": "string",
+            "_comment": "The selected semantic axis."
+          },
+          "path": {
+            "type": "string",
+            "_comment": "The effective relative path, or an empty string when the complete axis was requested."
+          },
+          "vocabulary": {
+            "type": "any",
+            "_comment": "The complete filtered JSON value stored at the selected axis/path, including all nested paths and retained values. It is normally an object, but may be an array when path targets a vocabulary leaf."
           }
         }
       },
       "effects": {
-        "projection_db": "The root vocabulary projection is queried read-only."
+        "vocabulary_overlay": "The root vocabulary JSON projection is read-only."
       },
       "transformation_contract": {
-        "morphing": "A root vocabulary path query becomes the list of projected child vocabulary nodes visible under that path.",
+        "morphing": "A root vocabulary axis query, optionally narrowed by one relative path, becomes the complete projected value rooted at that selection.",
         "invariants": [
-          "vocabulary.query is root-only and operates on the derived SQLite vocabulary projection.",
-          "Returned children are ordered deterministically by kind, segment, and value fields.",
-          "include_values and include_segments filter the returned child set without mutating projection state."
+          "vocabulary.query is root-only and reads the derived global vocabulary projection.",
+          "The projection exposes only paths rooted at brique, objective, functional, or subjective and applies the same filtering policy as vocabulary.get.",
+          "Exactly one of the four axes is required.",
+          "An absent path returns the complete axis; a present path restricts the result but still returns its complete subtree rather than only its immediate children.",
+          "params.path is relative to params.axis and never changes the contextual scope of meaning.query.",
+          "The complete selection, including retained values, is returned without mutating projection state."
         ],
         "success": [
-          "On success, vocabulary.query returns children nodes under the resolved vocabulary parent path.",
-          "An empty children array is a valid successful result when the path exists but has no visible children after filtering."
+          "On success, vocabulary.query returns payload.axis, payload.path, and payload.vocabulary containing the complete selected axis or subtree.",
+          "An empty vocabulary object is a valid successful result when the selected axis has no materialized semantic content."
         ],
         "failure": [
           "The capacity is refused outside the root context.",
-          "The capacity fails when the projection database is unavailable or when the requested path does not resolve to a vocabulary node."
+          "The capacity fails with invalid when params.axis is absent or is not one of brique|objective|functional|subjective.",
+          "The capacity fails with invalid when params.path is malformed, and with not_found when it does not resolve below the selected axis.",
+          "The capacity fails when the materialized vocabulary is unavailable or cannot be decoded."
         ],
         "notes": [
-          "vocabulary.query returns child node summaries only; use vocabulary.get to retrieve the complete vocabulary document.",
-          "include_segments is accepted but does not change the external shape of child items in v1.",
-          "This queries a projection snapshot, not a live mirror of the filesystem — see meaning.rebuild's role and vocabulary.get's note on staleness. An empty or sparse children set under a path that should have content is more likely a stale/unpopulated projection than genuinely missing content; consider meaning.rebuild before concluding the world lacks what you expected."
+          "Start with the complete axis when the LLM needs the whole semantic dimension; use path when the relevant branch is already known and a smaller response is sufficient.",
+          "Path restriction never returns only one level: the complete matching subtree and all retained leaf values are included.",
+          "Use vocabulary.get only when all four axes are intentionally required in one response.",
+          "A field omitted from the vocabulary is not omitted from the meaning index; meaning.query can still filter on its exact semantic path.",
+          "This queries a projection snapshot, not a live mirror of the filesystem — see meaning.rebuild's role and vocabulary.get's note on staleness. An empty or sparse axis that should have content is more likely stale or unpopulated than genuinely empty; consider meaning.rebuild before concluding the world lacks what you expected."
         ]
       }
     }

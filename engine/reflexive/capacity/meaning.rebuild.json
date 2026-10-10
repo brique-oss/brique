@@ -62,7 +62,8 @@
         "invariants": [
           "meaning.rebuild is root-only and treats filesystem descriptors as the authoritative source during projection rebuild.",
           "Projection database replacement is staged and atomically swapped on success.",
-          "Vocabulary overlay rebuild deep-merges observed projected vocabulary with the current overlay, letting the current overlay win."
+          "Vocabulary overlay rebuild deep-merges observed projected vocabulary with the current overlay, letting the current overlay win.",
+          "Vocabulary materialization applies one shared filter to both vocabulary files and SQLite nodes, while the complete meaning index remains unfiltered."
         ],
         "success": [
           "On success, meaning.rebuild returns rebuild counters plus the effective mode and duration_ms.",
@@ -75,6 +76,7 @@
         "notes": [
           "meaning.rebuild operates on derived projection state and never mutates source descriptors.",
           "A vocabulary-only rebuild can succeed without reindexing meaning rows.",
+          "The vocabulary retains reusable semantic paths under brique, objective, functional, and subjective, but excludes generic identity/control/locator/prose fields and non-compact locator-like values. Excluded fields remain available to meaning.query.",
           "No engine capability ever calls meaning.rebuild automatically — not at process startup, not on any schedule, not as a side effect of edit.create/edit.patch_meaning/matter.write or any other descriptor-mutating capacity. This is a deliberate absence, not a gap: descriptor JSON files are not required to be edited only through engine capacities — a human or a wrapper may legitimately write matter.json/capacity JSON/etc. directly to disk, outside any edit.*/matter.* call, and the engine must not assume otherwise. Auto-triggering a rebuild from capacity calls alone would give a false sense of freshness while missing exactly that class of edit. vocabulary.get/vocabulary.query and meaning.query only ever see whatever the most recent meaning.rebuild (or meaning.update, for the elements it targeted) has told the projection, however old that is relative to the current filesystem — there is no engine-side freshness guarantee or default cadence. Keeping the projection current is an operational hygiene concern left to the caller/instance, not a fixed policy — what cadence or trigger makes sense (per edit, on a timer, only before navigation-heavy work) depends on the instance's actual editing patterns, particularly how much direct filesystem editing it does outside capacities. Before relying on vocabulary/meaning queries to navigate an unfamiliar or long-lived world, run meaning.rebuild (mode=vocabulary-only is enough when only vocabulary.get/vocabulary.query matter) unless you already have recent evidence the projection is current — a sparse-looking vocabulary is far more often a stale projection than a sparse world."
         ]
       }

@@ -17,7 +17,11 @@
 package shared
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -669,6 +673,14 @@ func AnyToInt64(v any) int64 {
 	case int:
 		return int64(t)
 	case float64:
+		// A float64 cannot carry every int64 exactly. Refuse values outside the
+		// IEEE-754 safe-integer range instead of silently returning a rounded
+		// revision. Small float conversions retain their historical truncation
+		// behavior for non-revision callers.
+		const maxSafeInteger = float64(1<<53 - 1)
+		if math.IsNaN(t) || math.IsInf(t, 0) || t > maxSafeInteger || t < -maxSafeInteger {
+			return 0
+		}
 		return int64(t)
 	case json.Number:
 		i, _ := t.Int64()
@@ -679,4 +691,23 @@ func AnyToInt64(v any) int64 {
 	default:
 		return 0
 	}
+}
+
+// DecodeJSONUseNumber decodes JSON while preserving numbers stored in
+// interface values as json.Number. Callers can then parse int64 revisions
+// without an intermediate float64 rounding step.
+func DecodeJSONUseNumber(data []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }

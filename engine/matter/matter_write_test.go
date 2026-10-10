@@ -17,10 +17,12 @@
 package matter
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -403,6 +405,78 @@ func TestMatterWrite_N1_MWR_03d_ExpectedRevisionSerializesConcurrentWriters(t *t
 	}
 }
 
+func TestMatterWrite_ExpectedRevisionExactJSONNumberAndDecimalString(t *testing.T) {
+	l, commCh, ctxDir := newMatterLoopHarness(t)
+	const currentRev int64 = 1791628249992121001
+	const mid = "m-exact-json-revision"
+	if err := os.MkdirAll(filepath.Join(ctxDir, matterDirName), 0o755); err != nil {
+		t.Fatalf("mkdir matter root: %v", err)
+	}
+	descriptorPath := filepath.Join(ctxDir, matterDirName, mid+matterDescriptorSuffix)
+	initial := fmt.Sprintf(`{"functional":{"winner":"none"},"brique":{"kind":"matter","substance_mode":"wrapper","revision":%d}}`, currentRev)
+	if err := os.WriteFile(descriptorPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write matter descriptor: %v", err)
+	}
+	l.catalogSetMatter(mid, CatalogEntry{Brique: map[string]any{
+		circulation.KeyKind:          circulation.ValueEntryKindMatter,
+		circulation.KeySubstanceMode: circulation.ValueModeWrapper,
+		circulation.KeyRevision:      currentRev,
+	}})
+
+	decodeWrite := func(id, revisionJSON, winner string) circulation.Message {
+		t.Helper()
+		raw := fmt.Sprintf(`{"kind":"intention","intention":{"intention_id":%q,"to":{"context":"/root","cap":"matter.write","type":"matter"},"from":{"context":"/root","cap":"test","type":"test"},"identity":{},"params":{"matter_id":%q,"expected_revision":%s,"functional":{"winner":%q}},"correlation":{}}}`, id, mid, revisionJSON, winner)
+		var msg circulation.Message
+		if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+			t.Fatalf("decode raw write %s: %v", id, err)
+		}
+		return msg
+	}
+
+	for _, stale := range []int64{currentRev - 1, currentRev + 1} {
+		l.capMatterWrite(decodeWrite(fmt.Sprintf("stale-%d", stale), strconv.FormatInt(stale, 10), "must-not-commit"))
+		resp := recvMatterLoopMsg(t, commCh, "exact numeric revision mismatch")
+		if resp.Response.Error == nil || resp.Response.Error.Code != circulation.ValueCodeRefused ||
+			resp.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonRevisionMismatch {
+			t.Fatalf("stale exact numeric guard should be refused: %#v", resp)
+		}
+	}
+
+	var unchanged struct {
+		Functional map[string]any `json:"functional"`
+		Brique     struct {
+			Revision int64 `json:"revision"`
+		} `json:"brique"`
+	}
+	before, err := os.ReadFile(descriptorPath)
+	if err != nil || json.Unmarshal(before, &unchanged) != nil {
+		t.Fatalf("read unchanged descriptor: %v", err)
+	}
+	if unchanged.Functional["winner"] != "none" || unchanged.Brique.Revision != currentRev {
+		t.Fatalf("mismatched guards mutated descriptor: %#v", unchanged)
+	}
+
+	l.capMatterWrite(decodeWrite("exact-number", strconv.FormatInt(currentRev, 10), "number"))
+	numberResp := recvMatterLoopMsg(t, commCh, "exact numeric revision success")
+	if numberResp.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("exact numeric guard should succeed: %#v", numberResp)
+	}
+	nextRev := shared.AnyToInt64(numberResp.Response.Payload[circulation.KeyRevision])
+	if nextRev <= currentRev {
+		t.Fatalf("revision did not progress: got %d want > %d", nextRev, currentRev)
+	}
+	wire, err := json.Marshal(numberResp)
+	if err != nil || !bytes.Contains(wire, []byte(`"revision":`+strconv.FormatInt(nextRev, 10))) {
+		t.Fatalf("response revision was not serialized as an exact JSON integer: %s err=%v", wire, err)
+	}
+
+	l.capMatterWrite(decodeWrite("exact-string", fmt.Sprintf("%q", strconv.FormatInt(nextRev, 10)), "string"))
+	stringResp := recvMatterLoopMsg(t, commCh, "decimal string revision success")
+	if stringResp.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("decimal string guard should remain accepted: %#v", stringResp)
+	}
+}
+
 func TestMatterWrite_N1_MWR_03b_CapMatterWriteSemanticPatchOnlyCommitsMatterJSON(t *testing.T) {
 	l, commCh, ctxDir := newMatterLoopHarness(t)
 	mid := "m-semantic-only"
@@ -693,7 +767,7 @@ func TestMatterWrite_N1_MWR_05_CapStructurePatch(t *testing.T) {
 		t.Fatalf("read patched structure file: %v", err)
 	}
 	fn := doc[circulation.KeyFunctional].(map[string]any)
-	if fn["x"] != float64(2) {
+	if shared.AnyToInt64(fn["x"]) != 2 {
 		t.Fatalf("structure patch should update functional.x to 2, got %#v", fn["x"])
 	}
 	tags := fn["tags"].([]any)
@@ -702,5 +776,93 @@ func TestMatterWrite_N1_MWR_05_CapStructurePatch(t *testing.T) {
 	}
 	if got := fn["items"].([]any)[0].(map[string]any)["name"]; got != "changed" {
 		t.Fatalf("structure semantic_patch should traverse array index: %#v", got)
+	}
+}
+
+func TestStructurePatchRevisionGuardCanonicalAliasesAndValidation(t *testing.T) {
+	l, commCh, ctxDir := newMatterLoopHarness(t)
+	if err := os.MkdirAll(filepath.Join(ctxDir, structureDirName), 0o755); err != nil {
+		t.Fatalf("mkdir structure dir: %v", err)
+	}
+
+	seed := func(sid string, revision int64) {
+		t.Helper()
+		doc := fmt.Sprintf(`{"functional":{"value":"seed"},"brique":{"kind":"structure","revision":%d}}`, revision)
+		if err := os.WriteFile(filepath.Join(ctxDir, structureDirName, sid+".json"), []byte(doc), 0o644); err != nil {
+			t.Fatalf("write %s: %v", sid, err)
+		}
+		l.catalogSetStructure(sid, CatalogEntry{Brique: map[string]any{
+			circulation.KeyKind:     circulation.ValueEntryKindStructure,
+			circulation.KeyRevision: revision,
+		}})
+	}
+	patch := func(id, sid string, guards map[string]any, value string) circulation.Message {
+		t.Helper()
+		params := map[string]any{
+			circulation.KeyStructureID: sid,
+			circulation.KeyPatches: []any{
+				map[string]any{"path": []any{circulation.KeyFunctional, "value"}, "value": value},
+			},
+		}
+		for key, raw := range guards {
+			params[key] = raw
+		}
+		l.capStructurePatch(circulation.Message{
+			Kind: circulation.ValueKindIntention,
+			Intention: circulation.Intention{
+				IntentionID: id,
+				Params:      params,
+			},
+		})
+		return recvMatterLoopMsg(t, commCh, id)
+	}
+
+	aliases := []string{
+		circulation.KeyExpectedRevision,
+		circulation.KeyLegacyExpRev,
+		circulation.KeyExpRev,
+	}
+	for index, key := range aliases {
+		sid := fmt.Sprintf("s-guard-%d", index)
+		revision := int64(1791628249992121001 + index*10)
+		seed(sid, revision)
+
+		success := patch("success-"+key, sid, map[string]any{key: json.Number(strconv.FormatInt(revision, 10))}, "committed")
+		if success.Response.Status != circulation.ValueStatusOK {
+			t.Fatalf("guard %q should succeed: %#v", key, success)
+		}
+		committedRev := shared.AnyToInt64(success.Response.Payload[circulation.KeyRevision])
+
+		refused := patch("refused-"+key, sid, map[string]any{key: revision}, "must-not-commit")
+		if refused.Response.Error == nil || refused.Response.Error.Code != circulation.ValueCodeRefused ||
+			refused.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonRevisionMismatch ||
+			shared.AnyToInt64(refused.Response.Error.Details[circulation.KeyExpectedRevision]) != revision ||
+			shared.AnyToInt64(refused.Response.Error.Details[circulation.KeyCurrentRevision]) != committedRev {
+			t.Fatalf("guard %q mismatch response: %#v", key, refused)
+		}
+	}
+
+	invalidCases := []struct {
+		name   string
+		guards map[string]any
+	}{
+		{name: "fractional", guards: map[string]any{circulation.KeyExpectedRevision: json.Number("1.5")}},
+		{name: "negative", guards: map[string]any{circulation.KeyExpectedRevision: int64(-1)}},
+		{name: "conflicting_aliases", guards: map[string]any{
+			circulation.KeyExpectedRevision: int64(10),
+			circulation.KeyLegacyExpRev:     int64(11),
+		}},
+	}
+	for index, tc := range invalidCases {
+		sid := fmt.Sprintf("s-invalid-guard-%d", index)
+		seed(sid, 10)
+		resp := patch("invalid-"+tc.name, sid, tc.guards, "must-not-commit")
+		if resp.Response.Error == nil || resp.Response.Error.Code != circulation.ValueCodeInvalid {
+			t.Fatalf("%s guard should be invalid: %#v", tc.name, resp)
+		}
+		doc, err := readJSONMapFile(filepath.Join(ctxDir, structureDirName, sid+".json"))
+		if err != nil || doc[circulation.KeyFunctional].(map[string]any)["value"] != "seed" {
+			t.Fatalf("%s invalid guard mutated structure: doc=%#v err=%v", tc.name, doc, err)
+		}
 	}
 }

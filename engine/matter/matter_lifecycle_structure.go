@@ -56,7 +56,6 @@ import (
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capStructureCreate(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -165,7 +164,6 @@ func (l *MatterLoop) capStructureCreate(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capStructureDelete(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -214,7 +212,6 @@ func (l *MatterLoop) capStructureDelete(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capStructureClone(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -319,7 +316,7 @@ func (l *MatterLoop) capStructureClone(msg circulation.Message) {
 
 	// Validate JSON (opaque)
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &doc); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: err.Error()},
 			"source structure is invalid JSON"))
@@ -394,7 +391,6 @@ func (l *MatterLoop) capStructureClone(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capStructureDerive(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return

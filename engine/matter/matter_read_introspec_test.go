@@ -75,7 +75,7 @@ func TestMatterReadIntrospec_N1_MRI_02_CapMatterReadMaterJSON(t *testing.T) {
 	if meaning[circulation.KeyObjective] == nil || meaning[circulation.KeySubjective] == nil {
 		t.Fatalf("meaning sections should be extracted: %#v", meaning)
 	}
-	if functional["f"] != float64(3) || brique[circulation.KeySubstanceMode] != circulation.ValueModeBrique {
+	if shared.AnyToInt64(functional["f"]) != 3 || brique[circulation.KeySubstanceMode] != circulation.ValueModeBrique {
 		t.Fatalf("functional/brique extraction mismatch: functional=%#v brique=%#v", functional, brique)
 	}
 }
@@ -242,7 +242,7 @@ func TestMatterReadIntrospec_N1_MRI_05_CapStructureRead(t *testing.T) {
 				circulation.KeyStructureID:    "s1",
 				circulation.KeyWantMeaning:    true,
 				circulation.KeyWantFunctional: true,
-				circulation.KeyWantBrique:    true,
+				circulation.KeyWantBrique:     true,
 			},
 		},
 	})

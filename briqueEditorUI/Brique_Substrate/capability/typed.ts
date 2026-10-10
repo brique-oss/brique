@@ -255,15 +255,7 @@ export type TraceFilters = {
 };
 
 // vocabulary.query
-export type VocabularyChild = {
-  kind: "seg" | "value" | string;
-  seg?: string;
-  vtype?: string;
-  v_text?: string;
-  value?: string;
-  count?: number;
-  path?: string;
-};
+export type VocabularyAxis = "brique" | "objective" | "functional" | "subjective";
 
 // vocabulary.patch
 export type VocabularyPatch = Record<string, unknown> | {
@@ -416,11 +408,14 @@ export type VocabularyPatchParams = { patch: VocabularyPatch };
 export type VocabularyPatchPayload = { updated_nodes: number; updated_values: number; duration_ms: number };
 
 export type VocabularyQueryParams = {
+  axis: VocabularyAxis;
   path?: string;
-  include_values?: boolean;
-  include_segments?: boolean;
 };
-export type VocabularyQueryPayload = { children: VocabularyChild[] };
+export type VocabularyQueryPayload = {
+  axis: VocabularyAxis;
+  path: string;
+  vocabulary: unknown;
+};
 
 // --- matter ---
 
@@ -585,7 +580,7 @@ export type CapabilityClient = {
     delete(context: string, params: VocabularyDeleteParams): Promise<CapabilityResult<VocabularyDeletePayload>>;
     get(context: string, params?: VocabularyGetParams): Promise<CapabilityResult<VocabularyGetPayload>>;
     patch(context: string, params: VocabularyPatchParams): Promise<CapabilityResult<VocabularyPatchPayload>>;
-    query(context: string, params?: VocabularyQueryParams): Promise<CapabilityResult<VocabularyQueryPayload>>;
+    query(context: string, params: VocabularyQueryParams): Promise<CapabilityResult<VocabularyQueryPayload>>;
   };
   matter: {
     clone(context: string, params: MatterCloneParams): Promise<CapabilityResult<MatterClonePayload>>;

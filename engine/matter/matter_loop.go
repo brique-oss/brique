@@ -44,7 +44,6 @@ package matter
 // This file defines the loop, lifecycle, dispatch table, and shared helpers.
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -1845,7 +1844,7 @@ func (l *MatterLoop) loadMatterEntryFromDisk(matterID string) (CatalogEntry, err
 		return CatalogEntry{}, err
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &doc); err != nil {
 		return CatalogEntry{}, err
 	}
 	syn, _ := doc[circulation.KeyBrique].(map[string]any)
@@ -1923,7 +1922,7 @@ func (l *MatterLoop) loadStructureEntryFromDisk(structureID string) (CatalogEntr
 		return CatalogEntry{}, err
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &doc); err != nil {
 		return CatalogEntry{}, err
 	}
 	syn, _ := doc[circulation.KeyBrique].(map[string]any)

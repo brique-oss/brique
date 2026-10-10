@@ -163,7 +163,7 @@ const CONTRACTS: CapabilityContract[] = [
   contract("vocabulary.delete", ["path"], ["deleted_path", "duration_ms"]),
   contract("vocabulary.get", [], ["vocabulary"]),
   contract("vocabulary.patch", ["patch"], ["updated_nodes", "updated_values", "duration_ms"]),
-  contract("vocabulary.query", ["path", "include_values", "include_segments"], ["children"]),
+  contract("vocabulary.query", ["axis", "path"], ["axis", "path", "vocabulary"]),
   contract("matter.clone", ["source_matter_id", "target_matter_id", "destination_ctx_id"], ["ok", "source_matter_id", "target_matter_id"]),
   contract("matter.create", ["matter_id", "matter", "payload"], ["ok", "matter_id", "revision"]),
   contract("matter.delete", ["matter_id"], ["ok", "matter_id"]),

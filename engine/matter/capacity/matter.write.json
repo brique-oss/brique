@@ -21,7 +21,7 @@
           },
           "expected_revision": {
             "type": "integer|string",
-            "_comment": "Optional optimistic-concurrency guard. When supplied, it must be a positive integer (or its base-10 string representation) equal to the matter's current revision. The comparison is performed while holding the per-matter lock; a mismatch refuses the write before any metadata or substance mutation. Omit this parameter to retain unconditional last-write-wins behavior. Callers whose number representation cannot preserve arbitrary int64 values should send the decimal string form."
+            "_comment": "Optional optimistic-concurrency guard. When supplied, it must be a positive integer (or its base-10 string representation) equal to the matter's current revision. JSON integer tokens are decoded without float64 precision loss. The comparison is performed while holding the per-matter lock; a mismatch refuses the write before any metadata or substance mutation. Omit this parameter to retain unconditional last-write-wins behavior. Legacy aliases exp_rev and expected_rev remain accepted."
           },
           "meaning": {
             "type": "object",

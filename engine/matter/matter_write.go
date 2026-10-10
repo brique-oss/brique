@@ -87,6 +87,10 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			openHTTP = strings.EqualFold(strings.TrimSpace(t), "true") || strings.TrimSpace(t) == "1"
 		case float64:
 			openHTTP = t != 0
+		case json.Number:
+			if n, err := t.Int64(); err == nil {
+				openHTTP = n != 0
+			}
 		}
 	}
 
@@ -186,18 +190,15 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	// Optional optimistic-concurrency guard. The check deliberately happens
 	// after acquiring the entity lock so two writers using the same revision
 	// cannot both commit.
-	if expectedRaw, supplied := params[circulation.KeyExpectedRevision]; supplied {
-		expectedRev, valid := parsePositiveRevision(expectedRaw)
-		if !valid {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
-				map[string]any{
-					circulation.KeyReason:           circulation.ValueReasonInvalidRequest,
-					circulation.KeyMatterID:         matterID,
-					circulation.KeyExpectedRevision: expectedRaw,
-				},
-				"expected_revision must be a positive integer or base-10 integer string"))
-			return
-		}
+	if expectedRev, supplied, guardErr := parseExpectedRevisionGuard(params); guardErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{
+				circulation.KeyReason:   circulation.ValueReasonInvalidRequest,
+				circulation.KeyMatterID: matterID,
+			},
+			guardErr.Error()))
+		return
+	} else if supplied {
 		if expectedRev != currentRev {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 				map[string]any{
@@ -490,7 +491,8 @@ func parsePositiveRevision(v any) (int64, bool) {
 	case int:
 		revision = int64(typed)
 	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed != math.Trunc(typed) || typed >= float64(math.MaxInt64) {
+		const maxSafeInteger = float64(1<<53 - 1)
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed != math.Trunc(typed) || typed > maxSafeInteger {
 			return 0, false
 		}
 		revision = int64(typed)
@@ -510,6 +512,35 @@ func parsePositiveRevision(v any) (int64, bool) {
 		return 0, false
 	}
 	return revision, revision > 0
+}
+
+func parseExpectedRevisionGuard(params map[string]any) (int64, bool, error) {
+	aliases := []string{
+		circulation.KeyExpectedRevision,
+		circulation.KeyLegacyExpRev,
+		circulation.KeyExpRev,
+	}
+
+	var (
+		revision int64
+		supplied bool
+	)
+	for _, key := range aliases {
+		raw, ok := params[key]
+		if !ok {
+			continue
+		}
+		parsed, valid := parsePositiveRevision(raw)
+		if !valid {
+			return 0, true, fmt.Errorf("%s must be a positive integer or base-10 integer string", key)
+		}
+		if supplied && parsed != revision {
+			return 0, true, fmt.Errorf("conflicting revision guards")
+		}
+		revision = parsed
+		supplied = true
+	}
+	return revision, supplied, nil
 }
 
 // finalizeWriteLeaseAfterUpload
@@ -701,29 +732,18 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 		return
 	}
 
-	// ---- optional if_rev (best-effort) ----
-	ifRaw := any(nil)
-	if in.Params != nil {
-		ifRaw = in.Params[circulation.KeyExpRev]
-	}
-	if ifRaw != nil {
-		exp := shared.AnyToInt64(ifRaw)
-		cur := int64(0)
-		if e.Brique != nil {
-			cur = shared.AnyToInt64(e.Brique[circulation.KeyRevision])
-		}
-		if exp != 0 && cur != 0 && exp != cur {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
-				map[string]any{
-					circulation.KeyReason:       circulation.ValueReasonRevMismatch,
-					circulation.KeyStructureID:  sid,
-					circulation.KeyExpRev:       exp,
-					circulation.KeyCurRev:       cur,
-					circulation.KeyExpectedKind: circulation.ValueEntryKindStructure,
-				},
-				"rev mismatch"))
-			return
-		}
+	// Parse the canonical guard and its two legacy aliases before doing any
+	// mutation work. Conflicting aliases are malformed rather than silently
+	// selecting one spelling.
+	expectedRev, guardSupplied, guardErr := parseExpectedRevisionGuard(in.Params)
+	if guardErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{
+				circulation.KeyReason:      circulation.ValueReasonInvalidRequest,
+				circulation.KeyStructureID: sid,
+			},
+			guardErr.Error()))
+		return
 	}
 
 	// ---- patches ----
@@ -761,23 +781,23 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// re-check rev after lock (best-effort)
-	if ifRaw != nil {
-		e2, ok2 := l.catalogGetStructure(sid)
-		if ok2 && e2.Brique != nil {
-			exp := shared.AnyToInt64(ifRaw)
-			cur := shared.AnyToInt64(e2.Brique[circulation.KeyRevision])
-			if exp != 0 && cur != 0 && exp != cur {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
-					map[string]any{
-						circulation.KeyReason:      circulation.ValueReasonRevMismatch,
-						circulation.KeyStructureID: sid,
-						circulation.KeyExpRev:      exp,
-						circulation.KeyCurRev:      cur,
-					},
-					"rev mismatch"))
-				return
-			}
+	// Compare only after acquiring the per-structure lock. A supplied guard is
+	// strict even when the current revision is absent or zero.
+	if guardSupplied {
+		currentRev := int64(0)
+		if latest, ok := l.catalogGetStructure(sid); ok && latest.Brique != nil {
+			currentRev = shared.AnyToInt64(latest.Brique[circulation.KeyRevision])
+		}
+		if expectedRev != currentRev {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{
+					circulation.KeyReason:           circulation.ValueReasonRevisionMismatch,
+					circulation.KeyStructureID:      sid,
+					circulation.KeyExpectedRevision: expectedRev,
+					circulation.KeyCurrentRevision:  currentRev,
+				},
+				"revision mismatch"))
+			return
 		}
 	}
 
@@ -792,7 +812,7 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 	}
 
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &doc); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyStructureID: sid, circulation.KeyErrorText: err.Error()},
 			"structure file is invalid JSON"))
@@ -1026,7 +1046,7 @@ func readJSONMapFile(path string) (map[string]any, error) {
 		return nil, err
 	}
 	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &m); err != nil {
 		return nil, err
 	}
 	if m == nil {

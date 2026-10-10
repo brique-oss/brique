@@ -63,6 +63,14 @@ type Intention struct {
 	Correlation *Correlation `json:"correlation,omitempty"`
 }
 
+// UnmarshalJSON preserves integer-valued params as json.Number through the
+// shared precision-safe decoder. This is required for Unix-nanosecond
+// revisions, which routinely exceed float64's exact-integer range.
+func (i *Intention) UnmarshalJSON(data []byte) error {
+	type plainIntention Intention
+	return shared.DecodeJSONUseNumber(data, (*plainIntention)(i))
+}
+
 func NewIntentionID() string {
 	return shared.NewID()
 }

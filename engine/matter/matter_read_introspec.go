@@ -32,10 +32,8 @@ package matter
 // If a key name differs in your repo, adjust the constants usage below.
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -116,7 +114,7 @@ func (l *MatterLoop) capMatterReadMaterJSON(matterID string) (map[string]any, ma
 			"failed to read matter.json"
 	}
 	var meta map[string]any
-	if err := json.Unmarshal(b, &meta); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &meta); err != nil {
 		return map[string]any{}, map[string]any{}, map[string]any{}, false, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonJSONInvalid, circulation.KeyFile: filepath.Base(p), circulation.KeyMatterID: matterID},
 			"matter.json is invalid json"
@@ -309,22 +307,7 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 		rev := int64(0)
 		if entry.Brique != nil {
 			if raw, ok := entry.Brique[circulation.KeyRevision]; ok {
-				switch t := raw.(type) {
-				case int64:
-					rev = t
-				case int:
-					rev = int64(t)
-				case float64:
-					rev = int64(t)
-				case json.Number:
-					if i, e := t.Int64(); e == nil {
-						rev = i
-					}
-				case string:
-					if i, e := strconv.ParseInt(t, 10, 64); e == nil {
-						rev = i
-					}
-				}
+				rev = shared.AnyToInt64(raw)
 			}
 		}
 
@@ -711,7 +694,7 @@ func (l *MatterLoop) capStructureRead(msg circulation.Message) {
 	}
 
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil {
+	if err := shared.DecodeJSONUseNumber(b, &doc); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 			map[string]any{
 				circulation.KeyReason:      circulation.ValueReasonInvalidPayload,

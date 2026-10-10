@@ -19,9 +19,9 @@
             "type": "string",
             "_comment": "Required. Name of the structure to patch (without .json extension)."
           },
-          "exp_rev": {
-            "type": "integer",
-            "_comment": "Optional optimistic revision guard. When non-zero, the patch is refused if the current revision differs."
+          "expected_revision": {
+            "type": "integer|string",
+            "_comment": "Optional optimistic-concurrency guard. When supplied, it must be a positive integer (or its base-10 string representation) equal to the structure's current revision. JSON integer tokens are decoded without float64 precision loss. exp_rev and expected_rev remain accepted as legacy aliases; conflicting aliases are invalid."
           },
           "patches": {
             "type": "array",
@@ -57,7 +57,7 @@
           "structure.patch only rewrites the descriptor of an existing local structure.",
           "patches and semantic_patch operations are applied in order; semantic_patch is transactional and the commit boundary yields exactly one new revision on success.",
           "At least one of patches or semantic_patch must carry a non-empty mutation intent.",
-          "When exp_rev is supplied and non-zero, the current structure revision must match before any patch is committed."
+          "When expected_revision or a legacy alias is supplied, the current structure revision must match before any patch is committed."
         ],
         "success": [
           "On success, structure.patch returns ok=true, the structure_id, and the committed new revision.",
@@ -65,7 +65,7 @@
         ],
         "failure": [
           "The capacity fails when structure_id is missing or neither patches nor semantic_patch provides a non-empty mutation intent.",
-          "The capacity refuses patching when the structure is absent from the runtime catalog or when exp_rev mismatches the current revision.",
+          "The capacity refuses patching when the structure is absent from the runtime catalog. It refuses with reason=revision_mismatch when the supplied expected revision differs from the current revision.",
           "The capacity fails when any patch is invalid, cannot apply cleanly, or the committed descriptor cannot be written back to disk."
         ],
         "notes": [

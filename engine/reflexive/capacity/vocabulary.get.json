@@ -8,11 +8,11 @@
   },
   "objective": {
     "name": "vocabulary.get",
-    "description": "Return the complete root vocabulary document, either as JSON or as the LLM-readable text map."
+    "description": "Return the filtered global semantic vocabulary, either as JSON or as the LLM-readable text map."
   },
   "functional": {
     "#root": {
-      "role": "Run a root-only vocabulary document read and return either the full projected vocabulary JSON or the LLM-readable vocabulary text map.",
+      "role": "Run a root-only vocabulary document read and return either the filtered global vocabulary JSON or its LLM-readable four-axis path map.",
       "inputs": {
         "params": {
           "file": {
@@ -50,8 +50,9 @@
         "invariants": [
           "vocabulary.get is root-only.",
           "vocabulary.get reads the selected materialized vocabulary artifact without mutating projection state.",
-          "The json file preserves the JSON structure stored by rebuild, update, patch, and delete operations.",
-          "The llm file is a text-only hierarchical path map and does not include vocabulary values."
+          "Both artifacts expose only the brique, objective, functional, and subjective semantic axes.",
+          "The json file applies the same generic semantic-path and compact-value policy as the SQLite vocabulary projection.",
+          "The llm file is a text-only hierarchical path map over the four axes and does not include vocabulary values."
         ],
         "success": [
           "On success with file=json, vocabulary.get returns payload.file='json' and payload.vocabulary as the complete vocabulary JSON object.",
@@ -63,8 +64,9 @@
           "The capacity fails when the selected vocabulary artifact is unavailable or cannot be decoded/read."
         ],
         "notes": [
-          "vocabulary.get returns the full selected document; use vocabulary.query for path-scoped child traversal.",
+          "vocabulary.get returns all four axes in one document; prefer vocabulary.query when one complete semantic axis is sufficient.",
           "vocabulary.query remains JSON projection-only and is not affected by params.file.",
+          "The vocabulary is intentionally smaller than the meaning index: identity, revision, locator, long prose, URL, filesystem-path, UUID, and long-hash data are omitted. In particular, any path segment named name is excluded. Those fields remain indexed and queryable through meaning.query.",
           "This is a projection snapshot, not a live mirror of the filesystem: nothing in the engine calls meaning.rebuild or meaning.update automatically when descriptors are created, edited, or deleted (edit.create, edit.patch_meaning, matter.write, etc. never touch the projection). A vocabulary that looks sparse relative to the real number of contexts/capacities/matters on disk almost always means the projection predates most of that content, not that the content is absent. Before relying on this vocabulary to navigate an unfamiliar or long-lived world, call meaning.rebuild (mode=vocabulary-only is enough for this capacity) if you have no recent evidence the projection is current — do not assume a rebuild done earlier in an unrelated session still covers what exists now."
         ]
       }

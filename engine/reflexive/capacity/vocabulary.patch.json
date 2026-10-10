@@ -17,7 +17,7 @@
         "params": {
           "patch": {
             "type": "object",
-            "_comment": "Required. Two accepted forms. Form 1 — hierarchical overlay: a nested JSON object deep-merged into vocabulary.json. Form 1 example: { \"domain\": { \"status\": [\"active\", \"archived\"] }, \"media\": { \"format\": [\"mp3\", \"wav\"] } }. Form 2 — value operations: { \"add\": [{ \"path\": string[] (key segment array), \"value\": any }], \"remove\": [{ \"path\": string[], \"value\": any }] }. Form 2 example: { \"add\": [{ \"path\": [\"domain\", \"status\"], \"value\": \"review\" }], \"remove\": [{ \"path\": [\"domain\", \"status\"], \"value\": \"deprecated\" }] }. Detection rule: if the patch object has an 'add' or 'remove' key whose value is an array, Form 2 is used; otherwise Form 1."
+            "_comment": "Required. Two accepted forms. Only paths beginning with one of the four semantic axes (brique, objective, functional, subjective) are materialized; other branches are filtered out. Form 1 — hierarchical overlay: a nested JSON object deep-merged into vocabulary.json. Example: { \"functional\": { \"domain\": { \"status\": [\"active\", \"archived\"] } } }. Form 2 — value operations: { \"add\": [{ \"path\": string[] (key segment array), \"value\": any }], \"remove\": [{ \"path\": string[], \"value\": any }] }. Example: { \"add\": [{ \"path\": [\"functional\", \"domain\", \"status\"], \"value\": \"in review\" }], \"remove\": [{ \"path\": [\"functional\", \"domain\", \"status\"], \"value\": \"deprecated\" }] }. Detection rule: if the patch object has an 'add' or 'remove' key whose value is an array, Form 2 is used; otherwise Form 1."
           }
         }
       },
@@ -46,8 +46,9 @@
         "morphing": "A root vocabulary patch becomes a new committed JSON overlay, regenerated LLM-readable vocabulary map, and projection state, with explicit patch statistics for the touched vocabulary nodes and values.",
         "invariants": [
           "vocabulary.patch is root-only and rewrites the vocabulary overlay before updating the projection.",
-          "The JSON vocabulary file filters out string values containing spaces before it is written.",
-          "The LLM vocabulary file is derived from the JSON vocabulary tree and contains only the hierarchical category/path map, without values.",
+          "Manual additions are subject to the same semantic-path and compact-value filtering policy as observed vocabulary; a patch cannot bypass it.",
+          "Short multiword semantic values are retained. Strings longer than 120 Unicode characters, multiline strings, URLs, filesystem paths, UUIDs, and hexadecimal strings of at least 32 characters are filtered out.",
+          "The LLM vocabulary file is derived from the JSON vocabulary tree and contains only the hierarchical four-axis category/path map, without values.",
           "Patch application is a deterministic deep-merge where existing overlay values can override observed defaults.",
           "Projection insertion is add-only in v1 and does not remove existing projected vocabulary nodes."
         ],

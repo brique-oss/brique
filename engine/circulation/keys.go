@@ -113,6 +113,7 @@ const (
 	KeyHTTPData          = "http_data"
 	KeyBrique            = "brique"
 	KeyVocabulary        = "vocabulary"
+	KeyAxis              = "axis"
 	KeySections          = "sections"
 	KeyIncludeResolution = "include_resolution"
 	KeyDSLRoot           = "#root"
@@ -142,15 +143,16 @@ const (
 	KeyExpectedRevision = "expected_revision"
 	KeyCurrentRevision  = "current_revision"
 
-	KeyChild       = "child"
-	KeyName        = "name"
-	KeySubID       = "sub_id"
-	KeyTarget      = "target"
-	KeyExpRev      = "expected_rev"
-	KeyCurRev      = "current_rev"
-	KeyPatches     = "patches"
-	KeyErrorText   = "error"
-	KeyPayloadType = "payload_type"
+	KeyChild        = "child"
+	KeyName         = "name"
+	KeySubID        = "sub_id"
+	KeyTarget       = "target"
+	KeyExpRev       = "expected_rev" // legacy alias of KeyExpectedRevision
+	KeyLegacyExpRev = "exp_rev"      // legacy descriptor spelling
+	KeyCurRev       = "current_rev"
+	KeyPatches      = "patches"
+	KeyErrorText    = "error"
+	KeyPayloadType  = "payload_type"
 
 	// reflexive loop
 	KeyInput            = "input"

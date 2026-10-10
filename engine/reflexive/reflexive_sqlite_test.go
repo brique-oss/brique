@@ -30,6 +30,77 @@ import (
 	"brique_engine/shared"
 )
 
+func TestFilterVocabularyKeepsSemanticPathsAndCompactPhrases(t *testing.T) {
+	longText := strings.Repeat("semantic prose ", 12)
+	filtered := filterVocabulary(map[string]any{
+		"legacy_root": map[string]any{"status": []any{"active"}},
+		circulation.KeyBrique: map[string]any{
+			"kind":         []any{"matter"},
+			"lang":         []any{"fr"},
+			"revision":     []any{3},
+			"cap_name":     []any{"matter.write"},
+			"wrapper_name": []any{"filesystem"},
+		},
+		circulation.KeyObjective: map[string]any{
+			"name":        []any{"identity-only"},
+			"description": []any{"long-form prose"},
+			"type":        []any{"knowledge base"},
+		},
+		circulation.KeyFunctional: map[string]any{
+			"role":        []any{"semantic search"},
+			"source_kind": []any{"document"},
+			"public":      []any{true},
+			"record_id":   []any{"42"},
+			"source_path": []any{"/tmp/source.json"},
+			"reference": []any{
+				"https://example.test/item",
+				"550e8400-e29b-41d4-a716-446655440000",
+				"0123456789abcdef0123456789abcdef",
+				longText,
+				"line one\nline two",
+				"short reusable phrase",
+			},
+		},
+		circulation.KeySubjective: map[string]any{
+			"tone": []any{"calm and precise"},
+		},
+	})
+
+	if _, ok := filtered["legacy_root"]; ok {
+		t.Fatalf("vocabulary should expose only the four semantic axes: %#v", filtered)
+	}
+	brique := filtered[circulation.KeyBrique].(map[string]any)
+	if _, ok := brique["revision"]; ok {
+		t.Fatalf("brique revision is control metadata and must be filtered: %#v", brique)
+	}
+	if _, ok := brique["cap_name"]; ok {
+		t.Fatalf("brique cap_name is identity metadata and must be filtered: %#v", brique)
+	}
+	if _, ok := brique["kind"]; !ok {
+		t.Fatalf("brique kind remains semantically useful: %#v", brique)
+	}
+	objective := filtered[circulation.KeyObjective].(map[string]any)
+	if _, ok := objective["name"]; ok {
+		t.Fatalf("name must never enter the vocabulary: %#v", objective)
+	}
+	if _, ok := objective["type"]; !ok {
+		t.Fatalf("semantic objective fields should remain: %#v", objective)
+	}
+	functional := filtered[circulation.KeyFunctional].(map[string]any)
+	for _, key := range []string{"role", "source_kind", "public"} {
+		if _, ok := functional[key]; !ok {
+			t.Fatalf("opaque functional field %q must not be over-fitted away: %#v", key, functional)
+		}
+	}
+	if _, ok := functional["record_id"]; ok {
+		t.Fatalf("identifier paths must be filtered: %#v", functional)
+	}
+	values := functional["reference"].([]any)
+	if len(values) != 1 || values[0] != "short reusable phrase" {
+		t.Fatalf("only compact semantic values should remain, got %#v", values)
+	}
+}
+
 func newReflexiveSQLiteHarness(t *testing.T, ctxID string) (*ReflexiveLoop, chan circulation.Message, string) {
 	t.Helper()
 	ctxDir := t.TempDir()
@@ -571,12 +642,12 @@ func TestReflexiveSQLite_N1_RSQ_05_VocabularyQueryPatchDelete(t *testing.T) {
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-vocab-query",
-			Params:      map[string]any{circulation.KeyPath: "", circulation.KeyIncludeSegments: true},
+			Params:      map[string]any{},
 		},
 	})
-	m := recvReflexiveSQLiteMsg(t, commCh, "sqlite.vocabulary.query root")
-	if m.Response.Status != circulation.ValueStatusOK {
-		t.Fatalf("sqlite.vocabulary.query should return ok: %#v", m)
+	m := recvReflexiveSQLiteMsg(t, commCh, "sqlite.vocabulary.query missing axis")
+	if m.Response.Status != circulation.ValueStatusError || m.Response.Error == nil || m.Response.Error.Code != circulation.ValueCodeInvalid {
+		t.Fatalf("sqlite.vocabulary.query should require one axis: %#v", m)
 	}
 
 	l.capSQLiteVocabularyPatch(circulation.Message{

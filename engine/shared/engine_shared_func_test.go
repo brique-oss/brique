@@ -237,6 +237,7 @@ func TestAnyToInt64_N0_ATI64_01_TO_05(t *testing.T) {
 		{name: "int64", in: int64(7), want: 7},
 		{name: "int", in: int(8), want: 8},
 		{name: "float64", in: float64(9.9), want: 9},
+		{name: "unsafe_float64", in: float64(1 << 60), want: 0},
 		{name: "json_number_valid", in: json.Number("10"), want: 10},
 		{name: "json_number_invalid", in: json.Number("10.5"), want: 0},
 		{name: "string_valid", in: "11", want: 11},
@@ -250,5 +251,19 @@ func TestAnyToInt64_N0_ATI64_01_TO_05(t *testing.T) {
 				t.Fatalf("AnyToInt64(%v) = %d, want %d", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeJSONUseNumberPreservesInt64AndRejectsTrailingValues(t *testing.T) {
+	const revision = "1791628249992121001"
+	var decoded map[string]any
+	if err := shared.DecodeJSONUseNumber([]byte(`{"revision":`+revision+`}`), &decoded); err != nil {
+		t.Fatalf("DecodeJSONUseNumber: %v", err)
+	}
+	if number, ok := decoded["revision"].(json.Number); !ok || number.String() != revision {
+		t.Fatalf("revision precision lost: %#v", decoded["revision"])
+	}
+	if err := shared.DecodeJSONUseNumber([]byte(`{} {}`), &decoded); err == nil {
+		t.Fatal("multiple JSON values should be rejected")
 	}
 }

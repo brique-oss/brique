@@ -79,6 +79,7 @@
         ],
         "notes": [
           "meaning.query is for projected discovery and selection, not for returning full descriptor sections.",
+          "meaning.query addresses the complete meaning index. Paths omitted from the filtered global vocabulary, including objective.name and locator/control metadata, remain valid query filters.",
           "Use read.meaning on the selected elements when detailed descriptor sections are required."
         ]
       }

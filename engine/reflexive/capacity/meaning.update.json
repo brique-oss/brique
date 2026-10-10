@@ -50,7 +50,8 @@
         "invariants": [
           "meaning.update is root-only and runs against the current projection database transactionally.",
           "At least one of params.elements or params.context must be provided to define the update target set.",
-          "Elements that cannot be resolved or parsed are skipped rather than aborting the entire update transaction."
+          "Elements that cannot be resolved or parsed are skipped rather than aborting the entire update transaction.",
+          "Incremental vocabulary enrichment applies the same semantic filtering policy as a full rebuild; the meaning rows themselves remain complete."
         ],
         "success": [
           "On success, meaning.update returns updated_elements_count, affected_vocab_paths, and duration_ms.",
