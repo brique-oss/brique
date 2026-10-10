@@ -244,8 +244,10 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 		// - if small enough -> inline bytes in response payload
 		// - else -> return a SubstanceHTTP lease handle so caller can fetch bytes out-of-band
 
-		// Inline threshold
-		const inlineMaxBytes int64 = 256 * 1024 // 256KB
+		inlineMaxBytes := l.inlineMaxBytes
+		if inlineMaxBytes <= 0 {
+			inlineMaxBytes = defaultInlineMaxBytes
+		}
 
 		ext := extensionFromFunctional(functional)
 		p, ok := l.dataBinPath(matterID, ext)
@@ -323,7 +325,7 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 			matterID,
 			ext,
 			rev,
-			30*time.Second,
+			0,
 			size,
 		)
 		if err != nil {

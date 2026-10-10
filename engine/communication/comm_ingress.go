@@ -17,10 +17,10 @@
 package comm
 
 import (
-	"fmt"
-	"strings"
 	"brique_engine/circulation"
 	"brique_engine/shared"
+	"fmt"
+	"strings"
 )
 
 // routeIngress
@@ -97,6 +97,12 @@ import (
 // - No business dispatch here; only variant selection.
 
 func (l *CommLoop) routeIngress(msg circulation.Message, endpoint string, ifacename string) {
+	var allowed bool
+	msg, allowed = l.enforceControlMessageLimit(msg)
+	if !allowed {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonPayloadTooLarge, "control message too large; use Matter substance")
+		return
+	}
 	l.sendToTrace(msg, circulation.ValueTraceCommIngress, "", "")
 	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
 		l.routeIngressRoot(msg, endpoint, ifacename)

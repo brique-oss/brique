@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/configuration"
 	"brique_engine/junction"
 	"brique_engine/shared"
 )
@@ -41,6 +42,17 @@ func newMatterLoopHarness(t *testing.T) (*MatterLoop, chan circulation.Message, 
 		},
 	}
 	return NewMatterLoop(frame), commCh, ctxDir
+}
+
+func TestMatterLoop_N1_MLO_00_DataPlaneConfig(t *testing.T) {
+	l := NewMatterLoopWithConfig(nil, map[string]any{
+		configuration.KeyMatterInlineMaxBytes: int64(1024),
+		configuration.KeyMatterMaxUploadBytes: int64(2048),
+		configuration.KeyMatterLeaseTTLms:     int64(1500),
+	})
+	if l.inlineMaxBytes != 1024 || l.subHTTP.maxUploadBytes != 2048 || l.subHTTP.defaultTTL != 1500*time.Millisecond {
+		t.Fatalf("unexpected matter data-plane config: inline=%d upload=%d ttl=%s", l.inlineMaxBytes, l.subHTTP.maxUploadBytes, l.subHTTP.defaultTTL)
+	}
 }
 
 func recvMatterLoopMsg(t *testing.T, ch <-chan circulation.Message, label string) circulation.Message {

@@ -17,12 +17,14 @@
 package wrapper
 
 const (
-	KindIntention    = "intention"
-	KindResponse     = "response"
-	TypeExecution    = "execution"
-	TypeMatter       = "matter"
-	TypeControl      = "control"
-	CapWrapperReady  = "wrapper_ready"
-	CapWrapperStop   = "wrapper_stop"
-	ModeWrapper      = "wrapper"
+	KindIntention   = "intention"
+	KindResponse    = "response"
+	StatusOK        = "ok"
+	StatusRunning   = "running"
+	TypeExecution   = "execution"
+	TypeMatter      = "matter"
+	TypeControl     = "control"
+	CapWrapperReady = "wrapper_ready"
+	CapWrapperStop  = "wrapper_stop"
+	ModeWrapper     = "wrapper"
 )

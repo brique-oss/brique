@@ -636,6 +636,7 @@ func TestMatterWrite_N1_MWR_04_FinalizeWriteLeaseAfterUpload(t *testing.T) {
 		rev:              int64(6),
 		matterRoot:       mRoot,
 		tmpSubstancePath: tmpPayload,
+		tmpMatterPath:    tmpMatter,
 		substancePath:    finalPayload,
 		newBrique:        map[string]any{circulation.KeyRevision: int64(8)},
 	}
@@ -655,6 +656,7 @@ func TestMatterWrite_N1_MWR_04_FinalizeWriteLeaseAfterUpload(t *testing.T) {
 		rev:              int64(7),
 		matterRoot:       mRoot,
 		tmpSubstancePath: tmpPayload,
+		tmpMatterPath:    tmpMatter,
 		substancePath:    finalPayload,
 		newBrique:        map[string]any{circulation.KeyRevision: int64(8), circulation.KeySubstanceMode: circulation.ValueModeBrique},
 	}

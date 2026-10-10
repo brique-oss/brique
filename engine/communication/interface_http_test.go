@@ -188,6 +188,14 @@ func TestHTTPInterface_N1_HTTP_04_StartServerHandlerIngress(t *testing.T) {
 	if badW.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status=%d want 405", badW.Code)
 	}
+
+	h.readLimit = int64(len(body) - 1)
+	tooLargeReq := httptest.NewRequest(http.MethodPost, "/brique/msg", strings.NewReader(string(body)))
+	tooLargeW := httptest.NewRecorder()
+	h.server.Handler.ServeHTTP(tooLargeW, tooLargeReq)
+	if tooLargeW.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized POST status=%d want 413", tooLargeW.Code)
+	}
 }
 
 func TestHTTPInterface_N1_HTTP_05_ReadLoopGuards(t *testing.T) {
@@ -300,6 +308,16 @@ func TestHTTPInterface_N1_HTTP_07_WriteLoopPostsToTarget(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("expected outbound POST")
+	}
+
+	h.readLimit = 128
+	oversized := mkIntentionMsg("@ext_pub1:/route", circulation.ValueTypeMatter, "/ctx/src")
+	oversized.Intention.Params = map[string]any{"bulk": strings.Repeat("x", 256)}
+	rt.Egress <- oversized
+	select {
+	case <-recv:
+		t.Fatal("oversized outbound control message should not be posted")
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	if err := h.Close(); err != nil {

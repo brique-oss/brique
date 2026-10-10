@@ -32,17 +32,20 @@ package matter
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/shared"
 )
+
+var errWriteLeaseStale = errors.New("write lease revision mismatch")
+var errWriteLeasePartialCommit = errors.New("write lease payload committed but descriptor commit failed")
 
 // capMatterWrite
 //
@@ -102,7 +105,8 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 		return
 	}
 
-	// Lock entity first. We MUST NOT defer unlock blindly because openHTTP transfers unlock to the lease.
+	// Serialize preparation against direct writes and lease finalization. An HTTP
+	// lease releases this lock as soon as its unique staging files are registered.
 	mu := l.lockFor(matterLockKey(matterID))
 	if mu == nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -111,23 +115,7 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 		return
 	}
 	mu.Lock()
-
-	transferred := false
-	unlocked := false
-
-	unlockNow := func() {
-		if unlocked {
-			return
-		}
-		unlocked = true
-		mu.Unlock()
-	}
-
-	defer func() {
-		if !transferred {
-			unlockNow()
-		}
-	}()
+	defer mu.Unlock()
 
 	// Re-check catalog under the entity lock (defense in depth).
 	entry, ok := l.catalogGetMatter(matterID)
@@ -327,6 +315,7 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	// We must stamp a rev into matter.json *before* commit (it is part of the boundary).
 	// If the commit fails, we don't expose the rev. After successful commit(s), we return it.
 	var stagedRev int64
+	var stagedMatterBytes []byte
 	if stageMatterJSON {
 		stagedRev, err = nextRevision(revisionFloor)
 		if err != nil {
@@ -347,20 +336,22 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 				"failed to marshal updated matter.json"))
 			return
 		}
-		if err := os.WriteFile(tmpMatter, b, 0o644); err != nil {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
-				fmt.Sprintf("failed to write matter.json%s: %v", tmpSuffix, err)))
-			return
+		stagedMatterBytes = b
+		if !openHTTP {
+			if err := os.WriteFile(tmpMatter, b, 0o644); err != nil {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
+					fmt.Sprintf("failed to write matter.json%s: %v", tmpSuffix, err)))
+				return
+			}
 		}
 	}
 
 	// --- HTTP upload path (brique-mode only) ---
 	// Contract:
-	// - capMatterWrite MUST KEEP the per-matter lock held until upload completes.
-	// - receiveAndCommit writes bytes into tmpPayload (lease tmp), then calls finalizeWriteLeaseAfterUpload(...)
-	// - finalize does: atomicReplace(tmpPayload->finalPayload), atomicReplace(tmpMatter->finalMatter if present),
-	//   bump rev, update catalog, persist catalog, unlock via lease.complete().
+	// - the upload uses lease-unique temporary files without holding a matter handler or lock.
+	// - finalizeWriteLeaseAfterUpload takes the per-matter lock, rechecks the bound revision,
+	//   then commits payload and descriptor.
 	if openHTTP {
 		if l.subHTTP == nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -369,11 +360,8 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			return
 		}
 
-		// Extract expected rev from catalog (strict binding).
-		expectedRev := shared.AnyToInt64(entry.Brique[circulation.KeyRevision])
-
-		// Transfer unlock ownership to the lease.
-		releaseFn := func() { unlockNow() }
+		// Bind the deferred commit to the exact revision observed under the lock.
+		expectedRev := currentRev
 
 		synAny, exists := newMatterObj[circulation.KeyBrique]
 		synMap, _ := synAny.(map[string]any)
@@ -389,8 +377,8 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			expectedRev,
 			in.Correlation.RootIntentionID,
 			synMap,
-			30*time.Second,
-			releaseFn,
+			stagedMatterBytes,
+			0,
 		)
 		if err != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -403,9 +391,6 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			return
 		}
 
-		transferred = true
-
-		// IMPORTANT: do not unlock here; the lease will unlock after finalize / CloseLease.
 		l.emitResponseOK(in, map[string]any{
 			circulation.KeyOK:       true,
 			circulation.KeyMatterID: matterID,
@@ -622,6 +607,16 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 	if strings.TrimSpace(lz.tmpSubstancePath) == "" || strings.TrimSpace(lz.substancePath) == "" {
 		return 0, "", fmt.Errorf("finalize: missing substance paths")
 	}
+	if strings.TrimSpace(lz.tmpMatterPath) == "" {
+		return 0, "", fmt.Errorf("finalize: missing staged matter path")
+	}
+
+	mu := l.lockFor(matterLockKey(matterID))
+	if mu == nil {
+		return 0, "", fmt.Errorf("finalize: missing matter lock")
+	}
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Strict TOCTOU: re-check rev still matches catalog before commit boundary.
 	entry, ok := l.catalogGetMatter(matterID)
@@ -630,7 +625,7 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 	}
 	curRev := shared.AnyToInt64(entry.Brique[circulation.KeyRevision])
 	if curRev != lz.rev {
-		return 0, "", fmt.Errorf("finalize: stale rev (expected %d, got %d)", lz.rev, curRev)
+		return 0, "", fmt.Errorf("%w: expected %d, got %d", errWriteLeaseStale, lz.rev, curRev)
 	}
 
 	// Best-effort sanity: tmp file exists (and size hint check if provided).
@@ -649,12 +644,11 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 	// Flat layout: matterRoot is shared by all matter ids, so the filename MUST be
 	// prefixed by matterID here, otherwise concurrent writes to different matters
 	// would race on a single shared descriptor file.
-	tmpMatter := filepath.Join(lz.matterRoot, matterID+matterDescriptorSuffix+tmpSuffix)
 	finalMatter := filepath.Join(lz.matterRoot, matterID+matterDescriptorSuffix)
 
-	if _, err := os.Stat(tmpMatter); err == nil {
-		if err := shared.AtomicReplace(tmpMatter, finalMatter); err != nil {
-			return 0, "", fmt.Errorf("finalize: commit matter.json failed: %w", err)
+	if _, err := os.Stat(lz.tmpMatterPath); err == nil {
+		if err := shared.AtomicReplace(lz.tmpMatterPath, finalMatter); err != nil {
+			return 0, "", fmt.Errorf("%w: %v", errWriteLeasePartialCommit, err)
 		}
 	} else if !os.IsNotExist(err) {
 		return 0, "", fmt.Errorf("finalize: stat matter.json%s failed: %w", tmpSuffix, err)

@@ -17,11 +17,15 @@
 package comm
 
 import (
-	"fmt"
-	"strings"
 	"brique_engine/circulation"
 	"brique_engine/junction"
 	"brique_engine/shared"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -1127,14 +1131,120 @@ func (l *CommLoop) sendToTrace(msg circulation.Message, traceKind string, reason
 	} else {
 		tw.IntentionId = msg.Response.IntentionID
 	}
+	if !junction.TraceGateEnabled(l.frame, tw) {
+		return
+	}
 	if traceKind == circulation.ValueTraceCommIngress || traceKind == circulation.ValueTraceCommEgress {
+		attachTraceMessageProjection(&tw, msg)
+	}
+	junction.TraceEmit(l.frame, tw)
+}
+
+func attachTraceMessageProjection(tw *circulation.TraceWire, msg circulation.Message) {
+	if tw == nil {
+		return
+	}
+	b, err := json.Marshal(msg)
+	if err == nil && len(b) <= shared.MaxInlineTraceMessageBytes {
 		if msg.Kind == circulation.ValueKindIntention {
 			in := msg.Intention
 			tw.Intention = &in
-		} else {
+		} else if msg.Kind == circulation.ValueKindResponse {
 			resp := msg.Response
 			tw.Response = &resp
 		}
+		return
 	}
-	junction.TraceEmit(l.frame, tw)
+
+	tw.MessageTruncated = true
+	if err == nil {
+		tw.MessageBytes = int64(len(b))
+		sum := sha256.Sum256(b)
+		tw.MessageSHA256 = hex.EncodeToString(sum[:])
+	}
+	if msg.Kind == circulation.ValueKindIntention {
+		in := msg.Intention
+		tw.PayloadKeys = sortedMapKeys(in.Params)
+		in.Params = nil
+		if len(in.Matters) > 32 {
+			in.Matters = in.Matters[:32]
+		}
+		if len(in.ElementRefs) > 32 {
+			in.ElementRefs = in.ElementRefs[:32]
+		}
+		tw.Intention = &in
+		return
+	}
+	if msg.Kind == circulation.ValueKindResponse {
+		resp := msg.Response
+		tw.PayloadKeys = sortedMapKeys(resp.Payload)
+		resp.Payload = nil
+		if resp.Error != nil {
+			problem := *resp.Error
+			problem.Details = nil
+			resp.Error = &problem
+		}
+		tw.Response = &resp
+	}
+}
+
+func sortedMapKeys(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// enforceControlMessageLimit keeps bulk data out of the intention plane. An
+// oversized intention is replaced by a correlated communication error; an
+// oversized response is reduced in place to that same small error envelope.
+func (l *CommLoop) enforceControlMessageLimit(msg circulation.Message) (circulation.Message, bool) {
+	b, err := json.Marshal(msg)
+	if err != nil || shared.ValidateControlMessageBytes(int64(len(b)), shared.DefaultControlMessageBytes) == nil {
+		return msg, true
+	}
+	details := map[string]any{
+		circulation.KeyReason: circulation.ValueReasonPayloadTooLarge,
+		circulation.KeySize:   int64(len(b)),
+		circulation.KeyLimit:  shared.DefaultControlMessageBytes,
+	}
+	problem := &circulation.ResponseProblem{
+		Origin:  circulation.ValueOriginCommunication,
+		Code:    circulation.ValueCodeRefused,
+		Message: "control message too large; store large payloads in Matter substance",
+		Details: details,
+	}
+	if msg.Kind == circulation.ValueKindResponse {
+		msg.Response.Status = circulation.ValueStatusError
+		msg.Response.Payload = nil
+		msg.Response.Error = problem
+		return msg, true
+	}
+	if msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
+		ctxID := ""
+		if l != nil && l.frame != nil {
+			ctxID = l.frame.CtxId
+		}
+		ack := circulation.Message{
+			Kind: circulation.ValueKindResponse,
+			Response: circulation.Response{
+				IntentionID: msg.Intention.IntentionID,
+				To:          msg.Intention.From,
+				From: circulation.Address{
+					Context: circulation.ContextID(ctxID),
+					Type:    circulation.ValueTypeCommunication,
+					Cap:     msg.Intention.To.Cap,
+				},
+				Status: circulation.ValueStatusError,
+				Error:  problem,
+			},
+		}
+		l.routeEgress(ack)
+	}
+	return msg, false
 }

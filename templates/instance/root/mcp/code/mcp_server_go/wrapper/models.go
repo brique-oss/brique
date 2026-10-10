@@ -78,10 +78,10 @@ type Subscription struct {
 
 // Envelope is the top-level Brique message envelope.
 type Envelope struct {
-	Kind      string         `json:"kind"`
-	Ts        string         `json:"ts"`
-	Intention *IntentionMsg  `json:"intention,omitempty"`
-	Response  *ResponseMsg   `json:"response,omitempty"`
+	Kind      string        `json:"kind"`
+	Ts        string        `json:"ts"`
+	Intention *IntentionMsg `json:"intention,omitempty"`
+	Response  *ResponseMsg  `json:"response,omitempty"`
 }
 
 // IntentionMsg is the inner intention payload.
@@ -122,7 +122,7 @@ func (r *ResponseMsg) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if r.Status == "ok" {
+	if r.Status == StatusOK {
 		r.Ok = true
 	}
 	if len(aux.Error) > 0 {

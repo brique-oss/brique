@@ -57,7 +57,7 @@
               "allow_any_origin": false,
               "_origin_note": "Optional. CORS allow-any-origin, only meaningful for 'http'/'https' interfaces.",
               "read_limit": 0,
-              "_read_limit_note": "Optional. Max inbound message size in bytes. 0 means the engine default.",
+              "_read_limit_note": "Optional. Maximum serialized control-message size in bytes for this interface, inbound and outbound. It may lower but never raise the global 4 MiB control-plane ceiling. 0 means that ceiling. Voluminous or binary business payloads must travel through Matter substance leases.",
               "request_timeout_ms": 0,
               "write_timeout_ms": 0,
               "read_timeout_ms": 0,
@@ -138,8 +138,15 @@
         ]
       },
 
-      "matter": {},
-      "_matter_note": "Read by MatterLoop. The only family with no presence requirement at all — omit this key entirely if unused. Currently no standard keys; reserved for future matter-family configuration.",
+      "matter": {
+        "inline_max_bytes": 262144,
+        "_inline_max_bytes_note": "Optional. Maximum local brique substance size returned inline by matter.read. Larger substances use a one-shot HTTP read lease. Default: 262144 (256 KiB).",
+        "max_upload_bytes": 268435456,
+        "_max_upload_bytes_note": "Optional. Maximum body accepted by a matter HTTP upload lease. Default: 268435456 (256 MiB).",
+        "lease_ttl_ms": 30000,
+        "_lease_ttl_note": "Optional. Time allowed to begin a leased GET or PUT. An upload claimed before expiry may finish after this deadline. Default: 30000."
+      },
+      "_matter_note": "Optional Matter data-plane limits. Omit the block or individual positive integer fields to retain their defaults.",
 
       "trace": {
         "_comment": "Read by TraceLoop. Key presence required (empty {} is enough to start — every field below has a safe default if omitted, and 'enabled' defaults to false, meaning tracing is off unless you explicitly turn it on).",

@@ -82,7 +82,7 @@ type wsInterface struct {
 func (w *wsInterface) loadConfig(m map[string]any) error {
 	w.addr = ""
 	w.path = "/ws"
-	w.readLimit = 4 << 20
+	w.readLimit = shared.DefaultControlMessageBytes
 	w.writeTimeout = 5 * time.Second
 	w.pingInterval = 20 * time.Second
 	w.allowAnyOrigin = true
@@ -97,7 +97,7 @@ func (w *wsInterface) loadConfig(m map[string]any) error {
 		w.path = v
 	}
 	if v, ok := m[configuration.KeyIntRdLim].(float64); ok && v > 0 {
-		w.readLimit = int64(v)
+		w.readLimit = shared.EffectiveControlMessageLimit(int64(v))
 	}
 	if v, ok := m[configuration.KeyIntWrTO].(float64); ok && v > 0 {
 		w.writeTimeout = time.Duration(v) * time.Millisecond

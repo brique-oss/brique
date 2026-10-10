@@ -68,24 +68,28 @@ func TestHTTPSubstanceGetter_N1_HSG_02_OpenLeaseGuards(t *testing.T) {
 	if _, err := g.OpenReadLease("/ctx", "", "data", 1, time.Second, 0); err == nil {
 		t.Fatalf("OpenReadLease should fail on empty matter id")
 	}
-	if _, err := g.OpenWriteLease("/ctx", "", "data", 1, "i", nil, time.Second, nil); err == nil {
+	if _, err := g.OpenWriteLease("/ctx", "", "data", 1, "i", nil, nil, time.Second); err == nil {
 		t.Fatalf("OpenWriteLease should fail on empty matter id")
 	}
 	if _, err := g.OpenReadLease("/ctx", "m1", "data", 1, time.Second, 0); err == nil {
 		t.Fatalf("OpenReadLease should fail when getter not running")
 	}
-	if _, err := g.OpenWriteLease("/ctx", "m1", "data", 1, "i", nil, time.Second, nil); err == nil {
+	if _, err := g.OpenWriteLease("/ctx", "m1", "data", 1, "i", nil, []byte("{}"), time.Second); err == nil {
 		t.Fatalf("OpenWriteLease should fail when getter not running")
 	}
 }
 
 func TestHTTPSubstanceGetter_N1_HSG_03_OpenLeaseSuccess(t *testing.T) {
 	g := NewHTTPSubstanceGetter(newMatterLoopForGetter())
+	ctxDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ctxDir, matterDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	g.srvMu.Lock()
 	g.baseURL = "http://127.0.0.1:1"
 	g.srvMu.Unlock()
 
-	hr, err := g.OpenReadLease("/ctx", "m1", "data", 3, time.Second, 12)
+	hr, err := g.OpenReadLease(ctxDir, "m1", "data", 3, time.Second, 12)
 	if err != nil {
 		t.Fatalf("OpenReadLease error: %v", err)
 	}
@@ -96,7 +100,7 @@ func TestHTTPSubstanceGetter_N1_HSG_03_OpenLeaseSuccess(t *testing.T) {
 		t.Fatalf("read lease should be stored")
 	}
 
-	hw, err := g.OpenWriteLease("/ctx", "m2", "data", 7, "i1", map[string]any{"x": 1}, time.Second, nil)
+	hw, err := g.OpenWriteLease(ctxDir, "m2", "data", 7, "i1", map[string]any{"x": 1}, []byte("{}"), time.Second)
 	if err != nil {
 		t.Fatalf("OpenWriteLease error: %v", err)
 	}
@@ -106,49 +110,59 @@ func TestHTTPSubstanceGetter_N1_HSG_03_OpenLeaseSuccess(t *testing.T) {
 	if g.getLease(hw.RID) == nil {
 		t.Fatalf("write lease should be stored")
 	}
+	first := g.getLease(hw.RID)
+	hw2, err := g.OpenWriteLease(ctxDir, "m2", "data", 7, "i2", map[string]any{"x": 2}, []byte("{}"), time.Second)
+	if err != nil {
+		t.Fatalf("second OpenWriteLease error: %v", err)
+	}
+	second := g.getLease(hw2.RID)
+	if first == nil || second == nil || first.tmpSubstancePath == second.tmpSubstancePath || first.tmpMatterPath == second.tmpMatterPath {
+		t.Fatalf("each write lease must own unique temp files: first=%#v second=%#v", first, second)
+	}
 }
 
-func TestHTTPSubstanceGetter_N1_HSG_04_CloseLeaseAndStopReleaseOnce(t *testing.T) {
+func TestHTTPSubstanceGetter_N1_HSG_04_CloseLeaseAndStopCleanup(t *testing.T) {
 	g := NewHTTPSubstanceGetter(newMatterLoopForGetter())
-	count := 0
-	lz := &lease{rid: "r1", releaseLock: func() { count++ }}
+	dir := t.TempDir()
+	tmpPayload := filepath.Join(dir, "payload.tmp")
+	tmpMatter := filepath.Join(dir, "matter.tmp")
+	if err := os.WriteFile(tmpPayload, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmpMatter, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lz := &lease{rid: "r1", mode: leaseWrite, tmpSubstancePath: tmpPayload, tmpMatterPath: tmpMatter}
 	g.mu.Lock()
 	g.leases[lz.rid] = lz
 	g.mu.Unlock()
 
 	g.closeLease("r1", "done")
-	if count != 1 {
-		t.Fatalf("release lock should be called once, got %d", count)
-	}
 	if g.getLease("r1") != nil {
 		t.Fatalf("lease should be removed")
 	}
-
-	// complete is once-guarded
-	lz.complete()
-	if count != 1 {
-		t.Fatalf("release lock should remain one-shot, got %d", count)
+	if _, err := os.Stat(tmpPayload); !os.IsNotExist(err) {
+		t.Fatalf("payload temp should be removed, err=%v", err)
+	}
+	if _, err := os.Stat(tmpMatter); !os.IsNotExist(err) {
+		t.Fatalf("matter temp should be removed, err=%v", err)
 	}
 
-	// Stop should complete remaining leases
-	lz2 := &lease{rid: "r2", releaseLock: func() { count++ }}
+	lz2 := &lease{rid: "r2"}
 	g.mu.Lock()
 	g.leases[lz2.rid] = lz2
 	g.mu.Unlock()
 	if err := g.Stop(); err != nil {
 		t.Fatalf("Stop error: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("Stop should complete remaining lease, count=%d", count)
-	}
 }
 
 func TestHTTPSubstanceGetter_N1_HSG_05_SweeperExpiresLease(t *testing.T) {
 	g := NewHTTPSubstanceGetter(newMatterLoopForGetter())
-	count := 0
 	g.sweep = 10 * time.Millisecond
 	g.mu.Lock()
-	g.leases["r-exp"] = &lease{rid: "r-exp", expires: time.Now().Add(-time.Second), releaseLock: func() { count++ }}
+	g.leases["r-exp"] = &lease{rid: "r-exp", expires: time.Now().Add(-time.Second)}
+	g.leases["r-active"] = &lease{rid: "r-active", expires: time.Now().Add(-time.Second), uploading: true}
 	g.mu.Unlock()
 
 	g.wg.Add(1)
@@ -158,13 +172,34 @@ func TestHTTPSubstanceGetter_N1_HSG_05_SweeperExpiresLease(t *testing.T) {
 	}()
 
 	time.Sleep(40 * time.Millisecond)
-	g.once.Do(func() { close(g.done) })
-	g.wg.Wait()
 	if g.getLease("r-exp") != nil {
 		t.Fatalf("expired lease should be removed by sweeper")
 	}
-	if count != 1 {
-		t.Fatalf("expired lease should complete once, got %d", count)
+	if g.getLease("r-active") == nil {
+		t.Fatalf("active upload must not expire while its body is streaming")
+	}
+	g.mu.Lock()
+	g.leases["r-active"].uploading = false
+	g.mu.Unlock()
+	time.Sleep(30 * time.Millisecond)
+	if g.getLease("r-active") != nil {
+		t.Fatalf("inactive expired upload should be removed by sweeper")
+	}
+	g.once.Do(func() { close(g.done) })
+	g.wg.Wait()
+}
+
+func TestHTTPSubstanceGetter_N1_HSG_05b_WriteLeaseCanBeClaimedOnce(t *testing.T) {
+	g := NewHTTPSubstanceGetter(newMatterLoopForGetter())
+	lz := &lease{rid: "r-write", mode: leaseWrite, expires: time.Now().Add(time.Minute)}
+	g.mu.Lock()
+	g.leases[lz.rid] = lz
+	g.mu.Unlock()
+	if status := g.claimWriteLease(lz.rid, lz); status != "" {
+		t.Fatalf("first claim status=%q", status)
+	}
+	if status := g.claimWriteLease(lz.rid, lz); status != "upload_in_progress" {
+		t.Fatalf("second claim status=%q want upload_in_progress", status)
 	}
 }
 
@@ -267,6 +302,18 @@ func TestHTTPSubstanceGetter_N1_HSG_07_HandleSubstanceReadBranches(t *testing.T)
 	}
 	if g.getLease("r-ok") != nil {
 		t.Fatalf("read lease should close after successful GET")
+	}
+
+	// one-shot byte range
+	g.mu.Lock()
+	g.leases["r-range"] = &lease{rid: "r-range", tok: "t", mode: leaseRead, matter: "m1", rev: 5, expires: time.Now().Add(time.Second), substancePath: dataPath}
+	g.mu.Unlock()
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/substance/r-range?tok=t", nil)
+	req.Header.Set("Range", "bytes=1-3")
+	g.handleSubstance(rr, req)
+	if rr.Code != http.StatusPartialContent || rr.Body.String() != "ell" {
+		t.Fatalf("range read status/body: %d %q", rr.Code, rr.Body.String())
 	}
 }
 
@@ -397,8 +444,8 @@ func TestHTTPSubstanceGetter_N1_HSG_10_ReceiveAndCommitSuccess(t *testing.T) {
 			circulation.KeySubstanceMode: circulation.ValueModeBrique,
 			circulation.KeyRevision:      rev + 1,
 		},
-		expires:     time.Now().Add(time.Minute),
-		releaseLock: func() {},
+		tmpMatterPath: tmpMatter,
+		expires:       time.Now().Add(time.Minute),
 	}
 	g.mu.Lock()
 	g.leases[lz.rid] = lz
@@ -443,9 +490,9 @@ func TestHTTPSubstanceGetter_N1_HSG_11_ReceiveAndCommitStaleRev(t *testing.T) {
 		matterRoot:       mRoot,
 		tmpSubstancePath: tmpPayload,
 		substancePath:    finalPayload,
-		newBrique:       map[string]any{circulation.KeyRevision: rev + 11},
+		newBrique:        map[string]any{circulation.KeyRevision: rev + 11},
 		expires:          time.Now().Add(time.Minute),
-		releaseLock:      func() {},
+		tmpMatterPath:    filepath.Join(mRoot, mid+matterDescriptorSuffix+".w-stale"+tmpSuffix),
 	}
 	g.mu.Lock()
 	g.leases[lz.rid] = lz

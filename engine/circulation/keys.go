@@ -218,6 +218,10 @@ const (
 	KeyTsRFC3339        = "ts_rfc3339"
 	KeyIntentionJSON    = "intention_json"
 	KeyResponseJSON     = "response_json"
+	KeyMessageTruncated = "message_truncated"
+	KeyMessageBytes     = "message_bytes"
+	KeyMessageSHA256    = "message_sha256"
+	KeyPayloadKeys      = "payload_keys"
 	// -----------------------------
 	// Generic keys
 	// -----------------------------

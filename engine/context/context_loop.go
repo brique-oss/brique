@@ -1508,7 +1508,11 @@ func (c *ContextLoop) initFamiliesFromDescriptor(desc ContextDescriptor) error {
 	execLoop := execpkg.NewExecutionLoop(&c.frame, execCfg)
 	c.families[shared.FamilyExecution] = execLoop
 
-	matterLoop := matterpkg.NewMatterLoop(&c.frame)
+	var matterCfg map[string]any
+	if desc.EngineConfig != nil {
+		matterCfg, _ = desc.EngineConfig[shared.FamilyMatter].(map[string]any)
+	}
+	matterLoop := matterpkg.NewMatterLoopWithConfig(&c.frame, matterCfg)
 	c.families[shared.FamilyMatter] = matterLoop
 
 	// EngineConfig[shared.FamilyTrace] block (trust/scope/interfaces only).

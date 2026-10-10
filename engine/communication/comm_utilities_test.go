@@ -17,6 +17,7 @@
 package comm
 
 import (
+	"strings"
 	"testing"
 
 	"brique_engine/circulation"
@@ -271,12 +272,53 @@ func TestCommUtilities_N1_CMUT_11_SendToTrace(t *testing.T) {
 		t.Fatalf("expected projected intention trace, got %#v", m1.Trace)
 	}
 
+	// Large control messages retain routing/correlation but not their full params.
+	im.Intention.Params = map[string]any{"blob": strings.Repeat("x", shared.MaxInlineTraceMessageBytes)}
+	l.sendToTrace(im, circulation.ValueTraceCommIngress, "", "")
+	mLarge := recvMsg(t, traceCh, "large ingress summarized trace")
+	if !mLarge.Trace.MessageTruncated || mLarge.Trace.MessageBytes <= int64(shared.MaxInlineTraceMessageBytes) {
+		t.Fatalf("expected size-bounded trace summary, got %#v", mLarge.Trace)
+	}
+	if mLarge.Trace.Intention == nil || mLarge.Trace.Intention.Params != nil {
+		t.Fatalf("large trace must preserve envelope without params: %#v", mLarge.Trace)
+	}
+	if len(mLarge.Trace.PayloadKeys) != 1 || mLarge.Trace.PayloadKeys[0] != "blob" || mLarge.Trace.MessageSHA256 == "" {
+		t.Fatalf("large trace summary is incomplete: %#v", mLarge.Trace)
+	}
+
 	// Reflexive traffic is now traced (suppression removed in rework)
 	imReflex := mkIntentionMsg("/ctx/dst", circulation.ValueTypeReflexive, "/ctx/src")
 	l.sendToTrace(imReflex, circulation.ValueTraceCommIngress, "", "")
 	mReflex := recvMsg(t, traceCh, "reflexive trace emitted")
 	if mReflex.Kind != circulation.ValueKindTrace {
 		t.Fatalf("expected trace message for reflexive, got %#v", mReflex)
+	}
+}
+
+func TestCommUtilities_N1_CMUT_11b_ControlMessageLimit(t *testing.T) {
+	l, _ := newUtilitiesLoop("/ctx/src", newMockCommReg())
+	bulk := strings.Repeat("x", int(shared.DefaultControlMessageBytes))
+	response := circulation.Message{
+		Kind: circulation.ValueKindResponse,
+		Response: circulation.Response{
+			IntentionID: "large-response",
+			Status:      circulation.ValueStatusOK,
+			Payload:     map[string]any{"bulk": bulk},
+		},
+	}
+	reduced, allowed := l.enforceControlMessageLimit(response)
+	if !allowed || reduced.Response.Status != circulation.ValueStatusError || reduced.Response.Payload != nil || reduced.Response.Error == nil {
+		t.Fatalf("oversized response should become a correlated error: %#v", reduced.Response)
+	}
+	if reduced.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonPayloadTooLarge {
+		t.Fatalf("unexpected oversized response reason: %#v", reduced.Response.Error)
+	}
+
+	intention := mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/src")
+	intention.Intention.AwaitResponse = false
+	intention.Intention.Params = map[string]any{"bulk": bulk}
+	if _, allowed := l.enforceControlMessageLimit(intention); allowed {
+		t.Fatal("oversized fire-and-forget intention should be rejected")
 	}
 }
 

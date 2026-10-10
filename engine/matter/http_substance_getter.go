@@ -32,7 +32,7 @@ package matter
 //
 // Non-goals:
 // - Global auth / identity. Control-plane already authorized; data-plane checks only tok+expiry+binding.
-// - Range requests, resumable uploads, multipart, etc. (can be added later).
+// - Resumable uploads and multipart transfers.
 
 import (
 	"context"
@@ -46,7 +46,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,7 +58,7 @@ import (
 const substancePathPrefix = "/substance/"
 const healthzPath = "/healthz"
 
-const maxUploadBytes = int64(256 << 20) // 256MB
+const defaultMaxUploadBytes = int64(256 << 20) // 256MB
 
 const timeToLiveLease = 30 //30s
 const sweeperPeriod = 1    //1s
@@ -69,16 +68,16 @@ const sweeperPeriod = 1    //1s
 // -----------------------------
 
 type SubstanceHTTPHandle struct {
-	Kind       string         `json:"kind"` // "http"
-	BaseURL    string         `json:"base_url"`
-	Path       string         `json:"path"` // "/substance/<rid>"
-	RID        string         `json:"rid"`
-	Tok        string         `json:"tok"`
-	ExpiresAt  int64          `json:"expires_at"` // unix_nano
-	Rev        int64          `json:"revision"`   // lease rev binding
+	Kind      string         `json:"kind"` // "http"
+	BaseURL   string         `json:"base_url"`
+	Path      string         `json:"path"` // "/substance/<rid>"
+	RID       string         `json:"rid"`
+	Tok       string         `json:"tok"`
+	ExpiresAt int64          `json:"expires_at"` // unix_nano
+	Rev       int64          `json:"revision"`   // lease rev binding
 	NewBrique map[string]any `json:"new_brique"`
-	SizeHint   int64          `json:"size_hint,omitempty"`
-	Method     string         `json:"method"` // "GET" or "PUT"
+	SizeHint  int64          `json:"size_hint,omitempty"`
+	Method    string         `json:"method"` // "GET" or "PUT"
 }
 
 // -----------------------------
@@ -93,13 +92,13 @@ const (
 )
 
 type lease struct {
-	rid        string
-	tok        string
-	mode       leaseMode
-	matter     string
-	rev        int64
+	rid       string
+	tok       string
+	mode      leaseMode
+	matter    string
+	rev       int64
 	newBrique map[string]any
-	expires    time.Time
+	expires   time.Time
 
 	// Control-plane provenance (best-effort) for notifications.
 	srcIntentionID string
@@ -111,12 +110,8 @@ type lease struct {
 
 	// For WRITE
 	tmpSubstancePath string
-
-	// Held lock release (capMatterWrite acquires lock and gives us release fn)
-	releaseLock func()
-
-	// One-shot completion
-	doneOnce sync.Once
+	tmpMatterPath    string
+	uploading        bool // guarded by HTTPSubstanceGetter.mu
 }
 
 // expired
@@ -176,67 +171,6 @@ func (s *lease) expired(now time.Time) bool {
 	return !s.expires.IsZero() && now.After(s.expires)
 }
 
-// complete
-//
-// Functional role (Brique DSL):
-// - complete one lease exactly once and release its held write lock if present.
-//
-//
-// Expected Message Fields:
-// - none.
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - may invoke the lease-held lock release callback exactly once.
-//
-// Inputs:
-//
-// - none.
-//
-//
-// Outputs:
-//
-// - no direct return value; effects are produced via state updates, emitted messages, or filesystem I/O.
-//
-//
-// Contract:
-// - `releaseLock` is invoked at most once even if `complete` is called multiple times.
-//
-
-func (s *lease) complete() {
-	s.doneOnce.Do(func() {
-		if s.releaseLock != nil {
-			s.releaseLock()
-		}
-	})
-}
-
 // -----------------------------
 // HTTPSubstanceGetter
 // -----------------------------
@@ -253,7 +187,8 @@ type HTTPSubstanceGetter struct {
 	ln      net.Listener
 	baseURL string
 
-	defaultTTL time.Duration
+	defaultTTL     time.Duration
+	maxUploadBytes int64
 
 	// sweeper lifecycle
 	done  chan struct{}
@@ -318,11 +253,12 @@ type HTTPSubstanceGetter struct {
 
 func NewHTTPSubstanceGetter(ml *MatterLoop) *HTTPSubstanceGetter {
 	return &HTTPSubstanceGetter{
-		ml:         ml,
-		leases:     make(map[string]*lease),
-		defaultTTL: timeToLiveLease * time.Second,
-		sweep:      sweeperPeriod * time.Second,
-		done:       make(chan struct{}),
+		ml:             ml,
+		leases:         make(map[string]*lease),
+		defaultTTL:     timeToLiveLease * time.Second,
+		maxUploadBytes: defaultMaxUploadBytes,
+		sweep:          sweeperPeriod * time.Second,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -488,7 +424,7 @@ func (g *HTTPSubstanceGetter) Start() error {
 //
 // Contract:
 // - Safe to call multiple times; all remaining leases are completed before return.
-// - Active lease completion releases held write locks best effort before the server returns.
+// - Active HTTP transfers are stopped before lease-owned temporary files are removed.
 func (g *HTTPSubstanceGetter) Stop() error {
 	// Stop sweeper
 	g.once.Do(func() { close(g.done) })
@@ -501,30 +437,31 @@ func (g *HTTPSubstanceGetter) Stop() error {
 	g.baseURL = ""
 	g.srvMu.Unlock()
 
-	// Complete all leases (release locks) and clear.
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := srv.Shutdown(ctx); err != nil {
+			// Force active connections closed before deleting their lease files.
+			_ = srv.Close()
+		}
+		cancel()
+		if ln != nil {
+			_ = ln.Close()
+		}
+	}
+
+	// Wait for the server and sweeper before cleaning lease-owned files.
+	g.wg.Wait()
+
 	g.mu.Lock()
 	for _, lz := range g.leases {
-		if lz != nil {
-			lz.complete()
+		if lz != nil && lz.mode == leaseWrite {
+			_ = os.Remove(lz.tmpSubstancePath)
+			_ = os.Remove(lz.tmpMatterPath)
 		}
 	}
 	g.leases = make(map[string]*lease)
 	g.mu.Unlock()
 
-	if srv == nil {
-		// still wait sweeper/server goroutines if they were started
-		g.wg.Wait()
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(ctx)
-	if ln != nil {
-		_ = ln.Close()
-	}
-	// Wait loops to exit
-	g.wg.Wait()
 	return nil
 }
 
@@ -715,7 +652,7 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 //   - validate matter id and running HTTP getter
 //   - derive final and temporary brique-mode substance paths
 //   - mint write lease identifiers and expiry
-//   - bind write lease to expected revision, source intention, new brique metadata, and release lock callback
+//   - bind write lease to expected revision, source intention, and new brique metadata
 //   - register lease and emit lease-open trace
 //   - return HTTP write handle
 //
@@ -751,12 +688,13 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 //   - none.
 //
 // State/Storage Effects:
+// - stages a lease-unique matter descriptor file.
 // - registers one write lease in memory.
-// - retains the provided release-lock callback until lease completion.
 // - emits one lease-open trace.
 //
 // Inputs:
-// - ctxDir string, matterID string, expectedRev int64, srcIntentionID string, newBrique map[string]any, ttl time.Duration, releaseLock func().
+// - ctxDir string, matterID string, expectedRev int64, srcIntentionID string,
+//   newBrique map[string]any, stagedMatter []byte, ttl time.Duration.
 //
 //
 // Outputs:
@@ -764,8 +702,8 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 //
 //
 // Contract:
-// - Returned lease preserves the caller-provided lock release callback until completion or explicit close.
-// - Lease registration does not acquire the write lock itself; it only stores the caller-provided release callback.
+// - Lease-owned temporary paths include the random RID and cannot collide with another lease.
+// - Opening and streaming a lease does not hold the per-matter commit lock.
 //
 
 func (g *HTTPSubstanceGetter) OpenWriteLease(
@@ -775,8 +713,8 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 	expectedRev int64,
 	srcIntentionID string,
 	newBrique map[string]any,
+	stagedMatter []byte,
 	ttl time.Duration,
-	releaseLock func(),
 ) (SubstanceHTTPHandle, error) {
 	if matterID == "" {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: empty matter_id")
@@ -788,12 +726,19 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 		return SubstanceHTTPHandle{}, fmt.Errorf("substance http not running")
 	}
 
-	matterRoot := filepath.Join(ctxDir, matterDirName)
-	finalSub := filepath.Join(matterRoot, matterID+"."+ext)
-	tmpSub := finalSub + tmpSuffix
-
 	rid := randTok(18)
 	tok := randTok(24)
+	matterRoot := filepath.Join(ctxDir, matterDirName)
+	finalSub := filepath.Join(matterRoot, matterID+"."+ext)
+	tmpSub := finalSub + "." + rid + tmpSuffix
+	tmpMatter := filepath.Join(matterRoot, matterID+matterDescriptorSuffix+"."+rid+tmpSuffix)
+
+	if len(stagedMatter) == 0 {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: empty staged matter descriptor")
+	}
+	if err := os.WriteFile(tmpMatter, stagedMatter, 0o644); err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: stage matter descriptor: %w", err)
+	}
 
 	lz := &lease{
 		rid:              rid,
@@ -802,13 +747,13 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 		matter:           matterID,
 		rev:              expectedRev,
 		srcIntentionID:   srcIntentionID,
-		newBrique:       newBrique,
+		newBrique:        newBrique,
 		expires:          time.Now().Add(ttl),
 		ctxDir:           ctxDir,
 		matterRoot:       matterRoot,
 		substancePath:    finalSub,
 		tmpSubstancePath: tmpSub,
-		releaseLock:      releaseLock,
+		tmpMatterPath:    tmpMatter,
 	}
 
 	g.mu.Lock()
@@ -823,15 +768,15 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 	})
 
 	h := SubstanceHTTPHandle{
-		Kind:       "http",
-		BaseURL:    g.BaseURL(),
-		Path:       substancePathPrefix + rid,
-		RID:        rid,
-		Tok:        tok,
-		ExpiresAt:  lz.expires.UnixNano(),
-		Rev:        expectedRev,
+		Kind:      "http",
+		BaseURL:   g.BaseURL(),
+		Path:      substancePathPrefix + rid,
+		RID:       rid,
+		Tok:       tok,
+		ExpiresAt: lz.expires.UnixNano(),
+		Rev:       expectedRev,
 		NewBrique: newBrique,
-		Method:     "PUT",
+		Method:    "PUT",
 	}
 	return h, nil
 }
@@ -874,7 +819,7 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 //
 // State/Storage Effects:
 // - removes one lease from the in-memory registry.
-// - completes the lease and may release its held write lock.
+// - removes lease-owned temporary files, except recovery evidence retained after a partial commit.
 //
 // Inputs:
 //
@@ -899,6 +844,14 @@ func (g *HTTPSubstanceGetter) closeLease(rid string, why string) {
 	delete(g.leases, rid)
 	g.mu.Unlock()
 	if lz != nil {
+		if lz.mode == leaseWrite {
+			_ = os.Remove(lz.tmpSubstancePath)
+			// A descriptor that failed after payload replacement is retained as
+			// recovery evidence for the explicitly reported partial commit.
+			if why != "fail:partial_commit" {
+				_ = os.Remove(lz.tmpMatterPath)
+			}
+		}
 		if why == "expired" {
 			g.traceLease(circulation.ValueTraceLeaseExpired, lz.srcIntentionID, lz, map[string]any{
 				"why":       why,
@@ -912,7 +865,6 @@ func (g *HTTPSubstanceGetter) closeLease(rid string, why string) {
 				"rev":       lz.rev,
 			})
 		}
-		lz.complete()
 	}
 }
 
@@ -989,7 +941,7 @@ func (g *HTTPSubstanceGetter) sweeperLoop() {
 				if lz == nil {
 					continue
 				}
-				if lz.expired(now) {
+				if !lz.uploading && lz.expired(now) {
 					expired = append(expired, rid)
 				}
 			}
@@ -1125,6 +1077,15 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 			writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", rid, "PUT", map[string]any{})
 			return
 		}
+		if status := g.claimWriteLease(rid, lz); status != "" {
+			if status == "expired" {
+				g.closeLease(rid, status)
+				writeProblem(w, http.StatusUnauthorized, status, rid, "", map[string]any{})
+				return
+			}
+			writeProblem(w, http.StatusConflict, status, rid, "", map[string]any{})
+			return
+		}
 		g.receiveAndCommit(w, r, lz)
 		// close is done inside receiveAndCommit on success/failure
 		return
@@ -1133,6 +1094,25 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 		writeProblem(w, http.StatusInternalServerError, "bad_lease", rid, "", map[string]any{})
 		return
 	}
+}
+
+// claimWriteLease marks a write lease as actively uploading. The sweeper does
+// not expire active uploads, and a lease accepts at most one PUT.
+func (g *HTTPSubstanceGetter) claimWriteLease(rid string, expected *lease) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	lz := g.leases[rid]
+	if lz == nil || lz != expected {
+		return "unknown_rid"
+	}
+	if lz.expired(time.Now()) {
+		return "expired"
+	}
+	if lz.uploading {
+		return "upload_in_progress"
+	}
+	lz.uploading = true
+	return ""
 }
 
 // getLease
@@ -1326,7 +1306,7 @@ func (g *HTTPSubstanceGetter) revStillValid(matterID string, expected int64) boo
 // - Missing substance file yields HTTP problem response; successful responses expose `Content-Length` when stat is available.
 //
 
-func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, _ *http.Request, lz *lease) {
+func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, r *http.Request, lz *lease) {
 	// Best-effort open + stream
 	f, err := os.Open(lz.substancePath)
 	if err != nil {
@@ -1337,13 +1317,12 @@ func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, _ *http.Request, 
 	}
 	defer f.Close()
 
-	// Content-Length if possible
-	if st, err := f.Stat(); err == nil && st != nil {
-		w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	st, err := f.Stat()
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "stat_failed", lz.rid, "", map[string]any{})
+		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, f)
+	http.ServeContent(w, r, filepath.Base(lz.substancePath), st.ModTime(), f)
 }
 
 // receiveAndCommit
@@ -1429,7 +1408,11 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 	}
 
 	// Stream body -> tmp file
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	maxBytes := g.maxUploadBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxUploadBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	n, cpErr := io.Copy(tmpf, r.Body)
 	_ = r.Body.Close()
 	_ = tmpf.Sync()
@@ -1477,6 +1460,14 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		// Best-effort cleanup of tmp file on finalize error.
 		_ = os.Remove(lz.tmpSubstancePath)
+		if errors.Is(err, errWriteLeaseStale) {
+			g.failWrite(w, lz, http.StatusConflict, "stale", err)
+			return
+		}
+		if errors.Is(err, errWriteLeasePartialCommit) {
+			g.failWrite(w, lz, http.StatusInternalServerError, "partial_commit", err)
+			return
+		}
 		g.failWrite(w, lz, http.StatusInternalServerError, "finalize_failed", err)
 		return
 	}
@@ -1492,7 +1483,7 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		"new_rev":   newRev,
 		"warning":   warning,
 	})
-	g.closeLease(lz.rid, "write_done") // releases held per-matter lock via lz.complete()
+	g.closeLease(lz.rid, "write_done")
 }
 
 // failWrite

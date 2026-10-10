@@ -57,7 +57,7 @@
           },
           "data": {
             "type": "object",
-            "_comment": "Present only when 'data' is in the requested sections and the matter has brique substance mode. Two possible shapes. Shape 1 — inline (payload <= 256 KB): { kind: 'inline', bytes: string, size: integer (byte count), encoding: string, present only when substance_type='binary' }. bytes encoding depends on the matter descriptor's brique.substance_type (see matter.json template): 'text' (or substance_type absent — this is the default) → bytes is the raw file content as a plain UTF-8 string, NOT base64, and no 'encoding' field is present; 'binary' → bytes is base64-encoded content and 'encoding':'base64' is present alongside it. Always check for the 'encoding' field (or read brique.substance_type separately) before assuming bytes needs decoding — do not assume base64 unconditionally. Shape 2 — HTTP lease (payload > 256 KB): { kind: 'http', base_url: string, path: string (e.g. '/substance/<rid>'), rid: string, tok: string, expires_at: integer (unix nanoseconds), revision: integer, size_hint: integer, method: 'GET' }. To fetch leased content: GET <base_url><path> with the tok as authorization token, before expires_at. Wrapper-mode matters delegate to the owning wrapper and may return different payload shapes."
+            "_comment": "Present only when 'data' is requested and the matter has brique substance mode. At or below the configured inline_max_bytes (256 KiB by default), data is inline: { kind:'inline', bytes:string, size:integer, encoding?:'base64' }. Text is returned raw; binary is base64 and declares encoding. Above the threshold, data is a one-shot HTTP lease: { kind:'http', base_url, path, rid, tok, expires_at, revision, size_hint, method:'GET' }. Begin GET before expires_at. Byte-range requests are supported. Wrapper-mode matters may return different shapes."
           }
         }
       },
@@ -81,7 +81,7 @@
         ],
         "notes": [
           "Use read_mode to control which sections are returned; want_* params have no effect in any scenario.",
-          "The inline/http threshold is 256 KB: payloads at or below are served inline as base64 bytes; larger payloads yield an HTTP lease handle for out-of-band GET."
+          "The inline/http threshold is configurable with engine_config.matter.inline_max_bytes and defaults to 256 KiB. Text stays raw, while binary inline bytes are base64 encoded."
         ]
       }
     }

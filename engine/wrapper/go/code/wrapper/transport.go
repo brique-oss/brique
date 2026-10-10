@@ -28,6 +28,8 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+const maxControlMessageBytes = 4 << 20
+
 // TransportClient manages the WebSocket connection to the Brique engine boundary.
 type TransportClient struct {
 	url  string
@@ -54,11 +56,22 @@ func (t *TransportClient) Send(msg any) error {
 	if t.conn == nil {
 		return fmt.Errorf("transport: not connected")
 	}
-	data, err := json.Marshal(msg)
+	data, err := marshalControlMessage(msg)
 	if err != nil {
-		return fmt.Errorf("transport marshal: %w", err)
+		return err
 	}
 	return websocket.Message.Send(t.conn, string(data))
+}
+
+func marshalControlMessage(msg any) ([]byte, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("transport marshal: %w", err)
+	}
+	if len(data) > maxControlMessageBytes {
+		return nil, fmt.Errorf("transport: control message is %d bytes, limit is %d; store large payloads in Matter substance", len(data), maxControlMessageBytes)
+	}
+	return data, nil
 }
 
 // ReceiveLoop calls handler for each received raw JSON message until the connection closes.

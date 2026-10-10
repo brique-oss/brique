@@ -39,13 +39,13 @@
             "type": "object",
             "_comment": "Optional atomic semantic patch. Canonical form: { operations: [{ op: 'set'|'add'|'remove'|'delete'|'insert'|'test', path: (string|non-negative integer)[], value?: any }] }. Numeric segments address arrays; string segments address object keys. delete omits value; all other ops require it. Legacy {add:[...], remove:[...]} remains accepted but cannot be mixed with operations. path[0] must be objective, subjective, functional, or brique; those root sections cannot be deleted or replaced by non-objects. semantic_patch never reaches matter substance/data; use params.data or an HTTP upload lease for business content."
           },
-          "data": {
-            "type": "any",
-            "_comment": "Optional. Inline substance payload. Strings become raw bytes; other values are JSON-marshaled. How matter.read later serializes this content (plain string vs base64) is controlled separately by brique.substance_type ('text', the default, or 'binary') — set it via the 'brique' param above if this data is arbitrary binary content, or matter.read will hand it back as an unencoded string."
+        "data": {
+          "type": "any",
+          "_comment": "Optional small inline substance payload. Strings become raw bytes; other values are JSON-marshaled. Do not carry binary or voluminous content here, including as base64: request an HTTP upload lease with http_data=true instead. How matter.read later serializes small inline content (plain string vs base64) is controlled separately by brique.substance_type ('text', the default, or 'binary')."
           },
           "http_data": {
             "type": "boolean",
-            "_comment": "Optional. Set to true to request an HTTP upload lease instead of writing inline substance data. When true, the engine opens a write lease and returns an http_data handle in the response; the caller must then PUT the bytes to the lease URL before it expires. Accepted values: true (bool), 'true' or '1' (string), non-zero number."
+            "_comment": "Optional. Set to true for binary or voluminous substance data. The engine returns a one-shot HTTP PUT handle; the caller must begin the PUT before expires_at. The upload uses lease-unique temporary files, does not hold the matter lock while streaming, and acquires that lock only to verify the bound revision and finalize the commit. Accepted values: true (bool), 'true' or '1' (string), non-zero number."
           }
         }
       },
@@ -63,7 +63,7 @@
           },
           "http_data": {
             "type": "object",
-            "_comment": "Present only when params.http_data was true. HTTP write lease handle: { kind: 'http', base_url: string, path: string (e.g. '/substance/<rid>'), rid: string, tok: string, expires_at: integer (unix nanoseconds), revision: integer, method: 'PUT' }. The caller must PUT the substance bytes to <base_url><path> before expires_at to complete the write. When present, revision is not included in the response (it is committed after the upload completes)."
+            "_comment": "Present only when params.http_data was true. HTTP write lease handle: { kind: 'http', base_url: string, path: string (e.g. '/substance/<rid>'), rid: string, tok: string, expires_at: integer (unix nanoseconds), revision: integer, method: 'PUT' }. The caller must begin the one-shot PUT to <base_url><path>?tok=<tok> before expires_at; an active upload may finish afterward. When present, revision is not included in the intention response because it is committed by the PUT response after upload finalization."
           }
         }
       },
@@ -79,7 +79,8 @@
           "Every committed revision is strictly greater than the matter's preceding revision, including when the wall clock does not advance or moves backwards.",
           "When expected_revision is supplied, the current revision must match it under the per-matter lock before any mutation is staged.",
           "semantic_patch operations execute in declared order on a clone; any failure rejects the complete patch without mutation. Numeric path segments traverse arrays.",
-          "Payload bytes are writable only when the addressed matter remains in brique substance mode."
+          "Payload bytes are writable only when the addressed matter remains in brique substance mode.",
+          "Each HTTP upload lease owns unique temporary payload and descriptor files; the per-matter lock is acquired only at finalization."
         ],
         "success": [
           "A successful direct write returns ok=true, matter_id, and the committed revision.",
@@ -89,11 +90,14 @@
           "The capacity fails when matter_id is missing, no patch intent is provided, or a patch payload has the wrong shape.",
           "The capacity refuses the entire write with a revision-mismatch error when expected_revision differs from the current revision; no requested mutation is applied.",
           "The capacity fails when payload writing is requested outside brique mode or when the commit boundary cannot be completed.",
+          "A deferred upload fails with a revision conflict when another write commits after the lease was opened and before it is finalized.",
+          "A descriptor-commit failure after payload replacement is reported explicitly as partial_commit.",
           "The capacity fails with reason=invalid_patch, and applies none of the requested operations, when any semantic_patch op's path[0] is not one of objective, subjective, functional, brique."
         ],
         "notes": [
           "metadata patches are merged minimally into matter.json; semantic_patch.operations is the canonical precise mutation form and legacy add/remove remains accepted.",
-          "expected_revision is optional: omitting it preserves unconditional serialized writes, so concurrent valid writes may all succeed in lock-acquisition order.",
+          "expected_revision is optional for direct writes: omitting it preserves unconditional serialized commits in lock-acquisition order. Deferred HTTP leases always bind finalization to the revision observed when the lease opens, so only a lease whose base revision is still current can commit.",
+          "Intentions are control-plane messages. Use inline data only for small content; all binary or voluminous content must use http_data and then be referenced as a matter.",
           "Subscription notifications happen only after a successful committed write in brique mode."
         ]
       }

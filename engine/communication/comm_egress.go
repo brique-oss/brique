@@ -17,10 +17,10 @@
 package comm
 
 import (
-	"fmt"
-	"strings"
 	"brique_engine/circulation"
 	"brique_engine/shared"
+	"fmt"
+	"strings"
 )
 
 // routeEgress
@@ -88,6 +88,12 @@ import (
 // - Does not mutate payload semantics; only selects routing path.
 
 func (l *CommLoop) routeEgress(msg circulation.Message) {
+	var allowed bool
+	msg, allowed = l.enforceControlMessageLimit(msg)
+	if !allowed {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonPayloadTooLarge, "control message too large; use Matter substance")
+		return
+	}
 	l.sendToTrace(msg, circulation.ValueTraceCommEgress, "", "")
 	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
 		l.routeEgressRoot(msg)

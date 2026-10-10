@@ -45,17 +45,28 @@ func (c *AwaitCorrelator) Register(intentionID string) <-chan *ResponseMsg {
 	return ch
 }
 
-// Resolve delivers a response to the waiting caller, if any.
+// Resolve delivers a response to the waiting caller, if any. Intermediate
+// running responses keep the correlation registered for the final response.
 func (c *AwaitCorrelator) Resolve(resp *ResponseMsg) {
+	if resp == nil {
+		return
+	}
 	c.mu.Lock()
 	entry, ok := c.pending[resp.IntentionID]
-	if ok {
+	if ok && resp.Status != StatusRunning {
 		delete(c.pending, resp.IntentionID)
 	}
 	c.mu.Unlock()
 	if ok {
 		entry.ch <- resp
 	}
+}
+
+// Unregister removes a waiter after send failure or timeout.
+func (c *AwaitCorrelator) Unregister(intentionID string) {
+	c.mu.Lock()
+	delete(c.pending, intentionID)
+	c.mu.Unlock()
 }
 
 // CancelAll fails all pending entries with reason — called on shutdown.

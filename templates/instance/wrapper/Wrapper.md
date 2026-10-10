@@ -322,6 +322,8 @@ Outbound wrapper intentions MUST:
 
 * use context paths relative to the wrapper root
 
+They are control-plane messages and have a global serialized ceiling of 4 MiB. A wrapper must never embed voluminous or binary business content in intention params or response payloads, including as base64. It must write that content as Matter substance through the HTTP lease data-plane and pass only the matter reference. The standard runtimes reject oversized messages before WebSocket transmission.
+
 The wrapper does not know the absolute context.
 
 The engine reconstructs the full context path.

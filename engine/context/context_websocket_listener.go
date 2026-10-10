@@ -73,7 +73,7 @@ func configureSharedWebSocketListenerFromRoot(desc ContextDescriptor, ctxCommReg
 func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketListenerConfig {
 	cfg := junction.WebSocketListenerConfig{
 		Addr:           "",
-		ReadLimit:      4 << 20,
+		ReadLimit:      shared.DefaultControlMessageBytes,
 		WriteTimeout:   5 * time.Second,
 		PingInterval:   20 * time.Second,
 		AllowAnyOrigin: true,
@@ -85,7 +85,7 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 		cfg.Addr = v
 	}
 	if v, ok := raw[configuration.KeyIntRdLim].(float64); ok && v > 0 {
-		cfg.ReadLimit = int64(v)
+		cfg.ReadLimit = shared.EffectiveControlMessageLimit(int64(v))
 	}
 	if v, ok := raw[configuration.KeyIntWrTO].(float64); ok && v > 0 {
 		cfg.WriteTimeout = time.Duration(v) * time.Millisecond

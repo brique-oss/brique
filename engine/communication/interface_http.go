@@ -44,6 +44,7 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
+	"brique_engine/shared"
 )
 
 // Ensure HttpInterface implements InterfaceImpl.
@@ -236,9 +237,9 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 		path = "/brique"
 	}
 
-	readLimit := int64(4 << 20) // 4MB default
+	readLimit := shared.DefaultControlMessageBytes
 	if v, ok := cfg[configuration.KeyIntRdLim].(float64); ok && v > 0 {
-		readLimit = int64(v)
+		readLimit = shared.EffectiveControlMessageLimit(int64(v))
 	}
 
 	reqTimeout := 5 * time.Second
@@ -365,8 +366,14 @@ func (h *HttpInterface) Start() error {
 		}
 		defer r.Body.Close()
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, h.readLimit))
+		r.Body = http.MaxBytesReader(w, r.Body, h.readLimit)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "control message exceeds read_limit; store large payloads in Matter substance", http.StatusRequestEntityTooLarge)
+				return
+			}
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -545,6 +552,9 @@ func (h *HttpInterface) WriteLoop() error {
 			}
 			b, err := json.Marshal(wireMsg)
 			if err != nil {
+				continue
+			}
+			if shared.ValidateControlMessageBytes(int64(len(b)), h.readLimit) != nil {
 				continue
 			}
 

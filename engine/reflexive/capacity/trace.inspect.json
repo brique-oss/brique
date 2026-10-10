@@ -49,7 +49,7 @@
         "payload": {
           "events": {
             "type": "array",
-            "_comment": "Present in events mode. Ordered list of trace events. Each event: { ts (string — RFC3339Nano timestamp), kind (string — trace event kind), cap (string — capacity name), ctx_id (string — context path), intention_id (string), payload (object — present only when include_payloads is true, contains raw intention and response JSON) }."
+            "_comment": "Present in events mode. Ordered trace events. When include_payloads=true, small communication messages expose intention_json or response_json. Messages above 256 KiB are never retained in full; the event instead reports message_truncated=true, message_bytes, message_sha256, payload_keys, and a routing-only intention/response projection."
           },
           "facets": {
             "type": "object",

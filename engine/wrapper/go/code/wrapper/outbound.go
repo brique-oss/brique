@@ -91,7 +91,7 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 				"id":   o.wrapperName,
 				"kind": "wrapper",
 			},
-			Params:    p.Params,
+			Params:      p.Params,
 			Correlation: Correlation{},
 		},
 	}
@@ -99,6 +99,7 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 	var ch <-chan *ResponseMsg
 	if p.AwaitResponse {
 		ch = o.correlator.Register(id)
+		defer o.correlator.Unregister(id)
 	}
 
 	if err := o.transport.Send(env); err != nil {
@@ -109,18 +110,45 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 		return nil, nil
 	}
 
-	select {
-	case resp := <-ch:
-		if resp == nil || !resp.Ok {
-			errMsg := "outbound intention failed"
-			if resp != nil && resp.Error != "" {
-				errMsg = resp.Error
-			}
-			return nil, fmt.Errorf("%s", errMsg)
-		}
-		return resp.Payload, nil
-	case <-time.After(30 * time.Second):
+	resp, ok := awaitFinalResponse(ch, 30*time.Second)
+	if !ok {
 		return nil, fmt.Errorf("outbound intention timeout: %s", id)
+	}
+	if resp == nil || (!resp.Ok && resp.Status != StatusOK) {
+		errMsg := "outbound intention failed"
+		if resp != nil && resp.Error != "" {
+			errMsg = resp.Error
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	return resp.Payload, nil
+}
+
+// awaitFinalResponse treats running as a heartbeat and gives each heartbeat a
+// fresh timeout budget. Only a terminal response completes the wait.
+func awaitFinalResponse(ch <-chan *ResponseMsg, timeout time.Duration) (*ResponseMsg, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case resp, open := <-ch:
+			if !open {
+				return nil, false
+			}
+			if resp != nil && resp.Status == StatusRunning {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(timeout)
+				continue
+			}
+			return resp, true
+		case <-timer.C:
+			return nil, false
+		}
 	}
 }
 

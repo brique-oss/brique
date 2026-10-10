@@ -19,6 +19,7 @@ package junction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -94,9 +95,7 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	if cfg.Addr == "" {
 		return errors.New("websocket listener: addr is empty")
 	}
-	if cfg.ReadLimit <= 0 {
-		cfg.ReadLimit = 4 << 20
-	}
+	cfg.ReadLimit = shared.EffectiveControlMessageLimit(cfg.ReadLimit)
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = 5 * time.Second
 	}
@@ -282,6 +281,13 @@ func (s *webSocketRouteState) Send(msg circulation.Message) error {
 	b, ok := s.route.Encode(msg)
 	if !ok {
 		return errors.New("websocket route: encode failed")
+	}
+	limit := shared.DefaultControlMessageBytes
+	if s.parent != nil && s.parent.cfg.ReadLimit > 0 {
+		limit = s.parent.cfg.ReadLimit
+	}
+	if err := shared.ValidateControlMessageBytes(int64(len(b)), limit); err != nil {
+		return fmt.Errorf("websocket route: %w", err)
 	}
 	s.connMu.RLock()
 	conn := s.conn

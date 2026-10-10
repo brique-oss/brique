@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/configuration"
 	"brique_engine/junction"
 	"brique_engine/shared"
 )
@@ -63,6 +64,7 @@ import (
 
 const defaultPendingTimeout = 30 * time.Second
 const defaultMaxHandlers = 64 // bounded concurrency
+const defaultInlineMaxBytes int64 = 256 << 10
 
 const matterDirName = "matter"
 const structureDirName = "structure"
@@ -366,8 +368,9 @@ func buildCapTable() map[string]capHandler {
 // -----------------------------
 
 type MatterLoop struct {
-	frame *junction.ContextRegistry
-	in    chan circulation.Message
+	frame          *junction.ContextRegistry
+	in             chan circulation.Message
+	inlineMaxBytes int64
 
 	// static dispatch
 	caps map[string]capHandler
@@ -477,9 +480,16 @@ type CatalogRebuildSummary struct {
 //
 
 func NewMatterLoop(frame *junction.ContextRegistry) *MatterLoop {
+	return NewMatterLoopWithConfig(frame, nil)
+}
+
+// NewMatterLoopWithConfig constructs Matter with optional data-plane limits.
+// Non-positive or malformed values retain the defaults.
+func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any) *MatterLoop {
 	l := &MatterLoop{
-		frame: frame,
-		in:    make(chan circulation.Message, 16),
+		frame:          frame,
+		in:             make(chan circulation.Message, 16),
+		inlineMaxBytes: defaultInlineMaxBytes,
 
 		caps: buildCapTable(),
 
@@ -500,6 +510,15 @@ func NewMatterLoop(frame *junction.ContextRegistry) *MatterLoop {
 	}
 
 	l.subHTTP = NewHTTPSubstanceGetter(l)
+	if value := shared.AnyToInt64(cfg[configuration.KeyMatterInlineMaxBytes]); value > 0 {
+		l.inlineMaxBytes = value
+	}
+	if value := shared.AnyToInt64(cfg[configuration.KeyMatterMaxUploadBytes]); value > 0 {
+		l.subHTTP.maxUploadBytes = value
+	}
+	if value := shared.AnyToInt64(cfg[configuration.KeyMatterLeaseTTLms]); value > 0 {
+		l.subHTTP.defaultTTL = time.Duration(value) * time.Millisecond
+	}
 
 	return l
 }

@@ -187,6 +187,8 @@ The DSL expresses both roles at once. As an **orchestrator**, it composes invoca
 
 An `invoke` addresses a capacity by its localized reference and carries what its contract requires. The runtime references you write (`$alias.payload.field`) declare precisely which fields of the invoked contract you depend on — keep them consistent with the contracts you retrieved; they are your side of the coupling.
 
+**Intentions are control-plane messages, not bulk-data containers.** Keep `params` and response payloads small. Binary or voluminous business content must live in a `matter`: upload it with `matter.write` and `http_data: true`, then pass only its matter reference through subsequent intentions. The global serialized ceiling is 4 MiB; HTTP reports `413`, while engine-level routing reports `payload_too_large`. Do not work around the ceiling with base64 or large inline JSON.
+
 The complete operator reference — every node, field, and constraint — is returned alongside the capacity template (`edit.get_element_template` with `item_type: "capacity"`). Never write a resolution from a memory of the operators.
 
 ### Decomposition patterns
@@ -429,7 +431,9 @@ Every call returns:
 }
 ```
 
-`running` is an intermediate response, not a final one: it means a long-running capacity is still working and a further response — the real `ok`/`error` outcome — is still coming for the same call, correlated by the same intention id. It carries no meaningful `payload`. If you ever observe `status: running`, keep waiting for the next response instead of treating it as the result; do not resend the intention. This is not something the caller opts into — any `interpreted`/`compiled` capacity may emit one or more `running` responses before its final one, entirely at the hosted implementation's discretion (see Wrapper.md §9.1), so treat `running` as always possible on any capacity call, not just ones you expect to be slow.
+`running` is an intermediate response, not a final one: it means a long-running capacity is still working and a further response — the real `ok`/`error` outcome — is still coming for the same call, correlated by the same intention id. It carries no meaningful `payload`. If you ever observe `status: running`, keep waiting for the next response instead of treating it as the result; do not resend the intention.
+
+This acknowledgement is never emitted automatically and is not declared in the capacity descriptor. Hosted code chooses when to send it; in the provided Python runtime it calls `await runtime.notify_running()` while executing the capacity. Call it near the beginning for an immediate acknowledgement, then again as a heartbeat when work may outlive the caller's timeout. Each `running` response refreshes the supported caller's wait budget, but silence can still time out. The hosted function must still return normally afterward to produce the single final `ok` or `error` response. Because any `interpreted`/`compiled` capacity may do this at its implementation's discretion (see Wrapper.md §9.1), callers must treat `running` as possible on every capacity call, not only those expected to be slow.
 
 On success, read `payload`. On error, do not read `payload` — it is absent; read the top-level `error` object:
 

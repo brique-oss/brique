@@ -367,6 +367,10 @@ func parseTraceLine(line []byte, includePayloads bool) (tw circulation.TraceWire
 	_ = json.Unmarshal(m[circulation.KeyRootIntentionId], &tw.RootIntentionId)
 	_ = json.Unmarshal(m[circulation.KeyReasonCode], &tw.ReasonCode)
 	_ = json.Unmarshal(m[circulation.KeyUserText], &tw.UserText)
+	_ = json.Unmarshal(m[circulation.KeyMessageTruncated], &tw.MessageTruncated)
+	_ = json.Unmarshal(m[circulation.KeyMessageBytes], &tw.MessageBytes)
+	_ = json.Unmarshal(m[circulation.KeyMessageSHA256], &tw.MessageSHA256)
+	_ = json.Unmarshal(m[circulation.KeyPayloadKeys], &tw.PayloadKeys)
 
 	if strings.TrimSpace(tw.Timestamp) == "" {
 		return tw, 0, "", "", false
@@ -562,8 +566,9 @@ INSERT INTO trace_events(
   trace_kind, family,
   intention_id, root_intention_id, parent_intention_id,
   msg_kind, reason_code, user_text,
+  message_truncated, message_bytes, message_sha256, payload_keys_json,
   intention_json, response_json
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `)
 	if err != nil {
 		cleanup()
@@ -613,6 +618,12 @@ INSERT INTO trace_events(
 			// heavy fields: store only if present AND caller requested include_payloads
 			var intentionJSON any = nil
 			var responseJSON any = nil
+			var payloadKeysJSON any = nil
+			if len(tw.PayloadKeys) > 0 {
+				if encoded, err := json.Marshal(tw.PayloadKeys); err == nil {
+					payloadKeysJSON = string(encoded)
+				}
+			}
 			if includePayloads {
 				if strings.TrimSpace(intentionStr) != "" {
 					intentionJSON = intentionStr
@@ -638,6 +649,10 @@ INSERT INTO trace_events(
 				strings.TrimSpace(tw.MsgKind),
 				strings.TrimSpace(tw.ReasonCode),
 				tw.UserText,
+				tw.MessageTruncated,
+				tw.MessageBytes,
+				strings.TrimSpace(tw.MessageSHA256),
+				payloadKeysJSON,
 
 				intentionJSON,
 				responseJSON,
@@ -1010,6 +1025,10 @@ func createTraceSchema(exec traceSQLExec) error {
 
 			reason_code   TEXT,
 			user_text     TEXT,
+			message_truncated INTEGER NOT NULL DEFAULT 0,
+			message_bytes     INTEGER NOT NULL DEFAULT 0,
+			message_sha256    TEXT,
+			payload_keys_json TEXT,
 
 			intention_json TEXT,
 			response_json  TEXT
@@ -1110,6 +1129,10 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 		"parent_intention_id",
 		"reason_code",
 		"user_text",
+		"message_truncated",
+		"message_bytes",
+		"message_sha256",
+		"payload_keys_json",
 	}
 	if includePayloads {
 		cols = append(cols, "intention_json", "response_json")
@@ -1160,8 +1183,12 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 			rootID   sql.NullString
 			parentID sql.NullString
 
-			reason sql.NullString
-			userTx sql.NullString
+			reason           sql.NullString
+			userTx           sql.NullString
+			messageTruncated bool
+			messageBytes     int64
+			messageSHA256    sql.NullString
+			payloadKeysJSON  sql.NullString
 
 			intJSON sql.NullString
 			respJS  sql.NullString
@@ -1173,6 +1200,7 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 				&family, &traceKind, &msgKind,
 				&intID, &rootID, &parentID,
 				&reason, &userTx,
+				&messageTruncated, &messageBytes, &messageSHA256, &payloadKeysJSON,
 				&intJSON, &respJS,
 			); err != nil {
 				continue
@@ -1183,6 +1211,7 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 				&family, &traceKind, &msgKind,
 				&intID, &rootID, &parentID,
 				&reason, &userTx,
+				&messageTruncated, &messageBytes, &messageSHA256, &payloadKeysJSON,
 			); err != nil {
 				continue
 			}
@@ -1215,6 +1244,19 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 		}
 		if userTx.Valid && userTx.String != "" {
 			m[circulation.KeyUserText] = userTx.String
+		}
+		if messageTruncated {
+			m[circulation.KeyMessageTruncated] = true
+			m[circulation.KeyMessageBytes] = messageBytes
+			if messageSHA256.Valid && messageSHA256.String != "" {
+				m[circulation.KeyMessageSHA256] = messageSHA256.String
+			}
+			if payloadKeysJSON.Valid && payloadKeysJSON.String != "" {
+				var keys []string
+				if json.Unmarshal([]byte(payloadKeysJSON.String), &keys) == nil {
+					m[circulation.KeyPayloadKeys] = keys
+				}
+			}
 		}
 
 		if includePayloads {

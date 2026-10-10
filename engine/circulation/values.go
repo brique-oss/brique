@@ -211,8 +211,9 @@ const (
 	ValueReasonAlreadyExists       = "element already exist"
 	ValueReasonIOFailure           = "failure during IO operation"
 
-	ValueReasonInvalidPayload = "payload is invalid"
-	ValueReasonMissingPayload = "payload is missing"
+	ValueReasonInvalidPayload  = "payload is invalid"
+	ValueReasonMissingPayload  = "payload is missing"
+	ValueReasonPayloadTooLarge = "payload_too_large"
 
 	ValueReasonMissingMatterID    = "matter id is missing"
 	ValueReasonMissingMatterIDs   = "matter ids are missing"

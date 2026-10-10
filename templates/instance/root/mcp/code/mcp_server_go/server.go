@@ -18,11 +18,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"sync"
 )
+
+const maxControlMessageBytes int64 = 4 << 20
 
 // MCPServer listens for LLM connections over HTTP/SSE and dispatches
 // MCP requests to the two Brique capacities: mcp.initialize and brique.intention.
@@ -80,8 +83,14 @@ func (s *MCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxControlMessageBytes)
 	var req JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "control message too large; store the payload in a Brique matter", http.StatusRequestEntityTooLarge)
+			return
+		}
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}

@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from .constants import KIND_INTENTION, TYPE_EXECUTION
@@ -104,7 +103,7 @@ class OutboundIntentionAPI:
         correlation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         intention_id = new_id()
-        future = await self.runtime.correlator.register(intention_id)
+        pending = await self.runtime.correlator.register(intention_id)
         message = {
             "kind": KIND_INTENTION,
             "ts": utc_now_rfc3339(),
@@ -129,7 +128,8 @@ class OutboundIntentionAPI:
                 },
             },
         }
-        await self.runtime.transport.send(message)
-        if timeout_s is None:
-            return await future
-        return await asyncio.wait_for(future, timeout=timeout_s)
+        try:
+            await self.runtime.transport.send(message)
+            return await pending.wait(timeout_s)
+        finally:
+            await self.runtime.correlator.unregister(intention_id, pending)

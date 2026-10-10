@@ -16,7 +16,10 @@
 
 package wrapper
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // Params gives typed access to an intention's params map.
 type Params map[string]any
@@ -75,10 +78,10 @@ type Subscription struct {
 
 // Envelope is the top-level Brique message envelope.
 type Envelope struct {
-	Kind      string         `json:"kind"`
-	Ts        string         `json:"ts"`
-	Intention *IntentionMsg  `json:"intention,omitempty"`
-	Response  *ResponseMsg   `json:"response,omitempty"`
+	Kind      string        `json:"kind"`
+	Ts        string        `json:"ts"`
+	Intention *IntentionMsg `json:"intention,omitempty"`
+	Response  *ResponseMsg  `json:"response,omitempty"`
 }
 
 // IntentionMsg is the inner intention payload.
@@ -96,8 +99,47 @@ type IntentionMsg struct {
 type ResponseMsg struct {
 	IntentionID string         `json:"intention_id"`
 	Ok          bool           `json:"ok"`
+	Status      string         `json:"status"`
 	Payload     map[string]any `json:"payload,omitempty"`
 	Error       string         `json:"error,omitempty"`
+}
+
+// UnmarshalJSON accepts the engine's status-based response shape and its
+// structured error object while preserving the legacy ok/string-error fields.
+func (r *ResponseMsg) UnmarshalJSON(data []byte) error {
+	type alias ResponseMsg
+	aux := &struct {
+		*alias
+		Error json.RawMessage `json:"error,omitempty"`
+	}{alias: (*alias)(r)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if r.Status == StatusOK {
+		r.Ok = true
+	}
+	if len(aux.Error) == 0 {
+		return nil
+	}
+	var problem struct {
+		Code    string `json:"code,omitempty"`
+		Message string `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(aux.Error, &problem); err == nil && (problem.Message != "" || problem.Code != "") {
+		if problem.Message != "" {
+			r.Error = problem.Message
+		} else {
+			r.Error = problem.Code
+		}
+		return nil
+	}
+	var plain string
+	if err := json.Unmarshal(aux.Error, &plain); err == nil {
+		r.Error = plain
+	} else {
+		r.Error = string(aux.Error)
+	}
+	return nil
 }
 
 // Address identifies a context+capability+type endpoint.

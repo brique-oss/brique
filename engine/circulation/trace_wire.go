@@ -25,10 +25,14 @@ type TraceWire struct {
 	Family    string `json:"family"`
 
 	// Correlation anchor: the ingress intention id for this context execution.
-	IntentionId string     `json:"intention_id,omitempty"`
-	MsgKind     string     `json:"msg_kind,omitempty"`
-	Intention   *Intention `json:"intention,omitempty"` // only for CommIngress
-	Response    *Response  `json:"response,omitempty"`  // only for CommIngress
+	IntentionId      string     `json:"intention_id,omitempty"`
+	MsgKind          string     `json:"msg_kind,omitempty"`
+	Intention        *Intention `json:"intention,omitempty"` // only for CommIngress
+	Response         *Response  `json:"response,omitempty"`  // only for CommIngress
+	MessageTruncated bool       `json:"message_truncated,omitempty"`
+	MessageBytes     int64      `json:"message_bytes,omitempty"`
+	MessageSHA256    string     `json:"message_sha256,omitempty"`
+	PayloadKeys      []string   `json:"payload_keys,omitempty"`
 
 	ParentIntentionId string `json:"parent_intention_id,omitempty"`
 	RootIntentionId   string `json:"root_intention_id,omitempty"`
