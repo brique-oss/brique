@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
@@ -81,7 +82,7 @@ func TestMatterReadIntrospec_N1_MRI_02_CapMatterReadMaterJSON(t *testing.T) {
 }
 
 func TestMatterReadIntrospec_N1_MRI_03_CapMatterReadData(t *testing.T) {
-	l, _, _ := newMatterLoopHarness(t)
+	l, commCh, _ := newMatterLoopHarness(t)
 
 	invalidMsg := circulation.Message{Kind: circulation.ValueKindResponse}
 	if _, ok, code, _, _ := l.capMatterReadData(invalidMsg, "m1", CatalogEntry{}, nil, nil); ok || code != circulation.ValueCodeInternal {
@@ -120,6 +121,47 @@ func TestMatterReadIntrospec_N1_MRI_03_CapMatterReadData(t *testing.T) {
 	l.frame.Wrappers = map[string]*junction.WrapperState{"w1": {ProcState: junction.ProcUnknown}}
 	if _, ok, code, reason, _ := l.capMatterReadData(msg, "m1", entryWrapper, nil, nil); ok || code != circulation.ValueCodeRefused || reason[circulation.KeyReason] != circulation.ValueReasonDataUnavailable {
 		t.Fatalf("wrapper not running should return data_unavailable, got ok=%v code=%q reason=%#v", ok, code, reason)
+	}
+
+	// Delegating a wrapper read must not enrich the caller-owned Params map:
+	// tracing may still serialize that inbound message concurrently.
+	originalParams := map[string]any{"caller_key": "caller_value"}
+	delegated := circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: "i-wrapper-read",
+			To:          circulation.Address{Context: "/ctx/boundary/w1/child"},
+			Params:      originalParams,
+		},
+	}
+	l.frame.Wrappers["w1"].ProcState = junction.ProcRunning
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out := recvMatterLoopMsg(t, commCh, "delegated wrapper read")
+		if out.Intention.Params[circulation.KeyMatterID] != "m1" {
+			t.Errorf("delegated read missing matter_id: %#v", out.Intention.Params)
+		}
+		l.dispatchResponse(circulation.Message{
+			Kind: circulation.ValueKindResponse,
+			Response: circulation.Response{
+				IntentionID: "i-wrapper-read",
+				Status:      circulation.ValueStatusOK,
+				Payload:     map[string]any{"delegated": true},
+			},
+		})
+	}()
+	payload, ok, code, _, _ = l.capMatterReadData(delegated, "m1", entryWrapper, nil, nil)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting delegated wrapper read responder")
+	}
+	if !ok || code != "" || payload["delegated"] != true {
+		t.Fatalf("delegated wrapper read failed: ok=%v code=%q payload=%#v", ok, code, payload)
+	}
+	if _, mutated := originalParams[circulation.KeyMatterID]; mutated {
+		t.Fatalf("delegated read mutated caller params: %#v", originalParams)
 	}
 }
 

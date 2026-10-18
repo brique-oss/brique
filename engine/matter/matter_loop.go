@@ -349,17 +349,21 @@ func buildCapTable() map[string]capHandler {
 
 		// read & introspection
 		"matter.read":       (*MatterLoop).capMatterRead,
+		"matter.stat":       (*MatterLoop).capMatterStat,
 		"matter.exists":     (*MatterLoop).capMatterExists,
 		"matter.read_batch": (*MatterLoop).capMatterReadBatch,
 		"structure.read":    (*MatterLoop).capStructureRead,
 
 		// write
 		"matter.write":    (*MatterLoop).capMatterWrite,
+		"matter.append":   (*MatterLoop).capMatterAppend,
+		"matter.truncate": (*MatterLoop).capMatterTruncate,
 		"structure.patch": (*MatterLoop).capStructurePatch,
 
 		// subscriptions
-		"matter.subscribe":   (*MatterLoop).capMatterSubscribe,
-		"matter.unsubscribe": (*MatterLoop).capMatterUnsubscribe,
+		"matter.subscribe":        (*MatterLoop).capMatterSubscribe,
+		"matter.unsubscribe":      (*MatterLoop).capMatterUnsubscribe,
+		"matter.subscription.ack": (*MatterLoop).capMatterSubscriptionAck,
 	}
 }
 
@@ -386,11 +390,13 @@ type MatterLoop struct {
 
 	// per-matter locks
 	lockMu sync.Mutex
-	locks  map[string]*sync.Mutex
+	locks  map[string]*sync.RWMutex
 
 	// subscriptions (brique-mode only)
-	subsMu sync.RWMutex
-	subs   map[string]map[string]MatterSubscription // matter_id -> sub_id -> subscription
+	subsMu   sync.RWMutex
+	subs     map[string]map[string]MatterSubscription // matter_id -> sub_id -> subscription
+	outboxMu sync.Mutex
+	outbox   []MatterPendingEvent
 
 	// substance http (data-plane)
 	subHTTP *HTTPSubstanceGetter
@@ -497,7 +503,7 @@ func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any
 
 		catalogMatter:    make(map[string]CatalogEntry),
 		catalogStructure: make(map[string]CatalogEntry),
-		locks:            make(map[string]*sync.Mutex),
+		locks:            make(map[string]*sync.RWMutex),
 
 		subs: make(map[string]map[string]MatterSubscription),
 
@@ -706,6 +712,27 @@ func (l *MatterLoop) Start() {
 		l.stateMu.Unlock()
 		return
 	}
+	if l.frame != nil && strings.TrimSpace(l.frame.ContextDir) != "" {
+		matterRoot := filepath.Join(l.frame.ContextDir, matterDirName)
+		if err := recoverMatterTransactions(matterRoot); err != nil {
+			// Fail closed: no handler or data-plane transfer may observe a
+			// partially committed Matter. A fresh loop may be started after the
+			// recovery evidence has been repaired.
+			l.state = shared.FamilyStopped
+			l.stateMu.Unlock()
+			return
+		}
+		if err := l.loadMatterEventState(); err != nil {
+			l.state = shared.FamilyStopped
+			l.stateMu.Unlock()
+			return
+		}
+		if err := l.reconcileMatterEventMarkers(true); err != nil {
+			l.state = shared.FamilyStopped
+			l.stateMu.Unlock()
+			return
+		}
+	}
 
 	// Start Substance HTTP (best-effort)
 	if l.subHTTP != nil {
@@ -716,6 +743,11 @@ func (l *MatterLoop) Start() {
 	go func() {
 		defer l.wg.Done()
 		l.loopInbox()
+	}()
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		l.matterEventRetryLoop()
 	}()
 
 	l.state = shared.FamilyRunning
@@ -2007,7 +2039,7 @@ func (l *MatterLoop) loadStructureEntryFromDisk(structureID string) (CatalogEntr
 // - Empty item id yields `nil`.
 //
 
-func (l *MatterLoop) lockFor(itemID string) *sync.Mutex {
+func (l *MatterLoop) lockFor(itemID string) *sync.RWMutex {
 	if itemID == "" {
 		return nil
 	}
@@ -2017,7 +2049,7 @@ func (l *MatterLoop) lockFor(itemID string) *sync.Mutex {
 	if ok && mu != nil {
 		return mu
 	}
-	mu = &sync.Mutex{}
+	mu = &sync.RWMutex{}
 	l.locks[itemID] = mu
 	return mu
 }

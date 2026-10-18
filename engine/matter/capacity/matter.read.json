@@ -22,6 +22,10 @@
             "type": "string",
             "_comment": "Optional. Pipe-separated subset selector. Accepted tokens (case-insensitive): meaning, functional, data, brique. The four tokens are strictly disjoint — none is a superset of another, and in particular 'meaning' does NOT include 'functional' despite the intuitive reading of the word: 'meaning' only assembles the objective and subjective descriptor sections, while what an element does lives exclusively under the separate 'functional' token. To get objective+subjective+functional together, request both tokens explicitly, e.g. read_mode='meaning|functional'. Example: 'meaning|brique'. When read_mode is present, ONLY the listed sections are returned; want_* params are ignored. When read_mode is absent, all four sections are returned by default."
           },
+          "data_range": {
+            "type": "object",
+            "_comment": "Optional when data is requested. Either {unit:'bytes'|'lines',offset:non-negative integer,length:non-negative integer} or {unit:'bytes'|'lines',tail:non-negative integer}. Unit defaults to bytes; lines requires brique.substance_framing='lines'. A range past EOF is clipped."
+          },
           "want_meaning": {
             "type": "boolean",
             "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent (all sections returned). Kept for compatibility only — use read_mode."
@@ -57,7 +61,7 @@
           },
           "data": {
             "type": "object",
-            "_comment": "Present only when 'data' is requested and the matter has brique substance mode. At or below the configured inline_max_bytes (256 KiB by default), data is inline: { kind:'inline', bytes:string, size:integer, encoding?:'base64' }. Text is returned raw; binary is base64 and declares encoding. Above the threshold, data is a one-shot HTTP lease: { kind:'http', base_url, path, rid, tok, expires_at, revision, size_hint, method:'GET' }. Begin GET before expires_at. Byte-range requests are supported. Wrapper-mode matters may return different shapes."
+            "_comment": "Present only when 'data' is requested. For brique mode the selected range is inline at or below inline_max_bytes: {kind:'inline',bytes,size,encoding?,total_bytes,byte_range,line_range?,total_lines?}. Otherwise it is a one-shot HTTP lease scoped to the selected canonical byte range. HTTP Range is relative to that scoped representation. Text is raw and binary is base64. Wrapper-mode matters may return different shapes."
           }
         }
       },
@@ -69,6 +73,8 @@
         "morphing": "A matter identifier plus section selectors becomes an explicit matter view assembled from the local descriptor and the current substance access policy.",
         "invariants": [
           "matter.read never mutates the addressed matter.",
+          "Descriptor, committed dimensions, inline data, and lease creation are observed under one per-matter read lock.",
+          "Byte coordinates are canonical; line coordinates exist only for LF-delimited lines framing.",
           "When read_mode is omitted, the runtime defaults to exposing all readable sections."
         ],
         "success": [

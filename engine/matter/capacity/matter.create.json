@@ -21,11 +21,11 @@
           },
           "matter": {
             "type": "object",
-            "_comment": "Optional opaque matter descriptor seed. The four canonical object sections (brique, objective, subjective, functional) are ensured by the engine when absent so the descriptor remains eligible for meaning projection."
+            "_comment": "Optional opaque matter descriptor seed. The four canonical object sections are ensured when absent. brique.substance_framing may be 'bytes' (default) or 'lines'; line-framed non-empty payload must end with LF. Committed byte and line dimensions are engine-owned."
           },
           "payload": {
             "type": "any",
-            "_comment": "Optional initial substance. Allowed only when the resulting matter is in brique substance mode. Strings become raw bytes; other values are JSON-marshaled. How matter.read later serializes this content (plain string vs base64) is controlled separately by brique.substance_type inside the 'matter' descriptor seed above ('text', the default, or 'binary') — this payload param itself carries no encoding declaration, so set matter.brique.substance_type explicitly at create time if the payload is arbitrary binary data, or matter.read will hand it back as an unencoded string."
+            "_comment": "Optional small initial substance. Allowed only in brique mode and limited to inline_max_bytes (256 KiB by default). For larger content, create the matter empty then call matter.write with http_data=true. Strings become raw bytes; other values are JSON-marshaled. matter.read serialization is controlled separately by brique.substance_type."
           }
         }
       },
@@ -60,6 +60,7 @@
           "If matter_id is omitted, the capacity generates a fresh local matter identifier.",
           "When any canonical section is omitted, the engine adds it as an object so ordinary created descriptors remain eligible for meaning.rebuild and meaning.query.",
           "When the resulting matter uses brique substance mode, the create path always leaves a local data.bin file present, either populated from payload or empty.",
+          "The descriptor records engine-owned substance_size_bytes and, for lines framing, substance_line_count without interpreting the business format.",
           "When the resulting matter does not use brique substance mode, payload materialization is refused."
         ],
         "success": [
@@ -69,7 +70,8 @@
         "failure": [
           "The capacity refuses creation when the designated or generated matter_id already exists in the runtime catalog.",
           "The capacity fails when payload or matter metadata cannot be marshaled or committed to disk.",
-          "The capacity refuses payload writes when the supplied matter metadata resolves to a non-brique substance mode."
+          "The capacity refuses payload writes when the supplied matter metadata resolves to a non-brique substance mode.",
+          "The capacity refuses an initial payload above inline_max_bytes with reason=payload_too_large."
         ],
         "notes": [
           "The created matter identity is local to the current context.",

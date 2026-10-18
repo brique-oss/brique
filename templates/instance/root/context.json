@@ -19,7 +19,7 @@
       "communication": {
         "websocket_listener": {
           "_comment": "Root-only shared physical WebSocket listener. Child contexts and wrappers configure only logical paths; wrapper processes receive BRIQUE_WS_ADDR and BRIQUE_WS_URL automatically from the engine.",
-          "addr": ":8080"
+          "addr": "127.0.0.1:8080"
         },
         "interfaces": [
           {

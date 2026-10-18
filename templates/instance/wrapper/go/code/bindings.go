@@ -26,7 +26,7 @@ func BuildBindings(_ *wrapper.Runtime) wrapper.BindingsFragment {
 			{
 				Context: "",
 				Name:    "go.echo",
-				Handler: func(params wrapper.Params) (any, error) {
+				Handler: func(params *wrapper.Params) (any, error) {
 					return map[string]any{"echo": params.String("message")}, nil
 				},
 			},

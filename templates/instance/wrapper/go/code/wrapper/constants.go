@@ -17,12 +17,21 @@
 package wrapper
 
 const (
-	KindIntention    = "intention"
-	KindResponse     = "response"
-	TypeExecution    = "execution"
-	TypeMatter       = "matter"
-	TypeControl      = "control"
-	CapWrapperReady  = "wrapper_ready"
-	CapWrapperStop   = "wrapper_stop"
-	ModeWrapper      = "wrapper"
+	KindIntention            = "intention"
+	KindResponse             = "response"
+	TypeExecution            = "execution"
+	TypeUser                 = "user"
+	TypeMatter               = "matter"
+	TypeControl              = "control"
+	CapWrapperReady          = "wrapper_ready"
+	CapWrapperStop           = "wrapper_stop"
+	CapMatterRead            = "matter.read"
+	CapMatterWrite           = "matter.write"
+	CapMatterSubscribe       = "matter.subscribe"
+	CapMatterUnsubscribe     = "matter.unsubscribe"
+	ModeWrapper              = "wrapper"
+	StatusOK                 = "ok"
+	StatusError              = "error"
+	StatusRunning            = "running"
+	ControlMessageLimitBytes = 4 * 1024 * 1024
 )

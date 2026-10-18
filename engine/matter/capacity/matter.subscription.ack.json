@@ -1,0 +1,40 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity.",
+    "cap_name": "matter.subscription.ack",
+    "family": "matter",
+    "file": "engine/matter/matter_event.go",
+    "function": "capMatterSubscriptionAck"
+  },
+  "objective": {
+    "name": "matter.subscription.ack",
+    "description": "Acknowledge one durably delivered Matter event."
+  },
+  "functional": {
+    "#root": {
+      "role": "Advance one durable subscription after its current event has been processed.",
+      "inputs": {
+        "params": {
+          "sub_id": { "type": "string", "_comment": "Required." },
+          "event_id": { "type": "string", "_comment": "Required. Stable across redelivery attempts." }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": { "type": "boolean" },
+          "sub_id": { "type": "string" },
+          "event_id": { "type": "string" },
+          "removed": { "type": "boolean", "_comment": "False for an already acknowledged or unknown event, making ack idempotent." }
+        }
+      },
+      "effects": { "outbox": "The acknowledged pending entry is removed atomically and the next event for the subscription becomes deliverable." },
+      "transformation_contract": {
+        "morphing": "A stable delivery identity advances an at-least-once subscription cursor.",
+        "invariants": ["Delivery is at-least-once; consumers deduplicate with event_id.", "Events remain ordered per subscription."],
+        "success": ["Repeated acknowledgements are successful idempotent no-ops."],
+        "failure": ["Missing identifiers or an outbox persistence error fail the request."]
+      }
+    }
+  },
+  "subjective": {}
+}

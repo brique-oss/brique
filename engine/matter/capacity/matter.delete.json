@@ -17,6 +17,14 @@
         "params": {
           "matter_id": {
             "type": "string"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "_comment": "Optional optimistic guard checked under the matter lock."
+          },
+          "expected_byte_size": {
+            "type": "integer",
+            "_comment": "Optional committed byte-size guard."
           }
         }
       },
@@ -38,7 +46,7 @@
         }
       },
       "effects": {
-        "matter_descriptor": "The local matter directory is removed best-effort.",
+        "matter_descriptor": "The local descriptor and engine-owned substance files are removed through a recoverable deletion journal.",
         "catalog": "The local matter catalog entry is removed.",
         "subscriptions": "Local brique subscribers may be notified of the deletion."
       },
@@ -46,7 +54,9 @@
         "morphing": "A local matter identifier becomes an explicit deletion of the corresponding matter state from disk, catalog, and local brique subscription visibility.",
         "invariants": [
           "matter.delete operates on one local catalog identity only.",
-          "Catalog presence is authoritative for deletion eligibility; disk absence alone does not prevent deletion once the catalog entry exists."
+          "Catalog presence is authoritative for deletion eligibility; disk absence alone does not prevent deletion once the catalog entry exists.",
+          "Every supplied revision or byte-size guard must match before any removal.",
+          "Once the deletion journal is committed, an interruption is rolled forward at startup before the Matter loop accepts work."
         ],
         "success": [
           "On success, matter.delete returns ok=true and echoes the deleted matter_id.",
@@ -55,10 +65,10 @@
         "failure": [
           "The capacity fails when matter_id is missing.",
           "The capacity refuses deletion when the matter is absent from the runtime catalog.",
-          "Best-effort filesystem cleanup does not by itself turn a successful catalog deletion into a refusal."
+          "A failure before the recovery journal is committed leaves the matter untouched; a later failure retains recovery evidence and reports an internal error."
         ],
         "notes": [
-          "Disk removal is best-effort because the runtime catalog is treated as the authority for local existence.",
+          "Missing owned files are tolerated, but filesystem errors are not reported as successful deletion.",
           "Deletion is local to the current context."
         ]
       }

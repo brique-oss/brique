@@ -15,11 +15,25 @@
 from __future__ import annotations
 
 import base64
+import asyncio
+import inspect
 import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+async def invoke_callable(symbol: Any, *args: Any, **kwargs: Any) -> Any:
+    """Invoke sync or async hosted code without blocking the communication loop."""
+    call_symbol = getattr(symbol, "__call__", None)
+    if inspect.iscoroutinefunction(symbol) or inspect.iscoroutinefunction(call_symbol):
+        result = symbol(*args, **kwargs)
+    else:
+        result = await asyncio.to_thread(symbol, *args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def utc_now_rfc3339() -> str:

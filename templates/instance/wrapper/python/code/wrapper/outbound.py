@@ -58,6 +58,7 @@ class OutboundIntentionAPI:
         from_cap: str = "",
         from_type: str = TYPE_EXECUTION,
         params: dict[str, Any] | None = None,
+        matters: list[dict[str, Any]] | None = None,
         await_response: bool = False,
         correlation: dict[str, Any] | None = None,
     ) -> str:
@@ -80,6 +81,7 @@ class OutboundIntentionAPI:
                 },
                 "identity": self.runtime.wrapper_identity(),
                 "params": params or {},
+                "matters": matters or [],
                 "correlation": correlation or {
                     "root_intention_id": "",
                     "parent_intention_id": "",
@@ -99,6 +101,7 @@ class OutboundIntentionAPI:
         from_cap: str = "",
         from_type: str = TYPE_EXECUTION,
         params: dict[str, Any] | None = None,
+        matters: list[dict[str, Any]] | None = None,
         timeout_s: float | None = None,
         correlation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -122,6 +125,7 @@ class OutboundIntentionAPI:
                 },
                 "identity": self.runtime.wrapper_identity(),
                 "params": params or {},
+                "matters": matters or [],
                 "correlation": correlation or {
                     "root_intention_id": "",
                     "parent_intention_id": "",

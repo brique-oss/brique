@@ -18,7 +18,7 @@ limitations under the License.
 
 ## 1. Purpose
 
-This specification defines the Python implementation model of a Brique wrapper.
+This specification defines the Python implementation model of a Brique wrapper. The language-independent model, including placement and transit (section 17), is in `Wrapper.md`; this document does not restate it.
 
 The Python wrapper is a runtime membrane placed between:
 
@@ -126,6 +126,8 @@ The Python wrapper is composed of the following runtime components:
 8. Scheduler and Queue
 9. Lifecycle Manager
 10. Hosted Code Adapter Layer
+11. Transit Service
+12. Capacity Caller
 
 These components may be implemented as Python classes, modules, or cooperating runtime services inside one process.
 
@@ -212,6 +214,8 @@ The wrapper does not expose runtime registration APIs such as dynamic `register_
 
 Instead, the wrapper loads a static binding table during bootstrap.
 
+This holds for matter bindings too: no matter is created and bound at runtime. A temporary object that only lives in the process is not a matter, it travels as `@object` or `@file` (section 5.11).
+
 #### Responsibilities
 
 * load the binding configuration module
@@ -255,11 +259,18 @@ So it should:
 * avoid inventing hidden business inputs
 * keep host-language adaptation minimal and explicit
 
+The params handed to the callable are a `Params`, a plain `dict` subclass: code written against the dictionary is unaffected, and `await params.value(name)` resolves a parameter whatever form it travelled in (section 5.11).
+
+At the end of every execution, including a failed one, the executor releases the transit references the capacity did not consume, and those it received in the results of its own calls.
+
+A capacity bound in this wrapper can also be run as a plain function call (`execute_direct`), used by the Capacity Caller. The direct call waits under an inactivity budget that `notify_running` renews, and leaves the caller's intention as the current one.
+
 #### Interface
 
 It should expose operations equivalent to:
 
 * `execute_capacity(invocation)`
+* `execute_direct(context, name, params, timeout_s)`
 * `normalize_result(...)`
 * `normalize_error(...)`
 
@@ -441,6 +452,8 @@ It should expose operations equivalent to:
 
 The Scheduler and Queue enforce concurrency policy.
 
+The generic runtime configures it through `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`). Both must be positive integers. Capacity and matter work enters this bounded queue; responses and `wrapper_stop` bypass it to avoid starvation. When the pending queue is full, an awaited intention receives `refused/busy`, while fire-and-forget work is dropped and logged. Callers must use bounded backoff rather than an immediate retry loop.
+
 The wrapper must support:
 
 * a maximum parallel execution limit
@@ -519,6 +532,64 @@ These tables are then loaded by the Runtime Registry during bootstrap.
 
 ---
 
+### 5.11 Transit Service
+
+The Transit Service (`transit.py`) carries the parameters of a call from one capacity to another. It implements Wrapper.md section 17.3.
+
+State and transit differ by lifecycle. A cross-instance transit value may use an ephemeral Matter as its physical carrier, but it is consumed rather than retained as state.
+
+It owns:
+
+* the object table of the wrapper: a thread-safe table where the caller posts an object (`@object`) and the receiver takes it once, after a type check; names are `obj_<uuid>`, never starting with `$`
+* the transit files (`@file`): written by the producer in `<context tree>/.../tmp/wrapper_<name>/transit/`, named `transit_*`, deleted by the receiver after decoding; the service accepts only this shape inside the instance context tree and rejects symbolic links, so wrappers must share that filesystem
+* transient Matters (`@matter`): created in the addressed remote context, uploaded through the Matter HTTP data plane, and guarded-deleted after successful reading and decoding
+* the sweep of the transit directory at startup
+* a configurable maximum serialized file payload (`BRIQUE_TRANSIT_MAX_BYTES`, 64 MiB by default), private `0600` files, and expiry of abandoned references (`BRIQUE_TRANSIT_TTL_SECONDS`, one hour by default); the runtime switches larger transit to an ephemeral Matter, while persistent data remains an explicit semantic Matter
+* `emit(value, target_address)`: existing references and small scalars unchanged; large text counts as bulk; same wrapper, `@object`; same instance and large/binary, `@file` (transient Matter above the safe file ceiling); `@ext_*` and large/binary, transient Matter
+* `resolve` and `release` of a reference
+
+`Params.value(name, expect_type=None)` resolves inline, `@file`, `@object` and transient `@matter` values lazily and memoizes the result. Before consuming a transient Matter, it verifies `brique.transient=true`; it then reads the substance completely, checks revision and size, decodes it and deletes it with guards. A forged transit-shaped object therefore cannot delete a semantic Matter, which remains an unread `MatterRef`. Disk and HTTP work run off the communication event loop.
+
+Errors are `TransitError(reason)`: reference not found, type mismatch, wrong wrapper, unreadable file, unsupported.
+
+Emitting return values for the caller is an opt-in of the wrapper (`transit.emit_returns`, off by default), because a caller written before this model expects plain data. Even in compatibility mode, the transport rejects any complete serialized control message over 4 MiB; a capacity must return a matter reference instead. The caller is local when its origin context is under the boundary context and its origin capacity is bound in the registry (`WrapperRuntime.is_local_caller`); a DSL capacity is never local.
+
+#### Interface
+
+It should expose operations equivalent to:
+
+* `emit(value, target_address, type_tag)`
+* `resolve(reference)`
+* `release(reference)`
+* `sweep()`
+
+Cheap small-scalar/reference/local-object emission stays on the event loop; potentially expensive serialization and file work is sent to a worker thread.
+
+---
+
+### 5.12 Capacity Caller
+
+The Capacity Caller (`calls.py`) is what hosted code uses to call another capacity: `await runtime.calls.call(to={"context":...,"cap":...,"type":"user"}, params=..., direct=False)`. It implements Wrapper.md section 17.4.
+
+It:
+
+* emits each ordinary parameter in the form its callee needs (Transit Service `emit`); a `MatterRef` is moved into `intention.matters` with the parameter name as `repr`, without reading the matter
+* chooses the path: through the engine, or a direct function call when `direct=True`, which is allowed only for a capacity bound in this wrapper
+* returns the response payload as a `Params`, so the result is read the same way on both paths
+* releases what it posted when the target is not found, answers with an error, or the send fails; not on an engine-routed timeout, since the callee may still take it; nothing without a response to wait for
+* applies one timeout model to both paths: an inactivity budget, renewed by `notify_running`; no `timeout_s` means no timeout; a timed-out direct task is cancelled and awaited through cleanup before parameter release
+
+Whether an internal call goes through the engine so that it is traced is the architect's configuration, not a decision of hosted code.
+
+#### Interface
+
+It should expose operations equivalent to:
+
+* `call(to_context, to_cap, params, to_type, await_response, direct, timeout_s, type_tags)`
+* `is_local(to_context, to_cap, to_type)`
+
+---
+
 ## 6. Main Runtime Flows
 
 ### 6.1 Startup Flow
@@ -527,8 +598,8 @@ These tables are then loaded by the Runtime Registry during bootstrap.
 2. The Lifecycle Manager initializes core components.
 3. The Hosted Code Adapter Layer imports or constructs the hosted runtime elements.
 4. The Runtime Registry loads the wrapper binding configuration module.
-5. The Runtime Registry is populated with the declared live bindings.
-6. The Transport Client connects to the engine.
+5. The Runtime Registry validates every binding key, callable, matter accessor and shutdown hook, then fails startup with a precise error if one is invalid.
+6. The Transport Client connects to the engine, retrying a short connection-refused startup race five times with bounded exponential backoff. Exhaustion is a non-zero process failure.
 7. The receive loop is started.
 8. The wrapper sends `wrapper_ready`.
 
@@ -538,9 +609,10 @@ These tables are then loaded by the Runtime Registry during bootstrap.
 2. The Message Router identifies a capacity invocation.
 3. The Scheduler receives a work item keyed by addressed binding.
 4. The Capacity Executor resolves the live binding from the Runtime Registry.
-5. The callable is invoked.
+5. The callable is invoked with its params as a `Params`.
 6. The result or error is normalized.
-7. The Transport Client sends the response.
+7. The transit references the capacity did not consume are released.
+8. The Transport Client sends the response.
 
 ### 6.3 Matter Read Flow
 
@@ -558,8 +630,10 @@ These tables are then loaded by the Runtime Registry during bootstrap.
 3. The Scheduler serializes by matter key.
 4. The Matter Manager resolves the binding.
 5. The write is performed atomically at matter granularity.
-6. The resulting visible state is serialized if needed.
-7. The response is sent.
+6. The matter lock is released: the write is now committed.
+7. If `notify_on_write` is enabled, subscribers are notified outside that lock and independently. A notification failure is logged and must not turn the committed write into a write failure.
+8. The resulting visible state is serialized if needed.
+9. The response is sent.
 
 ### 6.5 Outbound Intention Flow
 
@@ -633,10 +707,14 @@ The hosted-code-facing interface is a local Python API.
 
 At minimum, it should provide primitives equivalent to:
 
-* `emit_intention(...)`
-* `emit_and_wait(...)`
+* `emit_intention(..., matters=...)`
+* `emit_and_wait(..., matters=...)`
+* `calls.call(...)`, to call a capacity with parameters in the right form
+* `await params.value(name)`, to read a parameter whatever form it travelled in
 * `read_local_matter(...)` if useful internally
 * `write_local_matter(...)` if useful internally
+
+`emit_intention` and `emit_and_wait` remain the way to reach anything that is not a capacity (`matter.*`, `meaning.query`, traces).
 
 The wrapper does not rely on dynamic runtime registration functions such as `register_capacity(...)` or `register_matter(...)`.
 
@@ -679,6 +757,18 @@ A pending outbound request should minimally include:
 * wait primitive
 * creation state
 * timeout policy if any
+
+### 9.4 Parameter References
+
+A transit reference is a JSON object carrying exactly one reserved mark and its descriptor fields:
+
+* `{"@file": "<absolute path>", "format": "json|text|bytes"}`
+* `{"@object": "<name>", "wrapper": "<wrapper_name>", "type": "<type tag>"}`
+* `{"@matter": "<id>", "context": "<destination context>", "consume": true, "format": "...", "revision": n, "size": n, ...}` for transient cross-instance data only
+
+Only the exact allowed shape is a reference; an object with unrelated sibling fields is data. Semantic Matter references keep their existing `intention.matters` form and are not transient.
+
+The serialized intention or response is limited to 4 MiB before WebSocket transmission and reception. `@file` and `@object` keep bulk transit out of that control message; durable or cross-instance bulk data goes through Matter substance.
 
 ---
 
@@ -729,6 +819,18 @@ If incoming work exceeds the configured concurrency limit, excess work must ente
 
 The wrapper does not own global routing, global context reconstruction, or meaning interpretation.
 
+### 10.11 Transit invariant
+
+A transit reference has a single consumer and is never persisted in business state. A transient Matter is only a bounded physical carrier: successful `params.value` deletes it with revision and size guards. What nobody consumed is released after a definitive failure or expiry; the local transit directory is swept at startup.
+
+### 10.12 Matter-read invariant
+
+`params.value(name)` consumes only a Matter explicitly marked as transient. A semantic Matter returns an unread `MatterRef`, and the capacity handles it explicitly.
+
+### 10.13 Wrapper-owned file invariant
+
+A file owned by the wrapper (`ext_ref` matter) has a single writer. A line is committed only once its terminating LF is written, in one append; an unterminated last line is ignored and cut at open. A state replaced as a whole is written to a temporary file then renamed.
+
 ---
 
 ## 11. Error Handling Model
@@ -745,6 +847,13 @@ This means:
 
 The specification requires normalized response emission, not a universal exception taxonomy.
 
+The reference runtime maps two families explicitly (`router.py`):
+
+* `TransitError` becomes an error response with code `not_found` (reference not found) or `invalid` (anything else), and `details.reason`
+* `CapacityCallError`, raised when a call made by the capacity got an error response, travels up unchanged: same code, message and details
+
+Any other exception becomes `internal` with a public generic message and an `error_id`; the full exception is written only to the wrapper's structured log. Malformed messages, orphan responses, queue saturation, failed notifications and failed shutdown hooks are also logged. This avoids exposing local paths or secrets while retaining a correlation point for diagnosis.
+
 ---
 
 ## 12. Timeout Model
@@ -758,6 +867,8 @@ An implementation may choose:
 * per-outbound-wait timeout
 * externally configured timeout
 
+The reference runtime applies an inactivity budget to capacity calls (`timeout_s`), on the engine path and on the direct path alike. A `running` response, or `notify_running` on the direct path, renews it. An exhausted budget raises `asyncio.TimeoutError`. Without `timeout_s` there is no timeout.
+
 ---
 
 ## 13. State Model
@@ -769,6 +880,9 @@ If the Python wrapper process stops and restarts:
 * in-memory registry state is rebuilt
 * pending waits are lost
 * in-memory matter state hosted only inside the process is lost unless the hosted code persists it elsewhere
+* the object table is lost, and the transit files left behind are deleted at startup
+
+State that must survive the process belongs in a matter: `ext_ref` if only this wrapper reads and writes it, `brique` otherwise (Wrapper.md section 17.2).
 
 Persistence is not part of the minimal wrapper contract.
 
@@ -829,6 +943,8 @@ A practical Python implementation will often contain classes equivalent to:
 * `CapacityExecutor`
 * `MatterManager`
 * `OutboundAPI`
+* `TransitService`
+* `CapacityCaller`
 * `AwaitCorrelator`
 * `Scheduler`
 * `LifecycleManager`

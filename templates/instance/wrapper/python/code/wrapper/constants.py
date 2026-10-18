@@ -32,3 +32,8 @@ CAP_MATTER_SUBSCRIBE = "matter.subscribe"
 CAP_MATTER_UNSUBSCRIBE = "matter.unsubscribe"
 
 MODE_WRAPPER = "wrapper"
+
+# Global control-plane ceiling shared with engine/shared/control_plane.go.
+# Voluminous business content belongs in Matter substance; transit references
+# themselves remain small control messages.
+CONTROL_MESSAGE_LIMIT_BYTES = 4 << 20

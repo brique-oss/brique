@@ -1,17 +1,6 @@
 /*
  * Copyright 2026 Nicolas Cassan
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0.
  */
 
 package wrapper
@@ -22,142 +11,210 @@ import (
 	"strings"
 )
 
-// Router receives raw messages from the transport and dispatches them.
-type Router struct {
-	runtime *Runtime
-}
+type Router struct{ runtime *Runtime }
 
-func NewRouter(runtime *Runtime) *Router {
-	return &Router{runtime: runtime}
-}
+func NewRouter(runtime *Runtime) *Router { return &Router{runtime: runtime} }
 
+// Route keeps responses and stop control outside the bounded work scheduler.
 func (r *Router) Route(raw []byte) {
 	var env Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		r.runtime.log("router: malformed message: %v", err)
+		r.runtime.log("event=incoming_message_rejected reason=invalid_json error=%v", err)
 		return
 	}
-	switch env.Kind {
-	case KindIntention:
-		if env.Intention != nil {
-			go r.handleIntention(env.Intention)
+	if env.Kind == KindResponse && env.Response != nil {
+		if !r.runtime.correlator.Resolve(env.Response) {
+			r.runtime.log("event=orphan_response intention_id=%s", env.Response.IntentionID)
 		}
-	case KindResponse:
-		if env.Response != nil {
-			r.runtime.correlator.Resolve(env.Response)
-		}
-	default:
-		r.runtime.log("router: unknown kind %q", env.Kind)
+		return
 	}
-}
-
-func (r *Router) handleIntention(msg *IntentionMsg) {
-	cap := msg.To.Cap
-	typ := msg.To.Type
-
-	// Control
-	if typ == TypeControl || cap == CapWrapperStop {
+	if env.Kind != KindIntention || env.Intention == nil {
+		r.runtime.log("event=incoming_message_rejected reason=invalid_envelope")
+		return
+	}
+	msg := env.Intention
+	if msg.To.Type == TypeExecution && msg.To.Cap == CapWrapperStop {
 		r.runtime.requestStop()
 		return
 	}
+	key := r.workKey(msg)
+	if !r.runtime.scheduler.Submit(key, func() { r.handleIntention(msg) }) {
+		r.runtime.log("event=scheduler_overloaded queued=%d key=%s", r.runtime.scheduler.Queued(), key)
+		if msg.AwaitResponse {
+			r.sendFailure(msg, newPublicError("refused", "wrapper pending-work queue is full", "busy"))
+		}
+	}
+}
 
-	// Matter read
-	if typ == TypeMatter && strings.HasSuffix(cap, ".read") {
-		relCtx, matterName := r.splitMatterCap(cap, msg)
-		result, err := r.runtime.matters.Read(relCtx, matterName)
+func (r *Router) workKey(msg *IntentionMsg) string {
+	rel := r.relativeContext(msg.To.Context)
+	name := msg.To.Cap
+	if msg.To.Type == TypeMatter {
+		if msg.To.Cap == CapMatterSubscribe || msg.To.Cap == CapMatterUnsubscribe {
+			name = "subscription:" + stringParam(msg.Params, "sub_id")
+		} else {
+			name = stringParam(msg.Params, "matter_id")
+		}
+	}
+	return msg.To.Type + ":" + rel + ":" + name
+}
+
+func (r *Router) handleIntention(msg *IntentionMsg) {
+	switch msg.To.Type {
+	case TypeUser:
+		params := make(map[string]any, len(msg.Params)+1)
+		for key, value := range msg.Params {
+			params[key] = value
+		}
+		matterParams := make(map[string]any)
+		for _, matter := range msg.Matters {
+			repr, _ := matter["repr"].(string)
+			if repr == "" {
+				continue
+			}
+			matterParams[repr] = map[string]any{
+				"context": matter["context"], "id": matter["id"], "mode": matter["mode"],
+			}
+		}
+		if len(matterParams) > 0 {
+			params["@matter"] = matterParams
+		}
+		result, err := r.runtime.executor.Execute(r.relativeContext(msg.To.Context), msg.To.Cap, params, msg)
 		r.sendResponse(msg, result, err)
-		return
+	case TypeMatter:
+		r.handleMatter(msg)
+	default:
+		r.sendFailure(msg, newPublicError("invalid", "unsupported wrapper intention", "unsupported_type"))
 	}
+}
 
-	// Matter write
-	if typ == TypeMatter && strings.HasSuffix(cap, ".write") {
-		relCtx, matterName := r.splitMatterCap(cap, msg)
-		value, _ := extractWriteValue(msg.Params)
-		result, err := r.runtime.matters.Write(relCtx, matterName, value)
+func (r *Router) handleMatter(msg *IntentionMsg) {
+	rel := r.relativeContext(msg.To.Context)
+	matterID := stringParam(msg.Params, "matter_id")
+	switch msg.To.Cap {
+	case CapMatterRead:
+		result, err := r.runtime.matters.Read(rel, matterID)
 		r.sendResponse(msg, result, err)
-		return
-	}
-
-	// Matter subscribe
-	if typ == TypeMatter && strings.HasSuffix(cap, ".subscribe") {
-		sub := r.buildSubscription(msg)
-		r.runtime.matters.AddSubscription(sub)
-		r.sendResponse(msg, map[string]any{"ok": true, "subscription_id": sub.ID}, nil)
-		return
-	}
-
-	// Matter unsubscribe
-	if typ == TypeMatter && strings.HasSuffix(cap, ".unsubscribe") {
-		id, _ := msg.Params["subscription_id"].(string)
-		r.runtime.matters.RemoveSubscription(id)
-		r.sendResponse(msg, map[string]any{"ok": true}, nil)
-		return
-	}
-
-	// Capacity execution
-	if typ == TypeExecution {
-		relCtx := r.relativeContext(msg.To.Context)
-		result, err := r.runtime.executor.Execute(relCtx, cap, msg.Params)
+	case CapMatterWrite:
+		value, err := extractWriteValue(msg.Params)
+		if err != nil {
+			r.sendResponse(msg, nil, err)
+			return
+		}
+		result, err := r.runtime.matters.Write(rel, matterID, value)
 		r.sendResponse(msg, result, err)
+	case CapMatterSubscribe:
+		r.subscribe(msg, rel, matterID)
+	case CapMatterUnsubscribe:
+		r.unsubscribe(msg, matterID)
+	default:
+		r.sendFailure(msg, newPublicError("invalid", "unsupported wrapper matter operation", "unsupported_matter_cap"))
+	}
+}
+
+func (r *Router) subscribe(msg *IntentionMsg, rel, matterID string) {
+	id := stringParam(msg.Params, "sub_id")
+	if id == "" {
+		id = newID()
+	}
+	target := msg.From
+	if raw, ok := msg.Params["target"].(map[string]any); ok {
+		target = Address{Context: stringParam(raw, "context"), Cap: stringParam(raw, "cap"), Type: stringParam(raw, "type")}
+	}
+	if matterID == "" || target.Context == "" || target.Cap == "" || target.Type == "" {
+		r.sendFailure(msg, newPublicError("invalid", "matter_id and a complete notification target are required", "invalid_subscription"))
 		return
 	}
+	sub := &Subscription{ID: id, MatterID: matterID, Context: rel, ToContext: target.Context, ToCap: target.Cap, ToType: target.Type, Owner: msg.From}
+	if err := r.runtime.matters.AddSubscription(sub); err != nil {
+		r.sendFailure(msg, err)
+		return
+	}
+	r.sendResponse(msg, map[string]any{"ok": true, "matter_id": matterID, "sub_id": id, "substance_mode": ModeWrapper}, nil)
+}
 
-	r.sendError(msg, fmt.Sprintf("unhandled intention type=%q cap=%q", typ, cap))
+func (r *Router) unsubscribe(msg *IntentionMsg, matterID string) {
+	id := stringParam(msg.Params, "sub_id")
+	if matterID == "" || id == "" {
+		r.sendFailure(msg, newPublicError("invalid", "matter_id and sub_id are required", "invalid_subscription"))
+		return
+	}
+	removed, err := r.runtime.matters.RemoveSubscription(id, msg.From)
+	if err != nil {
+		r.sendFailure(msg, err)
+		return
+	}
+	r.sendResponse(msg, map[string]any{"ok": true, "matter_id": matterID, "sub_id": id, "removed": removed, "substance_mode": ModeWrapper}, nil)
 }
 
 func (r *Router) sendResponse(msg *IntentionMsg, payload map[string]any, err error) {
 	if !msg.AwaitResponse {
 		return
 	}
-	env := Envelope{Kind: KindResponse, Ts: utcNow()}
 	if err != nil {
-		env.Response = &ResponseMsg{IntentionID: msg.IntentionID, Ok: false, Error: err.Error()}
-	} else {
-		env.Response = &ResponseMsg{IntentionID: msg.IntentionID, Ok: true, Payload: payload}
+		r.sendFailure(msg, err)
+		return
 	}
-	if err := r.runtime.transport.Send(env); err != nil {
-		r.runtime.log("router: send response error: %v", err)
+	resp := &ResponseMsg{
+		IntentionID: msg.IntentionID,
+		To:          msg.From,
+		From:        Address{Context: r.responseFromContext(msg.To.Context), Cap: msg.To.Cap, Type: msg.To.Type},
+		Identity:    map[string]any{"id": r.runtime.wrapperName, "kind": "wrapper"},
+		Status:      StatusOK,
+		Payload:     payload,
+	}
+	if err := r.runtime.transport.Send(Envelope{Kind: KindResponse, Ts: utcNow(), Response: resp}); err != nil {
+		r.runtime.log("event=response_send_failed error=%v", err)
 	}
 }
 
-func (r *Router) sendError(msg *IntentionMsg, reason string) {
-	r.sendResponse(msg, nil, fmt.Errorf("%s", reason))
+func (r *Router) sendFailure(msg *IntentionMsg, err error) {
+	if !msg.AwaitResponse {
+		return
+	}
+	public, ok := err.(*PublicError)
+	if !ok {
+		errorID := newID()
+		r.runtime.log("event=work_failed error_id=%s error=%v", errorID, err)
+		public = newPublicError("internal", "wrapper operation failed", "wrapper_operation_failed")
+		resp := r.errorResponse(msg, public)
+		resp.Error.Details["error_id"] = errorID
+		_ = r.runtime.transport.Send(Envelope{Kind: KindResponse, Ts: utcNow(), Response: resp})
+		return
+	}
+	if sendErr := r.runtime.transport.Send(Envelope{Kind: KindResponse, Ts: utcNow(), Response: r.errorResponse(msg, public)}); sendErr != nil {
+		r.runtime.log("event=response_send_failed error=%v", sendErr)
+	}
 }
 
-// relativeContext strips the wrapper address prefix from a context path.
+func (r *Router) errorResponse(msg *IntentionMsg, err *PublicError) *ResponseMsg {
+	return &ResponseMsg{
+		IntentionID: msg.IntentionID,
+		To:          msg.From,
+		From:        Address{Context: r.responseFromContext(msg.To.Context), Cap: msg.To.Cap, Type: msg.To.Type},
+		Identity:    map[string]any{"id": r.runtime.wrapperName, "kind": "wrapper"},
+		Status:      StatusError,
+		Error:       &ResponseError{Origin: "wrapper", Code: err.Code, Message: err.Message, Details: map[string]any{"reason": err.Reason}},
+	}
+}
+
 func (r *Router) relativeContext(raw string) string {
 	prefix := fmt.Sprintf("@wrapper_%s:/", r.runtime.wrapperName)
 	if strings.HasPrefix(raw, prefix) {
-		return strings.TrimPrefix(raw, prefix)
+		return normalizeContext(strings.TrimPrefix(raw, prefix))
 	}
-	return strings.Trim(raw, "/")
+	return normalizeContext(raw)
 }
 
-func (r *Router) splitMatterCap(cap string, msg *IntentionMsg) (relCtx, name string) {
-	relCtx = r.relativeContext(msg.To.Context)
-	// cap is of the form "<matter_name>.read" / "<matter_name>.write"
-	parts := strings.SplitN(cap, ".", 2)
-	if len(parts) == 2 {
-		name = parts[0]
-	} else {
-		name = cap
+func (r *Router) responseFromContext(raw string) string {
+	prefix := fmt.Sprintf("@wrapper_%s:/", r.runtime.wrapperName)
+	if strings.HasPrefix(raw, prefix) {
+		return normalizeContext(strings.TrimPrefix(raw, prefix))
 	}
-	// Prefer explicit matter_id param
-	if id, ok := msg.Params["matter_id"].(string); ok && id != "" {
-		name = id
-	}
-	return
+	return ""
 }
 
-func (r *Router) buildSubscription(msg *IntentionMsg) *Subscription {
-	matterID, _ := msg.Params["matter_id"].(string)
-	relCtx := r.relativeContext(msg.To.Context)
-	return &Subscription{
-		ID:        newID(),
-		MatterID:  matterID,
-		Context:   relCtx,
-		ToContext: msg.From.Context,
-		ToCap:     msg.From.Cap,
-		ToType:    msg.From.Type,
-	}
+func stringParam(params map[string]any, key string) string {
+	value, _ := params[key].(string)
+	return strings.TrimSpace(value)
 }

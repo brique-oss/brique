@@ -189,6 +189,8 @@ An `invoke` addresses a capacity by its localized reference and carries what its
 
 **Intentions are control-plane messages, not bulk-data containers.** Keep `params` and response payloads small. Binary or voluminous business content must live in a `matter`: upload it with `matter.write` and `http_data: true`, then pass only its matter reference through subsequent intentions. The global serialized ceiling is 4 MiB; HTTP reports `413`, while engine-level routing reports `payload_too_large`. Do not work around the ceiling with base64 or large inline JSON.
 
+Wrapper-to-wrapper calls apply this rule automatically in the Python, Go and C++ runtimes: hosted code supplies only the destination address and ordinary parameter values. The runtime keeps small values inline, uses `@object` inside one wrapper, `@file` across wrappers sharing an instance filesystem, and a transient destination Matter across `@ext_*` instance/engine boundaries (or above the safe file-transit limit). Its language-level parameter accessor resolves every transient form; after a transient Matter is fully read, revision/size checked and decoded, the runtime deletes it. This never applies to a semantic Matter reference supplied in `intention.matters`, which remains explicit state. Raw MCP intentions do not gain this wrapper convenience: their caller must still obey the retrieved contract and use Matter capacities explicitly for bulk data.
+
 The complete operator reference — every node, field, and constraint — is returned alongside the capacity template (`edit.get_element_template` with `item_type: "capacity"`). Never write a resolution from a memory of the operators.
 
 ### Decomposition patterns
@@ -490,11 +492,16 @@ The vocabulary and meaning projection are a snapshot, not a live mirror of the f
 ### Work with matters
 
 - Read → `matter.read` ; batch read → `matter.read_batch`
+- Inspect revision and size without substance → `matter.stat`
 - Create → `matter.create`
-- Write → `matter.write`
+- Replace descriptor/substance → `matter.write` ; append opaque tail bytes → `matter.append`
+- Read only a byte or LF-delimited line range → `matter.read` with `data_range`
+- Shorten substance explicitly → `matter.truncate` (requires revision and byte-size guards)
 - Clone → `matter.clone` ; derive → `matter.derive`
 - Delete → `matter.delete`
-- Subscribe to changes → `matter.subscribe`, `matter.unsubscribe`
+- Subscribe to changes → `matter.subscribe`, `matter.unsubscribe` ; durable delivery is at-least-once and each `event_id` must be confirmed with `matter.subscription.ack`
+
+Matter substance stays opaque: `lines` framing recognizes only LF boundaries and never parses JSONL or another business format. Byte offsets and sizes are always canonical; line coordinates are supplementary. Use `expected_revision`, `expected_byte_size`, and, for line-framed substance, `expected_line_count` when a mutation must be conditional. Inline substance is limited by `inline_max_bytes` (256 KiB by default). Large replacement or append payloads use `http_data: true`; for a large initial payload, create or derive the matter without substance and upload it afterward with `matter.write`. Intentions carry control metadata, not bulk bytes.
 
 ### Work with structures
 

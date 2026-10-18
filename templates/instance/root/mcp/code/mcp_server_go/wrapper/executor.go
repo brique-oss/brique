@@ -16,28 +16,39 @@
 
 package wrapper
 
-import "fmt"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"sync"
+)
 
 // CapacityExecutor invokes Go capacity handlers.
 type CapacityExecutor struct {
-	registry *Registry
+	runtime *Runtime
 }
 
-func NewCapacityExecutor(registry *Registry) *CapacityExecutor {
-	return &CapacityExecutor{registry: registry}
+func NewCapacityExecutor(runtime *Runtime) *CapacityExecutor {
+	return &CapacityExecutor{runtime: runtime}
 }
 
 // Execute resolves the binding and calls the handler.
-func (e *CapacityExecutor) Execute(relContext, name string, params map[string]any) (map[string]any, error) {
-	binding, err := e.registry.ResolveCapacity(relContext, name)
+func (e *CapacityExecutor) Execute(relContext, name string, values map[string]any, origin *IntentionMsg) (result map[string]any, err error) {
+	binding, err := e.runtime.registry.ResolveCapacity(relContext, name)
 	if err != nil {
 		return nil, err
 	}
-	result, err := binding.Handler(Params(params))
+	params := newParams(values, e.runtime, origin)
+	defer func() {
+		if cleanupErr := params.releaseUnconsumed(); cleanupErr != nil {
+			e.runtime.log("event=transit_cleanup_failed error=%v", cleanupErr)
+		}
+	}()
+	value, err := binding.Handler(params)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeResult(result), nil
+	return normalizeResult(value), nil
 }
 
 func normalizeResult(v any) map[string]any {
@@ -55,6 +66,7 @@ type MatterManager struct {
 	registry      *Registry
 	subscriptions map[string]*Subscription
 	outbound      *OutboundAPI
+	mu            sync.RWMutex
 }
 
 func NewMatterManager(registry *Registry, outbound *OutboundAPI) *MatterManager {
@@ -71,12 +83,28 @@ func (m *MatterManager) Read(relContext, name string) (map[string]any, error) {
 		return nil, err
 	}
 	binding.Lock()
-	defer binding.Unlock()
+	if binding.Read == nil {
+		binding.Unlock()
+		return nil, fmt.Errorf("matter %q is not readable", name)
+	}
 	v, err := binding.Read()
+	binding.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return normalizeResult(v), nil
+	var raw []byte
+	switch value := v.(type) {
+	case []byte:
+		raw = value
+	case string:
+		raw = []byte(value)
+	default:
+		raw, err = json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"kind": "inline", "bytes": base64.StdEncoding.EncodeToString(raw), "size": len(raw)}, nil
 }
 
 func (m *MatterManager) Write(relContext, name string, value any) (map[string]any, error) {
@@ -85,37 +113,73 @@ func (m *MatterManager) Write(relContext, name string, value any) (map[string]an
 		return nil, err
 	}
 	binding.Lock()
-	defer binding.Unlock()
+	if binding.Write == nil {
+		binding.Unlock()
+		return nil, fmt.Errorf("matter %q is not writable", name)
+	}
 	if err := binding.Write(value); err != nil {
+		binding.Unlock()
 		return nil, err
 	}
+	binding.Unlock()
+	notified := 0
 	if binding.NotifyOnWrite {
-		go m.notifySubscribers(relContext, name, value)
+		notified = m.notifySubscribers(relContext, name, value)
 	}
 	return map[string]any{
 		"ok":             true,
 		"matter_id":      name,
 		"substance_mode": ModeWrapper,
+		"notified":       notified,
 	}, nil
 }
 
-func (m *MatterManager) AddSubscription(sub *Subscription) {
+func (m *MatterManager) AddSubscription(sub *Subscription) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.subscriptions[sub.ID]; ok {
+		if *existing == *sub {
+			return nil
+		}
+		return newPublicError("refused", "subscription identifier is already in use", "duplicate_sub_id")
+	}
 	m.subscriptions[sub.ID] = sub
+	return nil
 }
 
-func (m *MatterManager) RemoveSubscription(id string) {
+func (m *MatterManager) RemoveSubscription(id string, owner Address) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sub, ok := m.subscriptions[id]
+	if !ok {
+		return false, nil
+	}
+	if sub.Owner != owner {
+		return false, newPublicError("refused", "subscription belongs to another caller", "subscription_owner_mismatch")
+	}
 	delete(m.subscriptions, id)
+	return true, nil
 }
 
-func (m *MatterManager) notifySubscribers(relContext, name string, value any) {
+func (m *MatterManager) notifySubscribers(relContext, name string, value any) int {
+	m.mu.RLock()
+	subs := make([]Subscription, 0, len(m.subscriptions))
 	for _, sub := range m.subscriptions {
+		subs = append(subs, *sub)
+	}
+	m.mu.RUnlock()
+	notified := 0
+	for _, sub := range subs {
 		if sub.MatterID != name || normalizeContext(sub.Context) != normalizeContext(relContext) {
 			continue
 		}
-		_ = m.outbound.EmitIntention(OutboundParams{
-			ToContext: sub.ToContext,
-			ToCap:     sub.ToCap,
-			ToType:    sub.ToType,
+		err := m.outbound.EmitIntention(OutboundParams{
+			ToContext:   sub.ToContext,
+			ToCap:       sub.ToCap,
+			ToType:      sub.ToType,
+			FromContext: normalizeContext(relContext),
+			FromCap:     "matter_event",
+			FromType:    TypeMatter,
 			Params: map[string]any{
 				"event":          "matter_written",
 				"op":             "write",
@@ -125,7 +189,11 @@ func (m *MatterManager) notifySubscribers(relContext, name string, value any) {
 			},
 			AwaitResponse: false,
 		})
+		if err == nil {
+			notified++
+		}
 	}
+	return notified
 }
 
 // extractWriteValue retrieves the value to write from an intention's params.
@@ -139,6 +207,16 @@ func extractWriteValue(params map[string]any) (any, error) {
 	if payload, ok := params["payload"].(map[string]any); ok {
 		if v, ok := payload["value"]; ok {
 			return v, nil
+		}
+		if payload["kind"] == "inline" {
+			encoded, _ := payload["bytes"].(string)
+			if encoded != "" {
+				decoded, err := base64.StdEncoding.DecodeString(encoded)
+				if err != nil {
+					return nil, fmt.Errorf("invalid inline payload: %w", err)
+				}
+				return decoded, nil
+			}
 		}
 	}
 	return nil, fmt.Errorf("no writable value found in params")

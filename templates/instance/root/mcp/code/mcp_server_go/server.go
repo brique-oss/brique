@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 const maxControlMessageBytes int64 = 4 << 20
@@ -135,6 +136,14 @@ type MCPHandler struct {
 	clients  []*sseClient
 }
 
+// ProgressForwarder is an outbound that can report the `running` acknowledgements of a long capacity.
+type ProgressForwarder interface {
+	ForwardIntentionWithProgress(intention map[string]any, onRunning func(count int, elapsed time.Duration)) (map[string]any, error)
+}
+
+// The real outbound must satisfy ProgressForwarder: a mismatch would silently drop every progress notification.
+var _ ProgressForwarder = (*BriqueCapacityClient)(nil)
+
 type BriqueOutbound interface {
 	// <brique:import name="mcp.initialize" signature="capacity" resolution="engine_external">
 	Initialize() (map[string]any, error)
@@ -161,6 +170,35 @@ func (h *MCPHandler) RegisterSSE(w http.ResponseWriter, flusher http.Flusher, do
 		}
 	}
 	h.mu.Unlock()
+}
+
+// notify sends a JSON-RPC notification (no id, no answer expected) to the connected clients.
+func (h *MCPHandler) notify(method string, params any) {
+	data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.clients {
+		fmt.Fprintf(c.w, "event: message\ndata: %s\n\n", data)
+		c.flusher.Flush()
+	}
+}
+
+// progressReporter turns each `running` acknowledgement into an MCP progress notification, as the
+// protocol defines it: only for a request that carried a progressToken, never as the call's result.
+func (h *MCPHandler) progressReporter(token json.RawMessage) func(count int, elapsed time.Duration) {
+	if len(token) == 0 || string(token) == "null" {
+		return nil
+	}
+	return func(count int, elapsed time.Duration) {
+		h.notify("notifications/progress", map[string]any{
+			"progressToken": token,
+			"progress":      count,
+			"message":       fmt.Sprintf("capacity still running after %.0fs", elapsed.Seconds()),
+		})
+	}
 }
 
 func (h *MCPHandler) broadcast(resp JSONRPCResponse) {
@@ -202,6 +240,9 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		var p struct {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
+			Meta      struct {
+				ProgressToken json.RawMessage `json:"progressToken"`
+			} `json:"_meta"`
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			h.broadcast(errResponse(req.ID, -32602, "invalid params"))
@@ -239,7 +280,14 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 			h.broadcast(errResponse(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name)))
 			return
 		}
-		result, err := h.outbound.ForwardIntention(p.Arguments)
+		var result map[string]any
+		var err error
+		onRunning := h.progressReporter(p.Meta.ProgressToken)
+		if forwarder, ok := h.outbound.(ProgressForwarder); ok && onRunning != nil {
+			result, err = forwarder.ForwardIntentionWithProgress(p.Arguments, onRunning)
+		} else {
+			result, err = h.outbound.ForwardIntention(p.Arguments)
+		}
 		if err != nil {
 			h.broadcast(errResponse(req.ID, -32603, err.Error()))
 			return

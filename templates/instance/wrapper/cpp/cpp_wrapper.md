@@ -18,9 +18,9 @@ limitations under the License.
 
 ## Scope
 
-This directory provides a minimal generic C++ wrapper runtime for Brique.
+This directory provides the generic C++ wrapper runtime for Brique.
 
-It mirrors the Python wrapper model at a smaller surface:
+It mirrors the Python wrapper's protocol and execution guarantees:
 
 - one `main.cpp`
 - one static bindings file in code
@@ -31,6 +31,9 @@ It mirrors the Python wrapper model at a smaller surface:
   - emits `wrapper_ready`
   - receives `wrapper_stop`
   - dispatches wrapper-backed user capacities from a static registry
+  - dispatches wrapper-backed matter reads, writes and subscriptions
+  - emits fire-and-forget or awaited outbound intentions with correlation
+  - bounds global work while preserving FIFO order per binding or matter
   - returns Brique `response` envelopes
 
 ## Layout
@@ -43,7 +46,7 @@ It mirrors the Python wrapper model at a smaller surface:
 The implementation is header-only on purpose so a minimal compiled wrapper can be built with a simple command such as:
 
 ```bash
-c++ -std=c++17 -O2 main.cpp -o sandbox_cpp
+c++ -std=c++17 -O2 -pthread main.cpp -lcurl -o sandbox_cpp
 ```
 
 ## Binding Model
@@ -75,20 +78,41 @@ The value is:
 
 - a live callable compiled into the wrapper process
 
-## Current Intent
+A wrapper-owned matter uses the same static fragment:
 
-This first C++ wrapper is intended to support `Execution` `N6` build/run testing with:
+```cpp
+auto state = std::make_shared<std::string>();
+fragment.matters.push_back(wrapper::MatterBinding{
+    "", "state",
+    [state] { return *state; },
+    [state](const std::string& value_raw) { *state = value_raw; },
+    true,
+});
+```
 
-- one real compiled artifact
-- one real wrapper process
-- one real readiness signal
-- one or two real wrapper-backed capacities
+Hosted code receives the `Runtime&` passed to `build_bindings` and can call `emit_intention(...)` or `emit_and_wait(...)`. Outbound params and matter lists are supplied as JSON strings, while the runtime fills source address and parent/root correlation from the currently executing capacity when omitted.
 
-It does not yet implement the full Python wrapper surface such as:
+## Runtime guarantees
 
-- matter bindings
-- outbound intentions
-- correlator wait API
-- subscription/event routing
+- current Brique response/status and structured-error envelopes
+- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
+- responses and `wrapper_stop` outside the bounded work scheduler
+- FIFO ordering per capacity or matter with unrelated parallelism
+- strict binding validation before connection
+- 4 MiB control-message limit, fragmented WebSocket reads and bounded startup retries
+- matter commit before notification, relative notification origins and owner-checked subscriptions
+- outbound correlation plus `running`-renewed inactivity waits
+- generic internal errors carrying a public `error_id`, with details kept in local logs
 
-Those can be added later if C++ wrappers need the same functional depth as Python wrappers.
+Build and run the runtime test with:
+
+```bash
+c++ -std=c++17 -pthread -Wall -Wextra -pedantic tests/runtime_test.cpp -lcurl -o runtime_test
+./runtime_test
+```
+
+## Placement and transit
+
+`ParamsView::value_raw(name)` resolves inline JSON, wrapper-local `@object`, shared-filesystem `@file`, and transient cross-instance `@matter`; `string_value(name)` uses that same resolution. The destructor releases references the capacity did not consume. Semantic Matters remain explicit and are never consumed by this path.
+
+Hosted code calls `Runtime::emit(value_raw, TransitTarget{...})` or `Runtime::call(target, params)` with ordinary JSON fragments. The runtime selects the carrier from the address, creates transient destination Matters through HTTP or HTTPS leases when necessary, verifies `brique.transient`, revision and size, and guarded-deletes after successful decoding. The C++ runtime links to libcurl (`-lcurl`) so HTTPS keeps normal certificate verification. `emit_intention` and `emit_and_wait` remain available for raw non-capacity intentions. C++ calls currently stay engine-routed; the Python-only optimization is direct in-process execution, not parameter transit.

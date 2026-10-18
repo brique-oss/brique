@@ -25,12 +25,19 @@ class _Cancelled:
 
 class PendingResponse:
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[dict[str, Any] | _Cancelled] = asyncio.Queue()
+        self._queue: asyncio.Queue[dict[str, Any] | _Cancelled] = asyncio.Queue(maxsize=1)
 
     def deliver(self, response: dict[str, Any]) -> None:
+        body = response.get("response", {}) if isinstance(response.get("response"), dict) else {}
+        if self._queue.full():
+            if body.get("status") == "running":
+                return
+            self._queue.get_nowait()
         self._queue.put_nowait(response)
 
     def cancel(self, reason: str) -> None:
+        if self._queue.full():
+            self._queue.get_nowait()
         self._queue.put_nowait(_Cancelled(reason))
 
     async def wait(self, timeout_s: float | None = None) -> dict[str, Any]:
@@ -57,6 +64,8 @@ class AwaitCorrelator:
     async def register(self, intention_id: str) -> PendingResponse:
         pending = PendingResponse()
         async with self._lock:
+            if intention_id in self._pending:
+                raise RuntimeError(f"duplicate pending intention id {intention_id!r}")
             self._pending[intention_id] = pending
         return pending
 

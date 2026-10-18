@@ -41,7 +41,7 @@
           },
         "data": {
           "type": "any",
-          "_comment": "Optional small inline substance payload. Strings become raw bytes; other values are JSON-marshaled. Do not carry binary or voluminous content here, including as base64: request an HTTP upload lease with http_data=true instead. How matter.read later serializes small inline content (plain string vs base64) is controlled separately by brique.substance_type ('text', the default, or 'binary')."
+            "_comment": "Optional small inline substance payload, mutually exclusive with http_data=true. Strings become raw bytes; other values are JSON-marshaled. The encoded payload must not exceed engine_config.matter.inline_max_bytes (256 KiB by default); request an HTTP upload lease for larger content. How matter.read later serializes inline content is controlled separately by brique.substance_type."
           },
           "http_data": {
             "type": "boolean",
@@ -90,14 +90,16 @@
           "The capacity fails when matter_id is missing, no patch intent is provided, or a patch payload has the wrong shape.",
           "The capacity refuses the entire write with a revision-mismatch error when expected_revision differs from the current revision; no requested mutation is applied.",
           "The capacity fails when payload writing is requested outside brique mode or when the commit boundary cannot be completed.",
+          "Inline data above inline_max_bytes is refused with reason=payload_too_large; data and http_data=true cannot be supplied together.",
           "A deferred upload fails with a revision conflict when another write commits after the lease was opened and before it is finalized.",
-          "A descriptor-commit failure after payload replacement is reported explicitly as partial_commit.",
+          "If a multi-file commit is interrupted after its recovery journal is durable, startup deterministically rolls the transaction forward.",
           "The capacity fails with reason=invalid_patch, and applies none of the requested operations, when any semantic_patch op's path[0] is not one of objective, subjective, functional, brique."
         ],
         "notes": [
           "metadata patches are merged minimally into matter.json; semantic_patch.operations is the canonical precise mutation form and legacy add/remove remains accepted.",
           "expected_revision is optional for direct writes: omitting it preserves unconditional serialized commits in lock-acquisition order. Deferred HTTP leases always bind finalization to the revision observed when the lease opens, so only a lease whose base revision is still current can commit.",
           "Intentions are control-plane messages. Use inline data only for small content; all binary or voluminous content must use http_data and then be referenced as a matter.",
+          "For brique-managed substance, the engine owns brique.substance_size_bytes and, in lines framing, brique.substance_line_count; callers cannot patch these fields.",
           "Subscription notifications happen only after a successful committed write in brique mode."
         ]
       }

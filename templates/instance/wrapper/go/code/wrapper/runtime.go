@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -36,7 +38,9 @@ type Runtime struct {
 	executor   *CapacityExecutor
 	outbound   *OutboundAPI
 	matters    *MatterManager
+	transit    *TransitService
 	router     *Router
+	scheduler  *WorkScheduler
 
 	stopCh chan struct{}
 }
@@ -63,6 +67,12 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 	if r.ctxDir == "" {
 		return fmt.Errorf("BRIQUE_CTX_DIR is not set")
 	}
+	if !filepath.IsAbs(r.ctxDir) {
+		return fmt.Errorf("BRIQUE_CTX_DIR must be an absolute path")
+	}
+	if strings.TrimSpace(r.ctxID) == "" || !strings.HasPrefix(r.ctxID, "/") {
+		return fmt.Errorf("BRIQUE_CTX_ID must be a non-empty absolute context path")
+	}
 	if r.wrapperName == "" {
 		return fmt.Errorf("BRIQUE_WRAPPER_NAME is not set")
 	}
@@ -72,22 +82,38 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 		return fmt.Errorf("resolve wrapper url: %w", err)
 	}
 
-	r.transport = NewTransportClient(url)
-	r.outbound = NewOutboundAPI(r.transport, r.correlator, r.wrapperName, r.ctxID)
-	r.executor = NewCapacityExecutor(r.registry)
-	r.matters = NewMatterManager(r.registry, r.outbound)
-	r.router = NewRouter(r)
+	maxConcurrency, err := positiveEnv("BRIQUE_MAX_CONCURRENCY", 16)
+	if err != nil {
+		return err
+	}
+	queueLimit, err := positiveEnv("BRIQUE_QUEUE_LIMIT", 256)
+	if err != nil {
+		return err
+	}
+	r.scheduler, err = NewWorkScheduler(maxConcurrency, queueLimit)
+	if err != nil {
+		return err
+	}
 
 	fragment := buildBindings(r)
-	r.registry.Load(fragment)
+	if err := r.registry.Load(fragment); err != nil {
+		return fmt.Errorf("load bindings: %w", err)
+	}
+
+	r.transport = NewTransportClient(url)
+	r.outbound = NewOutboundAPI(r.transport, r.correlator, r.wrapperName, r.ctxID)
+	r.transit, err = NewTransitService(r)
+	if err != nil {
+		return fmt.Errorf("initialize transit: %w", err)
+	}
+	r.executor = NewCapacityExecutor(r)
+	r.matters = NewMatterManager(r.registry, r.outbound)
+	r.router = NewRouter(r)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if err := r.transport.Connect(ctx); err != nil {
-		if isRefused(err) {
-			return nil
-		}
 		return fmt.Errorf("transport connect: %w", err)
 	}
 	defer r.transport.Close()
@@ -106,6 +132,7 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 		r.router.Route(raw)
 	})
 
+	r.scheduler.Close()
 	r.registry.RunShutdown()
 	r.correlator.CancelAll("wrapper stopped")
 
@@ -115,10 +142,25 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 	return nil
 }
 
+func positiveEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, nil
+}
+
 // OutboundAPI returns the API surface for hosted code to emit intentions.
 func (r *Runtime) Outbound() *OutboundAPI {
 	return r.outbound
 }
+
+// Transit returns the address-driven parameter transport service.
+func (r *Runtime) Transit() *TransitService { return r.transit }
 
 func (r *Runtime) requestStop() {
 	select {

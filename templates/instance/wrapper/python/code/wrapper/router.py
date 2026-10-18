@@ -32,7 +32,9 @@ from .constants import (
     TYPE_MATTER,
     TYPE_USER,
 )
+from .calls import CapacityCallError
 from .execution import WrapperBindingNotFoundError
+from .transit import TransitError
 from .util import new_id, utc_now_rfc3339
 
 
@@ -41,12 +43,21 @@ class MessageRouter:
         self.runtime = runtime
 
     async def route_incoming_raw(self, raw: str) -> None:
+        message = self.decode_raw(raw)
+        if message is not None:
+            await self.route_message(message)
+
+    @staticmethod
+    def decode_raw(raw: str) -> dict[str, Any] | None:
         try:
             message = json.loads(raw)
         except json.JSONDecodeError:
-            return
+            return None
         if not isinstance(message, dict):
-            return
+            return None
+        return message
+
+    async def route_message(self, message: dict[str, Any]) -> None:
         kind = message.get("kind")
         if kind == KIND_RESPONSE:
             await self.route_response(message)
@@ -58,8 +69,27 @@ class MessageRouter:
             return
         await self.route_intention(intention)
 
+    async def reject_overloaded(self, intention: dict[str, Any]) -> None:
+        if not isinstance(intention, dict) or not bool(intention.get("await_response", False)):
+            return
+        await self.runtime.transport.send(
+            self.error_response(
+                intention,
+                "refused",
+                "wrapper pending-work queue is full",
+                {"reason": "busy"},
+            )
+        )
+
     async def route_response(self, message: dict[str, Any]) -> None:
-        await self.runtime.correlator.resolve(message)
+        resolved = await self.runtime.correlator.resolve(message)
+        if not resolved:
+            body = message.get("response", {}) if isinstance(message.get("response"), dict) else {}
+            payload = body.get("payload", {}) if isinstance(body.get("payload"), dict) else {}
+            self._release_payload_references(payload)
+            logger = getattr(self.runtime, "log_event", None)
+            if callable(logger):
+                logger("orphan_response", intention_id=str(body.get("intention_id", "")))
 
     async def route_intention(self, intention: dict[str, Any]) -> None:
         to = intention.get("to", {})
@@ -84,15 +114,44 @@ class MessageRouter:
         target_context = self.runtime.target_context(intention)
         try:
             payload = await self.runtime.capacity_executor.execute_capacity(target_context, cap_name, intention)
-            await self.runtime.transport.send(self.ok_response(intention, payload))
+            try:
+                await self.runtime.transport.send(self.ok_response(intention, payload))
+            except BaseException:
+                self._release_payload_references(payload)
+                raise
         except WrapperBindingNotFoundError as exc:
             await self.runtime.transport.send(
                 self.error_response(intention, "not_found", str(exc), {"reason": "unknown_cap"})
             )
-        except Exception as exc:  # pragma: no cover - runtime failure path
+
+        except TransitError as exc:
             await self.runtime.transport.send(
-                self.error_response(intention, "internal", str(exc), {"reason": "wrapper_capacity_failed"})
+                self.error_response(intention, exc.code, str(exc), {"reason": exc.reason})
             )
+        except CapacityCallError as exc:
+            # A call this capacity made failed: its typed error travels up unchanged.
+            await self.runtime.transport.send(self.error_response(intention, exc.code, str(exc), exc.details))
+        except Exception as exc:  # pragma: no cover - runtime failure path
+            error_id = new_id()
+            logger = getattr(self.runtime, "log_exception", None)
+            if callable(logger):
+                logger("capacity_failed", exc, error_id=error_id, capacity=cap_name)
+            await self.runtime.transport.send(
+                self.error_response(
+                    intention,
+                    "internal",
+                    "wrapper capacity failed",
+                    {"reason": "wrapper_capacity_failed", "error_id": error_id},
+                )
+            )
+
+    def _release_payload_references(self, payload: dict[str, Any]) -> None:
+        transit = getattr(self.runtime, "transit", None)
+        release = getattr(transit, "release", None)
+        if not callable(release):
+            return
+        for value in payload.values():
+            release(value)
 
     async def route_matter(self, intention: dict[str, Any], cap_name: str) -> None:
         params = intention.get("params", {}) if isinstance(intention.get("params"), dict) else {}
@@ -111,15 +170,46 @@ class MessageRouter:
             if cap_name == CAP_MATTER_SUBSCRIBE:
                 sub_id = str(params.get("sub_id", "")).strip() or f"sub_{new_id()}"
                 from_addr = intention.get("from", {}) if isinstance(intention.get("from"), dict) else {}
-                self.runtime.subscriptions[sub_id] = {
+                explicit_target = params.get("target") if isinstance(params.get("target"), dict) else None
+                target = explicit_target or from_addr
+                subscription = {
                     "matter_id": matter_name,
                     "context": target_context,
-                    "target": {
+                    "owner": {
                         "context": str(from_addr.get("context", "")).strip(),
                         "cap": str(from_addr.get("cap", "")).strip(),
                         "type": str(from_addr.get("type", "")).strip(),
                     },
+                    "target": {
+                        "context": str(target.get("context", "")).strip(),
+                        "cap": str(target.get("cap", "")).strip(),
+                        "type": str(target.get("type", "")).strip(),
+                    },
                 }
+                if not matter_name or not all(subscription["target"].values()):
+                    await self.runtime.transport.send(
+                        self.error_response(
+                            intention,
+                            "invalid",
+                            "matter_id and a complete notification target are required",
+                            {"reason": "invalid_subscription"},
+                        )
+                    )
+                    return
+                existing = self.runtime.subscriptions.get(sub_id)
+                if existing is not None:
+                    if existing != subscription:
+                        await self.runtime.transport.send(
+                            self.error_response(
+                                intention,
+                                "refused",
+                                "subscription identifier is already in use",
+                                {"reason": "duplicate_sub_id"},
+                            )
+                        )
+                        return
+                else:
+                    self.runtime.subscriptions[sub_id] = subscription
                 await self.runtime.transport.send(
                     self.ok_response(
                         intention,
@@ -129,12 +219,39 @@ class MessageRouter:
                 return
             if cap_name == CAP_MATTER_UNSUBSCRIBE:
                 sub_id = str(params.get("sub_id", "")).strip()
-                if sub_id:
+                if not matter_name or not sub_id:
+                    await self.runtime.transport.send(
+                        self.error_response(
+                            intention,
+                            "invalid",
+                            "matter_id and sub_id are required",
+                            {"reason": "invalid_subscription"},
+                        )
+                    )
+                    return
+                from_addr = intention.get("from", {}) if isinstance(intention.get("from"), dict) else {}
+                sub = self.runtime.subscriptions.get(sub_id)
+                removed = False
+                if isinstance(sub, dict):
+                    owner = sub.get("owner", {}) if isinstance(sub.get("owner"), dict) else {}
+                    owner_key = tuple(str(owner.get(key, "")).strip() for key in ("context", "cap", "type"))
+                    caller_key = tuple(str(from_addr.get(key, "")).strip() for key in ("context", "cap", "type"))
+                    if owner_key != caller_key:
+                        await self.runtime.transport.send(
+                            self.error_response(
+                                intention,
+                                "refused",
+                                "subscription belongs to another caller",
+                                {"reason": "subscription_owner_mismatch"},
+                            )
+                        )
+                        return
                     self.runtime.subscriptions.pop(sub_id, None)
+                    removed = True
                 await self.runtime.transport.send(
                     self.ok_response(
                         intention,
-                        {"ok": True, "matter_id": matter_name, "sub_id": sub_id},
+                        {"ok": True, "matter_id": matter_name, "sub_id": sub_id, "removed": removed},
                     )
                 )
                 return
@@ -151,8 +268,17 @@ class MessageRouter:
                 self.error_response(intention, "not_found", str(exc), {"reason": "unknown_matter"})
             )
         except Exception as exc:  # pragma: no cover - runtime failure path
+            error_id = new_id()
+            logger = getattr(self.runtime, "log_exception", None)
+            if callable(logger):
+                logger("matter_operation_failed", exc, error_id=error_id, matter=matter_name)
             await self.runtime.transport.send(
-                self.error_response(intention, "internal", str(exc), {"reason": "wrapper_matter_failed"})
+                self.error_response(
+                    intention,
+                    "internal",
+                    "wrapper matter operation failed",
+                    {"reason": "wrapper_matter_failed", "error_id": error_id},
+                )
             )
 
     def ok_response(self, intention: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

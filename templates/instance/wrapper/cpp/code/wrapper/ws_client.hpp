@@ -25,12 +25,17 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <chrono>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <thread>
 
 namespace wrapper {
+
+inline constexpr std::size_t kControlMessageLimitBytes = 4U * 1024U * 1024U;
 
 struct WebSocketURL {
     std::string host;
@@ -71,6 +76,19 @@ inline std::string base64_encode(const std::string& input) {
     return out;
 }
 
+inline std::string base64_decode(const std::string& input) {
+    static const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out; unsigned int buffer = 0; int bits = 0;
+    for (unsigned char ch : input) {
+        if (ch == '=') break;
+        const std::size_t pos = alphabet.find(static_cast<char>(ch));
+        if (pos == std::string::npos) throw std::runtime_error("invalid base64 transit payload");
+        buffer = (buffer << 6U) | static_cast<unsigned int>(pos); bits += 6;
+        if (bits >= 8) { bits -= 8; out.push_back(static_cast<char>((buffer >> bits) & 0xFFU)); }
+    }
+    return out;
+}
+
 inline WebSocketURL parse_ws_url(const std::string& raw) {
     const std::string prefix = "ws://";
     if (raw.rfind(prefix, 0) != 0) {
@@ -97,6 +115,23 @@ public:
     ~WSClient() { close(); }
 
     void connect(const std::string& url_raw) {
+        std::chrono::milliseconds delay(100);
+        for (int attempt = 1; attempt <= 5; ++attempt) {
+            try {
+                connect_once(url_raw);
+                return;
+            } catch (const std::exception& ex) {
+                close();
+                if (attempt == 5 || std::string(ex.what()).find("tcp connect failed") == std::string::npos) {
+                    throw;
+                }
+                std::this_thread::sleep_for(delay);
+                delay = std::min(delay * 2, std::chrono::milliseconds(1000));
+            }
+        }
+    }
+
+    void connect_once(const std::string& url_raw) {
         const WebSocketURL url = parse_ws_url(url_raw);
         socket_fd_ = connect_tcp(url.host, url.port);
         const std::string key = random_key();
@@ -116,6 +151,7 @@ public:
     }
 
     void close() {
+        std::lock_guard<std::mutex> lock(send_mu_);
         if (socket_fd_ >= 0) {
             ::close(socket_fd_);
             socket_fd_ = -1;
@@ -123,23 +159,50 @@ public:
     }
 
     void send_text(const std::string& payload) {
+        if (payload.size() > kControlMessageLimitBytes) {
+            throw std::runtime_error("control message exceeds 4 MiB; store large payloads in Matter substance");
+        }
+        std::lock_guard<std::mutex> lock(send_mu_);
         send_frame(0x1, payload);
     }
 
     void send_pong(const std::string& payload) {
+        std::lock_guard<std::mutex> lock(send_mu_);
         send_frame(0xA, payload);
     }
 
     bool receive_text(std::string& out) {
+        std::string fragments;
+        bool fragmented = false;
         while (true) {
             int opcode = 0;
+            bool final = true;
             std::string payload;
-            if (!read_frame(opcode, payload)) {
+            if (!read_frame(final, opcode, payload)) {
                 return false;
             }
             if (opcode == 0x1) {
-                out = payload;
-                return true;
+                if (final) {
+                    out = payload;
+                    return true;
+                }
+                fragments = std::move(payload);
+                fragmented = true;
+                continue;
+            }
+            if (opcode == 0x0) {
+                if (!fragmented) {
+                    throw std::runtime_error("unexpected websocket continuation frame");
+                }
+                fragments += payload;
+                if (fragments.size() > kControlMessageLimitBytes) {
+                    throw std::runtime_error("fragmented control message exceeds 4 MiB");
+                }
+                if (final) {
+                    out = std::move(fragments);
+                    return true;
+                }
+                continue;
             }
             if (opcode == 0x8) {
                 return false;
@@ -153,6 +216,7 @@ public:
 
 private:
     int socket_fd_ = -1;
+    std::mutex send_mu_;
 
     static std::string random_key() {
         std::array<unsigned char, 16> bytes{};
@@ -246,11 +310,12 @@ private:
         write_all(frame.data(), frame.size());
     }
 
-    bool read_frame(int& opcode, std::string& payload) {
+    bool read_frame(bool& final, int& opcode, std::string& payload) {
         std::uint8_t header[2];
         if (!read_exact(header, sizeof(header))) {
             return false;
         }
+        final = (header[0] & 0x80) != 0;
         opcode = header[0] & 0x0F;
         const bool masked = (header[1] & 0x80) != 0;
         std::uint64_t len = header[1] & 0x7F;
@@ -275,6 +340,9 @@ private:
             if (!read_exact(mask.data(), mask.size())) {
                 return false;
             }
+        }
+        if (len > kControlMessageLimitBytes) {
+            throw std::runtime_error("control message exceeds 4 MiB");
         }
         payload.assign(static_cast<std::size_t>(len), '\0');
         if (len > 0 && !read_exact(payload.data(), static_cast<std::size_t>(len))) {

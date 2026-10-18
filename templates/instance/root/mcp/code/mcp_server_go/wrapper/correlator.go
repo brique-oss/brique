@@ -37,20 +37,20 @@ func NewAwaitCorrelator() *AwaitCorrelator {
 }
 
 // Register creates a waiting channel for intentionID and returns it.
-func (c *AwaitCorrelator) Register(intentionID string) <-chan *ResponseMsg {
+func (c *AwaitCorrelator) Register(intentionID string) (<-chan *ResponseMsg, error) {
 	ch := make(chan *ResponseMsg, 1)
 	c.mu.Lock()
+	if _, exists := c.pending[intentionID]; exists {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("duplicate pending intention id %q", intentionID)
+	}
 	c.pending[intentionID] = &pendingEntry{ch: ch}
 	c.mu.Unlock()
-	return ch
+	return ch, nil
 }
 
-// Resolve delivers a response to the waiting caller, if any. Intermediate
-// running responses keep the correlation registered for the final response.
-func (c *AwaitCorrelator) Resolve(resp *ResponseMsg) {
-	if resp == nil {
-		return
-	}
+// Resolve delivers a response to the waiting caller, if any.
+func (c *AwaitCorrelator) Resolve(resp *ResponseMsg) bool {
 	c.mu.Lock()
 	entry, ok := c.pending[resp.IntentionID]
 	if ok && resp.Status != StatusRunning {
@@ -58,11 +58,21 @@ func (c *AwaitCorrelator) Resolve(resp *ResponseMsg) {
 	}
 	c.mu.Unlock()
 	if ok {
-		entry.ch <- resp
+		select {
+		case entry.ch <- resp:
+		default:
+			if resp.Status != StatusRunning {
+				select {
+				case <-entry.ch:
+				default:
+				}
+				entry.ch <- resp
+			}
+		}
 	}
+	return ok
 }
 
-// Unregister removes a waiter after send failure or timeout.
 func (c *AwaitCorrelator) Unregister(intentionID string) {
 	c.mu.Lock()
 	delete(c.pending, intentionID)
@@ -75,7 +85,7 @@ func (c *AwaitCorrelator) CancelAll(reason string) {
 	pending := c.pending
 	c.pending = make(map[string]*pendingEntry)
 	c.mu.Unlock()
-	cancelled := &ResponseMsg{Ok: false, Error: fmt.Sprintf("wrapper shutdown: %s", reason)}
+	cancelled := &ResponseMsg{Status: StatusError, Error: &ResponseError{Code: "cancelled", Message: fmt.Sprintf("wrapper shutdown: %s", reason)}}
 	for _, entry := range pending {
 		entry.ch <- cancelled
 	}

@@ -14,10 +14,19 @@
     "_wrapper_name_note": "Required when substance_mode is 'wrapper'. Must match a wrapper_name declared in context.json engine_config.execution.wrappers. Empty for all other modes.",
 
     "revision": 1,
-    "_revision_note": "Managed by the engine when present. The engine sets it on creation and increments it (as a Unix nanosecond timestamp) on every matter.write commit — never set or modify its value manually. But do not include this key in params at all unless the architect explicitly asked for the matter to carry a tracked revision: check the matter's current descriptor first, and only pass revision-affecting params when it already has one, or when creating a new matter with revision tracking explicitly requested.",
+    "_revision_note": "Engine-owned. Initialized on creation and advanced strictly on every committed mutation, even if the wall clock stalls or moves backward. Never set or patch it manually; use expected_revision when a mutation must be conditional.",
 
     "substance_type": "text",
-    "_substance_type_note": "Optional. Tells matter.read how to serialize data.bin content. Accepted values: 'text' (content is UTF-8 text — serialized as a plain JSON string), 'binary' (content is arbitrary bytes — serialized as base64). Defaults to 'text' when absent. Declare the specific format (markdown, json, png, etc.) in functional if needed — the engine does not read it."
+    "_substance_type_note": "Optional. Tells matter.read how to serialize data.bin content. Accepted values: 'text' (content is UTF-8 text — serialized as a plain JSON string), 'binary' (content is arbitrary bytes — serialized as base64). Defaults to 'text' when absent. Declare the specific format (markdown, json, png, etc.) in functional if needed — the engine does not read it.",
+
+    "substance_framing": "bytes",
+    "_substance_framing_note": "Optional. Accepted values: 'bytes' (default) or 'lines'. In lines mode the engine only understands LF-delimited record boundaries; it never parses JSON, JSONL, CSV, or any other business format. Non-empty line-framed substance and every appended block must end with LF.",
+
+    "substance_size_bytes": 0,
+    "_substance_size_bytes_note": "Engine-owned committed byte size. Read-only: never set or patch manually.",
+
+    "substance_line_count": 0,
+    "_substance_line_count_note": "Engine-owned committed LF-delimited line count, present only when substance_framing is 'lines'. Read-only: never set or patch manually."
   },
 
   "objective": {

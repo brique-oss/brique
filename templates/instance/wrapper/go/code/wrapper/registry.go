@@ -16,7 +16,10 @@
 
 package wrapper
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // registryKey uniquely identifies a (context, name) binding.
 type registryKey struct {
@@ -38,18 +41,38 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) Load(fragment BindingsFragment) {
+func (r *Registry) Load(fragment BindingsFragment) error {
 	for i := range fragment.Capacities {
 		b := &fragment.Capacities[i]
+		b.Name = strings.TrimSpace(b.Name)
+		if b.Name == "" || b.Handler == nil {
+			return fmt.Errorf("invalid capacity binding at index %d", i)
+		}
 		key := registryKey{context: normalizeContext(b.Context), name: b.Name}
+		if _, exists := r.capacities[key]; exists {
+			return fmt.Errorf("duplicate capacity binding (%q, %q)", key.context, key.name)
+		}
 		r.capacities[key] = b
 	}
 	for i := range fragment.Matters {
 		b := &fragment.Matters[i]
+		b.Name = strings.TrimSpace(b.Name)
+		if b.Name == "" || (b.Read == nil && b.Write == nil) {
+			return fmt.Errorf("invalid matter binding at index %d", i)
+		}
 		key := registryKey{context: normalizeContext(b.Context), name: b.Name}
+		if _, exists := r.matters[key]; exists {
+			return fmt.Errorf("duplicate matter binding (%q, %q)", key.context, key.name)
+		}
 		r.matters[key] = b
 	}
+	for i, hook := range fragment.Shutdown {
+		if hook == nil {
+			return fmt.Errorf("invalid shutdown hook at index %d", i)
+		}
+	}
 	r.shutdown = append(r.shutdown, fragment.Shutdown...)
+	return nil
 }
 
 func (r *Registry) ResolveCapacity(relContext, name string) (*CapacityBinding, error) {
@@ -72,7 +95,10 @@ func (r *Registry) ResolveMatter(relContext, name string) (*MatterBinding, error
 
 func (r *Registry) RunShutdown() {
 	for _, fn := range r.shutdown {
-		fn()
+		func() {
+			defer func() { _ = recover() }()
+			fn()
+		}()
 	}
 }
 

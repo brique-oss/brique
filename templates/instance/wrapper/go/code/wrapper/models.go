@@ -18,21 +18,38 @@ package wrapper
 
 import "sync"
 
-// Params gives typed access to an intention's params map.
-type Params map[string]any
+// Params gives typed and transit-aware access to an intention's parameters.
+// Raw keeps compatibility for code that needs to enumerate the original map;
+// Value resolves a transport reference and consumes it once.
+type Params struct {
+	values   map[string]any
+	runtime  *Runtime
+	origin   *IntentionMsg
+	mu       sync.Mutex
+	resolved map[string]any
+	consumed map[string]bool
+}
 
-func (p Params) String(key string) string {
-	v, _ := p[key].(string)
+func newParams(values map[string]any, runtime *Runtime, origin *IntentionMsg) *Params {
+	return &Params{values: values, runtime: runtime, origin: origin, resolved: make(map[string]any), consumed: make(map[string]bool)}
+}
+
+func (p *Params) Raw() map[string]any { return p.values }
+
+func (p *Params) Get(key string) (any, bool) { v, ok := p.values[key]; return v, ok }
+
+func (p *Params) String(key string) string {
+	v, _ := p.values[key].(string)
 	return v
 }
 
-func (p Params) Float(key string) float64 {
-	v, _ := p[key].(float64)
+func (p *Params) Float(key string) float64 {
+	v, _ := p.values[key].(float64)
 	return v
 }
 
-func (p Params) Bool(key string) bool {
-	v, _ := p[key].(bool)
+func (p *Params) Bool(key string) bool {
+	v, _ := p.values[key].(bool)
 	return v
 }
 
@@ -40,7 +57,7 @@ func (p Params) Bool(key string) bool {
 type CapacityBinding struct {
 	Context string
 	Name    string
-	Handler func(params Params) (any, error)
+	Handler func(params *Params) (any, error)
 }
 
 // MatterBinding maps a (context, name) pair to read/write accessors.
@@ -71,33 +88,45 @@ type Subscription struct {
 	ToContext string
 	ToCap     string
 	ToType    string
+	Owner     Address
 }
 
 // Envelope is the top-level Brique message envelope.
 type Envelope struct {
-	Kind      string         `json:"kind"`
-	Ts        string         `json:"ts"`
-	Intention *IntentionMsg  `json:"intention,omitempty"`
-	Response  *ResponseMsg   `json:"response,omitempty"`
+	Kind      string        `json:"kind"`
+	Ts        string        `json:"ts"`
+	Intention *IntentionMsg `json:"intention,omitempty"`
+	Response  *ResponseMsg  `json:"response,omitempty"`
 }
 
 // IntentionMsg is the inner intention payload.
 type IntentionMsg struct {
-	IntentionID   string         `json:"intention_id"`
-	AwaitResponse bool           `json:"await_response"`
-	To            Address        `json:"to"`
-	From          Address        `json:"from"`
-	Identity      map[string]any `json:"identity,omitempty"`
-	Params        map[string]any `json:"params,omitempty"`
-	Correlation   Correlation    `json:"correlation"`
+	IntentionID   string           `json:"intention_id"`
+	AwaitResponse bool             `json:"await_response"`
+	To            Address          `json:"to"`
+	From          Address          `json:"from"`
+	Identity      map[string]any   `json:"identity,omitempty"`
+	Params        map[string]any   `json:"params,omitempty"`
+	Matters       []map[string]any `json:"matters,omitempty"`
+	Correlation   Correlation      `json:"correlation"`
 }
 
 // ResponseMsg is the inner response payload.
 type ResponseMsg struct {
 	IntentionID string         `json:"intention_id"`
-	Ok          bool           `json:"ok"`
+	To          Address        `json:"to"`
+	From        Address        `json:"from"`
+	Identity    map[string]any `json:"identity,omitempty"`
+	Status      string         `json:"status"`
 	Payload     map[string]any `json:"payload,omitempty"`
-	Error       string         `json:"error,omitempty"`
+	Error       *ResponseError `json:"error,omitempty"`
+}
+
+type ResponseError struct {
+	Origin  string         `json:"origin"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // Address identifies a context+capability+type endpoint.

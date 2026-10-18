@@ -17,10 +17,16 @@
 package wrapper
 
 import (
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
+
+// RunningFunc is notified for each intermediate running acknowledgement.
+// count starts at one and elapsed is measured since the intention was sent.
+type RunningFunc = func(count int, elapsed time.Duration)
 
 // OutboundParams describes an outbound intention emitted by hosted code.
 type OutboundParams struct {
@@ -31,7 +37,54 @@ type OutboundParams struct {
 	FromCap       string
 	FromType      string
 	Params        map[string]any
+	Matters       []map[string]any
 	AwaitResponse bool
+	Correlation   Correlation
+	OnRunning     RunningFunc
+}
+
+// SendRawIntention sends a complete Brique intention map and waits for its
+// terminal response when await_response is true.
+func (o *OutboundAPI) SendRawIntention(intention map[string]any) (map[string]any, error) {
+	return o.SendRawIntentionWithProgress(intention, nil)
+}
+
+// SendRawIntentionWithProgress also exposes intermediate running
+// acknowledgements without treating them as the final response.
+func (o *OutboundAPI) SendRawIntentionWithProgress(intention map[string]any, onRunning RunningFunc) (map[string]any, error) {
+	id, _ := intention["intention_id"].(string)
+	if id == "" {
+		id = newID()
+		intention["intention_id"] = id
+	}
+	awaitResponse, _ := intention["await_response"].(bool)
+
+	var ch <-chan *ResponseMsg
+	if awaitResponse {
+		var err error
+		ch, err = o.correlator.Register(id)
+		if err != nil {
+			return nil, err
+		}
+		defer o.correlator.Unregister(id)
+	}
+
+	if err := o.transport.Send(map[string]any{
+		"kind":      KindIntention,
+		"ts":        utcNow(),
+		"intention": intention,
+	}); err != nil {
+		return nil, fmt.Errorf("outbound send: %w", err)
+	}
+	if !awaitResponse {
+		return nil, nil
+	}
+
+	resp, ok := awaitFinalResponseWith(ch, 30*time.Second, onRunning)
+	if !ok {
+		return nil, fmt.Errorf("outbound intention timeout: %s", id)
+	}
+	return responsePayload(resp)
 }
 
 // OutboundAPI is the hosted-code-facing API for emitting Brique intentions.
@@ -49,41 +102,6 @@ func NewOutboundAPI(transport *TransportClient, correlator *AwaitCorrelator, wra
 		wrapperName: wrapperName,
 		ctxID:       ctxID,
 	}
-}
-
-// SendRawIntention sends a raw Brique intention map as-is and waits for the response.
-func (o *OutboundAPI) SendRawIntention(intention map[string]any) (map[string]any, error) {
-	id, _ := intention["intention_id"].(string)
-	if id == "" {
-		id = newID()
-	}
-	awaitResponse, _ := intention["await_response"].(bool)
-
-	var ch <-chan *ResponseMsg
-	if awaitResponse {
-		ch = o.correlator.Register(id)
-		defer o.correlator.Unregister(id)
-	}
-
-	env := map[string]any{
-		"kind":      KindIntention,
-		"ts":        utcNow(),
-		"intention": intention,
-	}
-
-	if err := o.transport.Send(env); err != nil {
-		return nil, fmt.Errorf("outbound send: %w", err)
-	}
-
-	if !awaitResponse {
-		return nil, nil
-	}
-
-	resp, ok := awaitFinalResponse(ch, 30*time.Second)
-	if !ok {
-		return nil, fmt.Errorf("outbound intention timeout: %s", id)
-	}
-	return responsePayload(resp)
 }
 
 // EmitIntention sends an outbound intention. If AwaitResponse is true it blocks until the response arrives.
@@ -128,13 +146,18 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 				"kind": "wrapper",
 			},
 			Params:      p.Params,
-			Correlation: Correlation{},
+			Matters:     p.Matters,
+			Correlation: p.Correlation,
 		},
 	}
 
 	var ch <-chan *ResponseMsg
 	if p.AwaitResponse {
-		ch = o.correlator.Register(id)
+		var err error
+		ch, err = o.correlator.Register(id)
+		if err != nil {
+			return nil, err
+		}
 		defer o.correlator.Unregister(id)
 	}
 
@@ -146,7 +169,7 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 		return nil, nil
 	}
 
-	resp, ok := awaitFinalResponse(ch, 30*time.Second)
+	resp, ok := awaitFinalResponseWith(ch, 30*time.Second, p.OnRunning)
 	if !ok {
 		return nil, fmt.Errorf("outbound intention timeout: %s", id)
 	}
@@ -154,26 +177,27 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 }
 
 func responsePayload(resp *ResponseMsg) (map[string]any, error) {
-	if resp == nil || (!resp.Ok && resp.Status != StatusOK) {
+	if resp == nil || resp.Status != StatusOK {
 		errMsg := "outbound intention failed"
-		if resp != nil && resp.Error != "" {
-			errMsg = resp.Error
-		}
-		if resp != nil && len(resp.ErrorDetails) > 0 {
-			if b, err := json.Marshal(resp.ErrorDetails); err == nil {
-				errMsg = fmt.Sprintf("%s | details: %s", errMsg, string(b))
-			}
+		if resp != nil && resp.Error != nil && resp.Error.Message != "" {
+			errMsg = resp.Error.Message
 		}
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 	return resp.Payload, nil
 }
 
-// awaitFinalResponse treats running as a heartbeat and gives each heartbeat a
-// fresh timeout budget. Only a terminal response completes the wait.
+// awaitFinalResponse treats running as a heartbeat and renews the timeout.
+// Only a terminal response completes the wait.
 func awaitFinalResponse(ch <-chan *ResponseMsg, timeout time.Duration) (*ResponseMsg, bool) {
+	return awaitFinalResponseWith(ch, timeout, nil)
+}
+
+func awaitFinalResponseWith(ch <-chan *ResponseMsg, timeout time.Duration, onRunning RunningFunc) (*ResponseMsg, bool) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	started := time.Now()
+	count := 0
 	for {
 		select {
 		case resp, open := <-ch:
@@ -181,6 +205,10 @@ func awaitFinalResponse(ch <-chan *ResponseMsg, timeout time.Duration) (*Respons
 				return nil, false
 			}
 			if resp != nil && resp.Status == StatusRunning {
+				count++
+				if onRunning != nil {
+					onRunning(count, time.Since(started))
+				}
 				if !timer.Stop() {
 					select {
 					case <-timer.C:
@@ -202,5 +230,11 @@ func utcNow() string {
 }
 
 func newID() string {
-	return fmt.Sprintf("w_%d", time.Now().UnixNano())
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err == nil {
+		return hex.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("w_%d_%d", time.Now().UnixNano(), fallbackID.Add(1))
 }
+
+var fallbackID atomic.Uint64

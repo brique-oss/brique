@@ -270,8 +270,34 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 		}
 
 		size := st.Size()
-		if size <= inlineMaxBytes {
-			b, err := os.ReadFile(p)
+		framing := circulation.ValueFramingBytes
+		if value, _ := briqueSection[circulation.KeySubstanceFraming].(string); value == circulation.ValueFramingLines {
+			framing = value
+		}
+		totalLines := shared.AnyToInt64(briqueSection[circulation.KeySubstanceLineCount])
+		if framing == circulation.ValueFramingLines && briqueSection[circulation.KeySubstanceLineCount] == nil {
+			state, stateErr := stateForPayloadFile(p, framing)
+			if stateErr != nil {
+				return map[string]any{}, false, circulation.ValueCodeInvalid,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: stateErr.Error()},
+					"invalid line-framed substance"
+			}
+			totalLines = state.Lines
+		}
+		requestedRange, rangeErr := parseMatterDataRange(in.Params, size, totalLines, framing)
+		if rangeErr != nil {
+			return map[string]any{}, false, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, circulation.KeyErrorText: rangeErr.Error()},
+				"invalid data range"
+		}
+		byteOffset, byteLength, rangeErr := resolveByteRange(p, requestedRange, totalLines, shared.AnyToInt64(entry.Brique[circulation.KeyRevision]))
+		if rangeErr != nil {
+			return map[string]any{}, false, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonReadFailed, circulation.KeyErrorText: rangeErr.Error()},
+				"failed to resolve data range"
+		}
+		if byteLength <= inlineMaxBytes {
+			b, err := readFileRange(p, byteOffset, byteLength)
 			if err != nil {
 				return map[string]any{}, false, circulation.ValueCodeInternal,
 					map[string]any{circulation.KeyReason: circulation.ValueReasonReadFailed, circulation.KeyFile: filepath.Base(p), circulation.KeyErrorText: err.Error(), circulation.KeyMatterID: matterID},
@@ -294,6 +320,12 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 					circulation.KeyBytes: string(b),
 					circulation.KeySize:  int64(len(b)),
 				}
+			}
+			payload[circulation.KeyTotalBytes] = size
+			payload["byte_range"] = map[string]any{circulation.KeyOffset: byteOffset, circulation.KeyLength: byteLength}
+			if requestedRange.Unit == circulation.ValueFramingLines {
+				payload["line_range"] = map[string]any{circulation.KeyOffset: requestedRange.Offset, circulation.KeyLength: requestedRange.Length}
+				payload[circulation.KeyTotalLines] = totalLines
 			}
 			return payload, true, "", map[string]any{}, ""
 		}
@@ -320,13 +352,14 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 				"missing context dir"
 		}
 
-		h, err := l.subHTTP.OpenReadLease(
+		h, err := l.subHTTP.OpenReadRangeLease(
 			ctxDir,
 			matterID,
 			ext,
 			rev,
 			0,
-			size,
+			byteOffset,
+			byteLength,
 		)
 		if err != nil {
 			return map[string]any{}, false, circulation.ValueCodeInternal,
@@ -335,8 +368,14 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 		}
 
 		payload = map[string]any{
-			circulation.KeyKind: circulation.ValueDataKindHTTP,
-			circulation.KeyHTTP: h,
+			circulation.KeyKind:       circulation.ValueDataKindHTTP,
+			circulation.KeyHTTP:       h,
+			circulation.KeyTotalBytes: size,
+			"byte_range":              map[string]any{circulation.KeyOffset: byteOffset, circulation.KeyLength: byteLength},
+		}
+		if requestedRange.Unit == circulation.ValueFramingLines {
+			payload["line_range"] = map[string]any{circulation.KeyOffset: requestedRange.Offset, circulation.KeyLength: requestedRange.Length}
+			payload[circulation.KeyTotalLines] = totalLines
 		}
 		return payload, true, "", map[string]any{}, ""
 
@@ -398,13 +437,14 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 		}
 
 		if wrapper_running {
+			// The inbound message may still be owned by asynchronous tracing. A
+			// Message value copy shares its Params map, so clone the map before
+			// enriching the delegated request.
+			msg.Intention.Params = deepCloneMap(msg.Intention.Params)
 			// Privileged wrapper transport destination emitted by the family:
 			// Comm will forward to the boundary, then boundary ingress will deliver to wrapper iface.
 			msg.Intention.To.Context = circulation.ContextID("@wrapper_" + wrapperName + ":/" + rel)
 			msg.Intention.To.Cap = "matter.read"
-			if msg.Intention.Params == nil {
-				msg.Intention.Params = map[string]any{}
-			}
 			msg.Intention.Params[circulation.KeyMatterID] = matterID
 
 			resp, ok, reason := l.dispatchWaitViaComm(msg, 10*time.Second)
@@ -461,6 +501,22 @@ func (l *MatterLoop) capMatterRead(msg circulation.Message) {
 	// Strict catalog check (no FS fallback).
 	entry, ok := l.catalogGetMatter(matterID)
 	if !ok {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonMatterNotInCatalog, circulation.KeyMatterID: matterID},
+			"matter not in runtime catalog"))
+		return
+	}
+	mu := l.lockFor(matterLockKey(matterID))
+	if mu == nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure, circulation.KeyMatterID: matterID},
+			"missing matter lock"))
+		return
+	}
+	mu.RLock()
+	defer mu.RUnlock()
+	// Delete may have won between the initial catalog lookup and this read lock.
+	if _, stillPresent := l.catalogGetMatter(matterID); !stillPresent {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonMatterNotInCatalog, circulation.KeyMatterID: matterID},
 			"matter not in runtime catalog"))
@@ -562,64 +618,53 @@ func (l *MatterLoop) capMatterReadBatch(msg circulation.Message) {
 		if mid == "" {
 			continue
 		}
-		item := map[string]any{
-			circulation.KeyMatterID: mid,
-			circulation.KeyOK:       false,
-		}
-
-		entry, ok := l.catalogGetMatter(mid)
-		if !ok {
-			item[circulation.KeyError] = map[string]any{
-				circulation.KeyReason:   circulation.ValueReasonMatterNotInCatalog,
-				circulation.KeyMessage:  "matter not in runtime catalog",
-				circulation.KeyMatterID: mid,
-			}
-			results = append(results, item)
-			continue
-		}
-
-		// metadata
-		var itemBriqueSection map[string]any
-		var itemFunctionalSection map[string]any
-		if wantMeaning || wantFunctional || wantBrique || wantData {
-			meaning, functional, brique, ok, errorCode, reason, text := l.capMatterReadMaterJSON(mid)
+		item := func() map[string]any {
+			item := map[string]any{circulation.KeyMatterID: mid, circulation.KeyOK: false}
+			entry, ok := l.catalogGetMatter(mid)
 			if !ok {
-				item[circulation.KeyError] = map[string]any{
-					circulation.KeyCode:    errorCode,
-					circulation.KeyMessage: text,
-					circulation.KeyDetails: reason,
+				item[circulation.KeyError] = map[string]any{circulation.KeyReason: circulation.ValueReasonMatterNotInCatalog, circulation.KeyMessage: "matter not in runtime catalog", circulation.KeyMatterID: mid}
+				return item
+			}
+			mu := l.lockFor(matterLockKey(mid))
+			if mu == nil {
+				item[circulation.KeyError] = map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure, circulation.KeyMessage: "missing matter lock"}
+				return item
+			}
+			mu.RLock()
+			defer mu.RUnlock()
+			if _, present := l.catalogGetMatter(mid); !present {
+				item[circulation.KeyError] = map[string]any{circulation.KeyReason: circulation.ValueReasonMatterNotInCatalog, circulation.KeyMessage: "matter not in runtime catalog"}
+				return item
+			}
+			var itemBriqueSection, itemFunctionalSection map[string]any
+			if wantMeaning || wantFunctional || wantBrique || wantData {
+				meaning, functional, brique, readOK, errorCode, reason, text := l.capMatterReadMaterJSON(mid)
+				if !readOK {
+					item[circulation.KeyError] = map[string]any{circulation.KeyCode: errorCode, circulation.KeyMessage: text, circulation.KeyDetails: reason}
+					return item
 				}
-				results = append(results, item)
-				continue
-			}
-			itemBriqueSection = brique
-			itemFunctionalSection = functional
-			if wantMeaning {
-				item[circulation.KeyMeaning] = meaning
-			}
-			if wantFunctional {
-				item[circulation.KeyFunctional] = functional
-			}
-			if wantBrique {
-				item[circulation.KeyBrique] = brique
-			}
-		}
-		// payload
-		if wantData {
-			payload, ok, errorCode, reason, text := l.capMatterReadData(msg, mid, entry, itemBriqueSection, itemFunctionalSection)
-			if !ok {
-				item[circulation.KeyError] = map[string]any{
-					circulation.KeyCode:    errorCode,
-					circulation.KeyMessage: text,
-					circulation.KeyDetails: reason,
+				itemBriqueSection, itemFunctionalSection = brique, functional
+				if wantMeaning {
+					item[circulation.KeyMeaning] = meaning
 				}
-				results = append(results, item)
-				continue
+				if wantFunctional {
+					item[circulation.KeyFunctional] = functional
+				}
+				if wantBrique {
+					item[circulation.KeyBrique] = brique
+				}
 			}
-			item[circulation.KeyData] = payload
-		}
-		item[circulation.KeyMatterID] = mid
-		item[circulation.KeyOK] = true
+			if wantData {
+				payload, readOK, errorCode, reason, text := l.capMatterReadData(msg, mid, entry, itemBriqueSection, itemFunctionalSection)
+				if !readOK {
+					item[circulation.KeyError] = map[string]any{circulation.KeyCode: errorCode, circulation.KeyMessage: text, circulation.KeyDetails: reason}
+					return item
+				}
+				item[circulation.KeyData] = payload
+			}
+			item[circulation.KeyOK] = true
+			return item
+		}()
 		results = append(results, item)
 	}
 

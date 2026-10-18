@@ -4,6 +4,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace wrapper::json {
 
@@ -199,8 +201,88 @@ inline std::string string_field(const std::string& raw, const std::string& key, 
     }
 }
 
+inline std::string raw_field(const std::string& raw, const std::string& key, const std::string& fallback = "null") {
+    std::size_t pos = find_key(raw, key);
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    pos = skip_ws(raw, pos);
+    if (pos >= raw.size()) {
+        return fallback;
+    }
+    if (raw[pos] == '{') {
+        const std::size_t end = match_balanced(raw, pos, '{', '}');
+        return raw.substr(pos, end - pos + 1);
+    }
+    if (raw[pos] == '[') {
+        const std::size_t end = match_balanced(raw, pos, '[', ']');
+        return raw.substr(pos, end - pos + 1);
+    }
+    if (raw[pos] == '"') {
+        bool escape = false;
+        for (std::size_t i = pos + 1; i < raw.size(); ++i) {
+            if (escape) { escape = false; continue; }
+            if (raw[i] == '\\') { escape = true; continue; }
+            if (raw[i] == '"') { return raw.substr(pos, i - pos + 1); }
+        }
+        return fallback;
+    }
+    std::size_t end = pos;
+    while (end < raw.size() && raw[end] != ',' && raw[end] != '}' && raw[end] != ']') {
+        ++end;
+    }
+    while (end > pos && std::isspace(static_cast<unsigned char>(raw[end - 1])) != 0) {
+        --end;
+    }
+    return raw.substr(pos, end - pos);
+}
+
 inline bool has_key(const std::string& raw, const std::string& key) {
     return find_key(raw, key) != std::string::npos;
+}
+
+inline long long integer_field(const std::string& raw, const std::string& key, long long fallback = 0) {
+    const std::string value = raw_field(raw, key, "");
+    if (value.empty()) return fallback;
+    try {
+        std::size_t used = 0;
+        const long long parsed = std::stoll(value, &used);
+        return used == value.size() ? parsed : fallback;
+    } catch (...) {
+        return fallback;
+    }
+}
+
+inline bool bool_field(const std::string& raw, const std::string& key, bool fallback = false) {
+    const std::string value = raw_field(raw, key, "");
+    if (value == "true") return true;
+    if (value == "false") return false;
+    return fallback;
+}
+
+inline std::vector<std::pair<std::string, std::string>> object_entries(const std::string& raw) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::size_t pos = skip_ws(raw, 0);
+    if (pos >= raw.size() || raw[pos] != '{') return out;
+    ++pos;
+    while (pos < raw.size()) {
+        pos = skip_ws(raw, pos);
+        if (pos >= raw.size() || raw[pos] == '}') break;
+        if (raw[pos] != '"') throw std::runtime_error("invalid json object key");
+        const std::string key = parse_string_literal(raw, pos);
+        bool escape = false; ++pos;
+        while (pos < raw.size()) { if (escape) escape=false; else if (raw[pos]=='\\') escape=true; else if (raw[pos]=='"') { ++pos; break; } ++pos; }
+        pos = skip_ws(raw, pos); if (pos >= raw.size() || raw[pos] != ':') throw std::runtime_error("invalid json object separator");
+        ++pos; pos = skip_ws(raw, pos); const std::size_t start = pos;
+        if (pos < raw.size() && raw[pos] == '{') pos = match_balanced(raw, pos, '{', '}') + 1;
+        else if (pos < raw.size() && raw[pos] == '[') pos = match_balanced(raw, pos, '[', ']') + 1;
+        else if (pos < raw.size() && raw[pos] == '"') { bool escaped=false; ++pos; while(pos<raw.size()){if(escaped)escaped=false;else if(raw[pos]=='\\')escaped=true;else if(raw[pos]=='"'){++pos;break;}++pos;} }
+        else { while (pos < raw.size() && raw[pos] != ',' && raw[pos] != '}') ++pos; }
+        std::size_t end = pos; while (end > start && std::isspace(static_cast<unsigned char>(raw[end-1]))) --end;
+        out.emplace_back(key, raw.substr(start, end-start));
+        pos = skip_ws(raw, pos); if (pos < raw.size() && raw[pos] == ',') ++pos;
+    }
+    return out;
 }
 
 }  // namespace wrapper::json

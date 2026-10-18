@@ -26,6 +26,14 @@
           "destination_ctx_id": {
             "type": "string",
             "_comment": "Optional. Absolute context path (from /root) for the clone. Defaults to the addressed context."
+          },
+          "expected_source_revision": {
+            "type": "integer",
+            "_comment": "Optional source revision guard checked while the source snapshot lock is held."
+          },
+          "expected_source_byte_size": {
+            "type": "integer",
+            "_comment": "Optional source substance byte-size guard."
           }
         }
       },
@@ -40,12 +48,16 @@
           "target_matter_id": {
             "type": "string",
             "_comment": "Name of the created clone."
+          },
+          "revision": {
+            "type": "integer",
+            "_comment": "Fresh target revision, strictly greater than the source revision when tracked."
           }
         }
       },
       "effects": {
         "source_descriptor": "The source matter descriptor is read.",
-        "source_substance": "Brique-managed source substance may be read and copied.",
+        "source_substance": "Brique-managed source substance is streamed into the staged target without loading the complete payload in memory.",
         "target_descriptor": "A new target matter descriptor is written.",
         "catalog": "The local matter catalog gains the cloned target."
       },
@@ -56,6 +68,7 @@
           "When cloning to a different context, source_matter_id and target_matter_id may be identical, since the destination context is a distinct namespace.",
           "The source matter must already exist in the local runtime catalog before cloning begins.",
           "Only brique-managed substance is duplicated as bytes; non-brique substance modes remain metadata-only at clone time."
+          ,"Source descriptor, committed dimensions, and substance are copied from one locked snapshot."
         ],
         "success": [
           "On success, matter.clone returns ok=true, the source_matter_id, and the concrete target_matter_id.",

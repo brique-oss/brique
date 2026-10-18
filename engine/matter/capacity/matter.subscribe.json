@@ -22,6 +22,14 @@
           "sub_id": {
             "type": "string",
             "_comment": "Required. Caller-provided subscription identifier. Used to correlate notifications and to unsubscribe."
+          },
+          "target": {
+            "type": "object",
+            "_comment": "Optional notification address {context,type,cap,version?}. Defaults to the caller address."
+          },
+          "durable": {
+            "type": "boolean",
+            "_comment": "Optional, false by default. Durable subscriptions persist across restart and deliver ordered events at least once until matter.subscription.ack."
           }
         }
       },
@@ -40,18 +48,22 @@
           "substance_mode": {
             "type": "string",
             "_comment": "Substance mode of the subscribed matter (e.g. brique, wrapper, ext_ref)."
+          },
+          "durable": {
+            "type": "boolean"
           }
         }
       },
       "effects": {
-        "subscriptions": "A local brique-mode subscription may be created in MatterLoop memory.",
+        "subscriptions": "A local subscription is kept in memory; durable subscriptions and their pending outbox are also persisted.",
         "wrapper_transport": "Wrapper-mode subscriptions are forwarded to the wrapper boundary instead of being stored locally."
       },
       "transformation_contract": {
         "morphing": "A matter identifier plus a subscription identifier becomes an explicit subscription registration, either local in brique mode or delegated to the owning wrapper.",
         "invariants": [
           "Subscriptions are only supported for matters whose catalog substance mode resolves to brique or wrapper.",
-          "Brique-mode subscriptions are stored locally in MatterLoop memory and target the caller address unless a future override contract is added.",
+          "Brique-mode subscriptions target the caller unless params.target explicitly supplies a complete address.",
+          "Durable delivery is at-least-once, ordered per subscription, and requires matter.subscription.ack using the stable event_id. A pre-commit event marker closes the crash window between a Matter commit and outbox persistence.",
           "Wrapper-mode subscriptions are delegated to the owning wrapper boundary instead of being stored locally."
         ],
         "success": [
@@ -65,7 +77,7 @@
         ],
         "notes": [
           "Wrapper-mode subscribe requests pass through the current intention to the wrapper after context rewrite.",
-          "Local subscription ordering is unspecified and remains an in-memory concern."
+          "Local subscription enumeration is deterministic by sub_id."
         ]
       }
     }

@@ -242,7 +242,7 @@ func installGenericPythonWrapperN5(t *testing.T, rootDir string) {
 		t.Fatalf("runtime.Caller failed")
 	}
 	engineDir := filepath.Dir(filepath.Dir(file))
-	src := filepath.Join(engineDir, "wrapper", "python", "code")
+	src := filepath.Join(engineDir, "..", "templates", "instance", "wrapper", "python", "code")
 	if err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

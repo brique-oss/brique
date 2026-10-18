@@ -1,0 +1,61 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity.",
+    "cap_name": "matter.append",
+    "family": "matter",
+    "file": "engine/matter/matter_append.go",
+    "function": "capMatterAppend"
+  },
+  "objective": {
+    "name": "matter.append",
+    "description": "Append one contiguous block of opaque bytes to brique-managed matter substance."
+  },
+  "functional": {
+    "#root": {
+      "role": "Append raw inline or leased bytes with optional optimistic revision, byte-size, and line-count guards.",
+      "inputs": {
+        "params": {
+          "matter_id": { "type": "string", "_comment": "Required." },
+          "data": { "type": "string", "_comment": "Required for inline append and mutually exclusive with http_data=true. Raw UTF-8 by default or base64 when encoding is base64. Objects and arrays are never implicitly JSON-marshaled. Decoded bytes must not exceed inline_max_bytes (256 KiB by default)." },
+          "encoding": { "type": "string", "_comment": "Optional: raw (default) or base64." },
+          "http_data": { "type": "boolean", "_comment": "Optional. Request a one-shot HTTP PUT lease for a large append." },
+          "expected_revision": { "type": "integer", "_comment": "Optional optimistic revision guard." },
+          "expected_byte_size": { "type": "integer", "_comment": "Optional committed byte-size guard. Zero is valid." },
+          "expected_line_count": { "type": "integer", "_comment": "Optional committed line-count guard, valid only for lines framing." }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": { "type": "boolean" },
+          "matter_id": { "type": "string" },
+          "revision": { "type": "integer" },
+          "byte_offset": { "type": "integer" },
+          "byte_length": { "type": "integer" },
+          "total_bytes": { "type": "integer" },
+          "line_offset": { "type": "integer", "_comment": "Lines framing only." },
+          "line_length": { "type": "integer", "_comment": "Lines framing only." },
+          "total_lines": { "type": "integer", "_comment": "Lines framing only." },
+          "http_data": { "type": "object", "_comment": "Present instead of final coordinates when an HTTP append lease is opened." }
+        }
+      },
+      "effects": {
+        "matter_substance": "One contiguous block is appended transactionally.",
+        "matter_descriptor": "Revision and engine-owned committed dimensions advance.",
+        "notifications": "Subscribers receive matter_appended after commit, without business bytes."
+      },
+      "transformation_contract": {
+        "morphing": "Opaque input bytes become one committed contiguous tail block.",
+        "invariants": [
+          "Append is supported only for brique-managed substance.",
+          "Bytes are canonical; line coordinates supplement them only in lines framing.",
+          "A non-empty line-framed substance and each appended block end with LF.",
+          "All supplied guards must match under the per-matter write lock.",
+          "The engine never parses JSONL or any other business format."
+        ],
+        "success": ["Returns the new strictly greater revision and exact committed coordinates."],
+        "failure": ["Any invalid payload, stale guard, framing violation, or storage failure leaves no partially visible logical commit; startup recovery rolls an interrupted physical commit forward.", "Inline data above inline_max_bytes is refused with reason=payload_too_large; data and http_data=true cannot be supplied together."]
+      }
+    }
+  },
+  "subjective": {}
+}

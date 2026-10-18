@@ -114,7 +114,7 @@ func installGenericPythonWrapper(t *testing.T, rootDir string) {
 		t.Fatalf("runtime.Caller failed")
 	}
 	engineDir := filepath.Dir(filepath.Dir(file))
-	src := filepath.Join(engineDir, "wrapper", "python", "code")
+	src := filepath.Join(engineDir, "..", "templates", "instance", "wrapper", "python", "code")
 	dst := filepath.Join(rootDir, "workspace", "code", "sandbox_py")
 
 	if err := copyFileMatter(filepath.Join(src, "main.py"), filepath.Join(dst, "main.py")); err != nil {

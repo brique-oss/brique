@@ -29,7 +29,11 @@
           },
           "payload": {
             "type": "any",
-            "_comment": "Optional initial substance. Allowed only when the resulting derived matter uses brique substance mode."
+            "_comment": "Optional small initial substance. Allowed only in brique mode and limited to inline_max_bytes (256 KiB by default). For larger content, derive metadata first then call matter.write with http_data=true."
+          },
+          "source_guards": {
+            "type": "array",
+            "_comment": "Optional local source guards [{matter_id,expected_revision?,expected_byte_size?}]. Sources and target are locked in stable identifier order through target creation. This is separate from opaque derived_from and does not impose a lineage schema."
           }
         }
       },
@@ -64,6 +68,7 @@
           "If target_matter_id is omitted, the capacity generates a fresh local matter identifier.",
           "The provided derived_from value is stored opaquely and not normalized by the engine.",
           "Payload materialization follows the same brique-mode-only rule as matter.create."
+          ,"Optional source_guards validate local source snapshots without interpreting derived_from."
         ],
         "success": [
           "On success, matter.derive returns ok=true, the concrete matter_id of the derived target, and the committed revision.",
@@ -72,7 +77,8 @@
         "failure": [
           "The capacity refuses derivation when the designated or generated target matter_id already exists in the runtime catalog.",
           "The capacity fails when the matter descriptor or payload cannot be marshaled or committed to disk.",
-          "The capacity refuses payload writes when the supplied matter metadata resolves to a non-brique substance mode."
+          "The capacity refuses payload writes when the supplied matter metadata resolves to a non-brique substance mode.",
+          "The capacity refuses an initial payload above inline_max_bytes with reason=payload_too_large."
         ],
         "notes": [
           "Derivation creates a new local matter rather than mutating an existing one.",

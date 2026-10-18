@@ -25,21 +25,12 @@ async def _amain() -> int:
     return await runtime.run()
 
 
-def _is_expected_boundary_connect_failure(exc: Exception) -> bool:
-    if isinstance(exc, OSError) and getattr(exc, "errno", None) in {61, 111}:
-        return True
-    text = str(exc)
-    return "Connect call failed" in text or "connection refused" in text.lower()
-
-
 def main() -> int:
     try:
         return asyncio.run(_amain())
     except KeyboardInterrupt:
         return 0
     except Exception as exc:  # pragma: no cover - startup/teardown race path
-        if _is_expected_boundary_connect_failure(exc):
-            return 0
         sys.stderr.write(f"python wrapper fatal error: {exc}\n")
         sys.stderr.flush()
         return 1

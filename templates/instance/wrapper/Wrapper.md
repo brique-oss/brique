@@ -256,6 +256,8 @@ A matter may map to:
 A matter binding means the wrapper can access that matter natively inside its own wrapper root.
 It does not mean every capacity input matter is injected as a native object automatically.
 
+Matter bindings are static: they are declared in the binding table and loaded once at bootstrap. No semantic Matter is created and bound at runtime. A temporary object travels as `@object` or `@file` inside an instance; across an instance boundary the runtime may create an unbound transient Matter that is consumed and deleted (§17.3). If the value must outlive the transfer, it is state and follows chart A (§17.2).
+
 The wrapper must:
 
 * resolve binding
@@ -322,7 +324,7 @@ Outbound wrapper intentions MUST:
 
 * use context paths relative to the wrapper root
 
-They are control-plane messages and have a global serialized ceiling of 4 MiB. A wrapper must never embed voluminous or binary business content in intention params or response payloads, including as base64. It must write that content as Matter substance through the HTTP lease data-plane and pass only the matter reference. The standard runtimes reject oversized messages before WebSocket transmission.
+They are control-plane messages and have a global serialized ceiling of 4 MiB. A wrapper must never embed voluminous or binary business content in intention params or response payloads, including as base64. Durable bulk content must be written as Matter substance through the HTTP lease data-plane and represented by a matter reference. Section 17 refines the transient case: within one Brique instance on a shared filesystem, ephemeral call data too large to inline travels through a small `@file` reference; it is not embedded in the control message. The Python, Go and C++ reference runtimes reject oversized serialized messages before WebSocket transmission and implement the same transit selection.
 
 The wrapper does not know the absolute context.
 
@@ -474,6 +476,10 @@ The following apply regardless of host language.
 
 **Filesystem model** — canonical layout is `code/<wrapper_name>/`, `build/<wrapper_name>/`, `tmp/wrapper_<wrapper_name>/`.
 
+**Parameter forms** — a parameter reaches a capacity as a value, `@matter`, `@file` or `@object`. The runtime resolves it when hosted code asks for it, so hosted code never depends on the form (see §17.3).
+
+**Wrapper-owned files** — durable state private to one wrapper is an `ext_ref` matter whose file that wrapper manages (see §17.2).
+
 **Active components** — the wrapper may host active components that run continuously, expose capacities, expose matters, and emit intentions.
 
 **Traceability tags** — code symbols must be traceable using `<brique:...>` tags (see §16). Tags link code to Brique elements and enable navigation. Tags are not runtime bindings.
@@ -490,7 +496,7 @@ This section is the mandatory, concrete pattern for the Python wrapper. It super
 
 ### 15.1 What Already Exists — Copy It, Don't Reinvent It
 
-The generic Python wrapper runtime lives at `wrapper/python/code/wrapper/` in this repository: `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, plus `main.py` and `requirements.txt` at `wrapper/python/code/`. This is the membrane described in §1–§14, already fully implemented, tested, and identical to the one compiled into the engine's own copy under `Engine/wrapper/python`.
+The generic Python wrapper runtime lives at `wrapper/python/code/wrapper/` in this repository: `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `transit.py`, `calls.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, plus `main.py` and `requirements.txt` at `wrapper/python/code/`. This is the membrane described in §1–§14 and §17, implemented and tested. The engine's own copy under `Engine/wrapper/python` and the copies already living in instance wrappers do not contain `transit.py` and `calls.py` until they are synchronized from here.
 
 **To create a new wrapper for a context**: copy `wrapper/python/code/main.py`, `wrapper/python/code/requirements.txt`, and the entire `wrapper/python/code/wrapper/` directory verbatim into `<context_dir>/code/<wrapper_name>/`. Do not rewrite, re-derive, or "improve" this code — it is the generic runtime, and every real wrapper in this instance uses it unmodified. The only file you write yourself is `bindings.py` (§15.2) and the capacity files it imports (§15.3).
 
@@ -521,7 +527,13 @@ Declare the wrapper in the owning context's `context.json`:
             "cmd": ["python3", "main.py"],
             "env_name": "env1",
             "shell": false,
-            "env": { "BRIQUE_WRAPPER_NAME": "<wrapper_name>" }
+            "env": {
+              "BRIQUE_WRAPPER_NAME": "<wrapper_name>",
+              "BRIQUE_MAX_CONCURRENCY": "16",
+              "BRIQUE_QUEUE_LIMIT": "256",
+              "BRIQUE_TRANSIT_MAX_BYTES": "67108864",
+              "BRIQUE_TRANSIT_TTL_SECONDS": "3600"
+            }
           }
         }
       ]
@@ -529,6 +541,8 @@ Declare the wrapper in the owning context's `context.json`:
   }
 }
 ```
+
+For the Python, Go and C++ runtimes, `BRIQUE_MAX_CONCURRENCY` and `BRIQUE_QUEUE_LIMIT` are positive integers with defaults `16` and `256`. They bound globally executing engine-routed capacity/matter work and pending work. Responses and `wrapper_stop` bypass that queue so a saturated wrapper can still make progress. Work for one addressed binding remains ordered, while unrelated bindings may run in parallel. All three consume `BRIQUE_TRANSIT_MAX_BYTES` and `BRIQUE_TRANSIT_TTL_SECONDS`: they cap one serialized `@file` payload and the lifetime of abandoned references. Above the file limit the runtime uses a transient Matter; durable data remains an explicit semantic Matter.
 
 ### 15.2 `bindings.py` Is a Pure Import File — Never Business Logic
 
@@ -802,7 +816,108 @@ Automated scripts, where used, verify structural consistency, not semantic corre
 
 ---
 
-## 17. Summary
+## 17. Placement and Transit
+
+This section is a decision aid. It tells a wrapper where state lives, in which form a parameter travels, and which path a call takes. Each chart ends in one answer.
+
+> Status: the Python, Go and C++ reference runtimes implement address-driven parameter transit. Hosted code gives `call`/`Call` a destination address and ordinary values; it never selects `@object`, `@file` or a transient Matter. A semantic Matter still comes back as a `MatterRef` and remains explicit. Python additionally supports the optional direct in-process call path; Go and C++ currently route `Call` through the engine.
+
+### 17.1 State Is Matter, Transit Is Not
+
+* **State** is what must last beyond the call that produced it. It is always a matter.
+* **Transit** is what one capacity hands to another so that the second can work. Its receiver consumes it. It is not durable state, although a cross-instance transfer may use an ephemeral Matter as its physical carrier.
+
+A capacity stays stateless: a transit value that nobody consumed by the end of the call is released, never kept.
+
+A temporary object that only lives for a call is therefore not a matter: it travels as `@object` (or `@file`), see §17.3.
+
+### 17.2 Where Does This State Live?
+
+Chart A, in order:
+
+1. Must it outlive the call? No: it is transit, see §17.3.
+2. Must it survive the wrapper process? No: `substance_mode=wrapper` (§10). Its content must be rebuildable from durable state.
+3. Must anything other than the owning wrapper read or write it directly (another wrapper, a DSL plan, a UI)? Yes: `substance_mode=brique`, managed by the engine. No: `substance_mode=ext_ref`, a file managed by the owning wrapper.
+
+Size, access frequency and write pattern do not change the mode. They select the file format: append-only data is a line-framed file (JSON Lines), data replaced as a whole is a JSON file, data written once is a plain file.
+
+Wrapper-owned `ext_ref` matters:
+
+* The locator is the absolute path of the file. The file lives in the matter directory, next to its descriptor.
+* The engine does not serve the substance of an `ext_ref` matter. Readers outside the owning wrapper go through a capacity of that wrapper.
+* For a JSON Lines matter, `functional.schema_ref` is the schema of **one line**.
+* The owning wrapper is the only writer. Where the platform offers it, a file lock guards against a second writer during a restart.
+* A line is committed only once its terminating LF is written, in a single append. At open, an unterminated last line is ignored and cut.
+* A state replaced as a whole is written to a temporary file in the same directory, then renamed over the target.
+* Durability (`fsync`) follows the engine's own level: it is not forced.
+* Deleting the matter removes its descriptor. The engine's delete operation takes an opt-in option that also removes the file at the locator of an `ext_ref` matter (engine support pending). Without it, the owning wrapper removes the file itself.
+
+### 17.3 In Which Form Does This Parameter Travel?
+
+A capacity declares what it needs: a parameter name and a schema. It declares nothing about how the parameter arrives. The caller chooses the form, the runtime resolves it.
+
+| Form | On the wire | Use |
+|---|---|---|
+| value | the value itself | small, at most 64 KiB serialized |
+| semantic Matter | an existing reference in `intention.matters` | the data is already state; the capacity receives a `MatterRef` |
+| transient `@matter` | `{"@matter":"<id>","context":"...","consume":true,...}` | large or binary transfer to another Brique instance or engine |
+| `@file` | `{"@file": "<absolute path>", "format": "json"}` | too large for the payload, or the receiver is in another wrapper of the same filesystem-backed instance |
+| `@object` | `{"@object": "<name>", "wrapper": "<wrapper_name>", "type": "<type tag>"}` | the receiver is in the same wrapper |
+
+`@matter`, `@file` and `@object` are reserved keys: an exact reference shape carrying one of them is transport metadata, never business data.
+
+Chart B, in order:
+
+1. Is it already a semantic Matter? Keep its `MatterRef` in `intention.matters`.
+2. Is it null, boolean or numeric? Value. Is it text no larger than 64 KiB in UTF-8? Value. Larger text is bulk and continues below despite being a scalar.
+3. Is the receiver a capacity bound in this wrapper? `@object`.
+4. Is the address internal to this filesystem-backed Brique instance? Small: value; large text, structured data or binary: `@file`; above the configured safe file-transit ceiling, transient Matter.
+5. Does the address cross an instance or engine boundary (`@ext_*`)? Small: value; large text, structured data or binary: a transient Matter created in the destination context.
+
+The 64 KiB threshold is fixed. It is not configurable for now.
+
+**`@file`** is transit only, never state. The producer writes it in `<context tree>/.../tmp/wrapper_<wrapper_name>/transit/`. `format` defaults to `json`. The receiver accepts only this path shape inside its instance context tree, rejects symbolic links, and deletes the file after reading it. Consequently `@file` requires the wrappers to share that context-tree filesystem.
+
+**`@object`** is posted by the caller in a wrapper-local table and removed by the receiver with a single `take`. When the receiver supplies an expected type, the stored tag must match exactly; an absent tag is then a mismatch. The check happens before the entry is removed. The table is thread-safe. Names are unique and never start with `$`, because the DSL resolves strings that start with `$`. A reference is valid only in the posting wrapper: a different `wrapper` fails with a typed error.
+
+**Transient `@matter`** is created automatically in the destination context with `substance_mode=brique` and `brique.transient=true`, uploaded through the Matter HTTP data plane, and carries its format, committed revision and byte size. `get` first verifies that descriptor marker, then reads the complete substance, verifies revision and size, decodes it, and calls guarded `matter.delete`. A forged reference cannot authorize deletion of an ordinary Matter, and a read or decoding failure never deletes its carrier. The producer deletes the transient Matter after a definitive delivery failure and records an expiry in its descriptor for abandoned-transfer cleanup.
+
+Runtime operations share the same semantics in every language:
+
+* `get(name)` lazily resolves and memoizes inline values, `@object`, `@file`, and transient `@matter`; hosted code always receives the decoded value. Potentially large serialization, disk and HTTP work stays off the communication event loop.
+* A semantic Matter is different: `get(name)` returns its `MatterRef` without reading it. Revision, range, append and lease semantics remain explicit.
+* `emit(value, target_address)` picks the form from chart B. Hosted code never supplies `local` or a transport kind. A semantic `MatterRef` is moved to `intention.matters`; a transient Matter remains an ordinary parameter reference so `get` can consume it automatically.
+* The caller is local when its origin context is under the wrapper's boundary context and its origin capacity is bound in the wrapper's registry. A DSL capacity is never local.
+
+Lifecycle:
+
+* A reference has a single consumer. To pass a value on, a capacity emits a new reference. To send it to several receivers, it emits several.
+* If the target is not found, or answers with an error, the producer releases what it posted. If the call times out it does not: the callee may still be about to take it. Without a response to wait for (`await_response=false`) the producer cannot know and releases nothing. The receiving runtime releases the unconsumed transit references of a call when it ends, and so does the calling capacity for the references it received in the results of its own calls. At startup the wrapper deletes what is left in its transit directory.
+* Transit references are never persisted in business data or journals. A transient Matter persists only its payload for the bounded lifetime of the transfer.
+* The DSL relays these references as opaque values between calls and never resolves them.
+
+### 17.4 Which Path Does This Call Take?
+
+Chart C, in order:
+
+1. The call comes from outside the wrapper: through the engine (imposed).
+2. Internal call and tracing wanted: through the engine.
+3. Otherwise, if the capacity is bound in this wrapper: direct call. If not: through the engine.
+
+Whether to trace is a configuration and the architect's decision. The engine records intentions that pass through it according to the context trace level (`minimal`, `normal`, `debug`).
+
+Hosted code calls with one address-driven operation: Python `await runtime.calls.call(to={...}, params=..., direct=False)`, Go `params.Call(Address{...}, values)`, C++ `runtime.call(TransitTarget{...}, values)`. The runtime derives every parameter representation from that address. Python's `direct=True` makes a plain function call when the capacity is bound in the same wrapper; Go and C++ currently keep engine routing. Reading is respectively `await params.value(name)`, `params.Value(name)`, and `params.value_raw(name)`/`string_value(name)`.
+
+The two paths behave the same for hosted code where the runtime is concerned:
+
+* The timeout is an inactivity budget in both. On the direct path `notify_running` renews it, as a `running` response does on the engine path. With no `timeout_s`, neither path times out. When a direct call times out, its task is cancelled and awaited through its cleanup before its unconsumed transit references are released.
+* The runtime's own errors are the same: unknown capacity, unresolvable reference, exhausted budget (`asyncio.TimeoutError`).
+* The caller's intention stays the current one on the direct path, so `running` acknowledgements keep acknowledging the caller's own call.
+* They differ on one point only: an exception raised by the called capacity propagates natively on the direct path, and arrives as a `CapacityCallError` carrying the engine's error code on the engine path.
+
+---
+
+## 18. Summary
 
 A wrapper is:
 
@@ -819,3 +934,5 @@ It is:
 * bidirectional
 
 For Python specifically: copy the generic runtime from `wrapper/python/code/` verbatim (§15.1); write `bindings.py` as pure import-and-assemble, never business logic (§15.2); write one file per capacity, named after the capacity (§15.3); read the capacity's own descriptor before writing its code (§15.4).
+
+For placement and transit: decide where state lives with chart A (§17.2), in which form a parameter travels with chart B (§17.3), and which path a call takes with chart C (§17.4).

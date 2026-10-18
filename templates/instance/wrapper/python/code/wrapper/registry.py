@@ -62,14 +62,18 @@ class RuntimeRegistry:
         out: dict[tuple[str, str], CapacityBinding] = {}
         bindings = fragment.get("capacities", {})
         if not isinstance(bindings, dict):
-            return out
+            raise RuntimeError("bindings 'capacities' must be a dict")
         for key, symbol in bindings.items():
             if not isinstance(key, tuple) or len(key) != 2:
-                continue
+                raise RuntimeError(f"invalid capacity binding key {key!r}; expected (relative_context, name)")
             context_id = str(key[0]).strip().strip("/")
             cap_name = str(key[1]).strip()
-            if not cap_name or symbol is None:
-                continue
+            if not cap_name:
+                raise RuntimeError(f"capacity binding {key!r} has an empty name")
+            if not callable(symbol):
+                raise RuntimeError(f"capacity binding {(context_id, cap_name)!r} must be callable")
+            if (context_id, cap_name) in out:
+                raise RuntimeError(f"duplicate capacity binding {(context_id, cap_name)!r}")
             out[(context_id, cap_name)] = CapacityBinding(
                 context_id=context_id,
                 name=cap_name,
@@ -81,14 +85,29 @@ class RuntimeRegistry:
         out: dict[tuple[str, str], MatterBinding] = {}
         bindings = fragment.get("matters", {})
         if not isinstance(bindings, dict):
-            return out
+            raise RuntimeError("bindings 'matters' must be a dict")
         for key, entry in bindings.items():
             if not isinstance(key, tuple) or len(key) != 2:
-                continue
+                raise RuntimeError(f"invalid matter binding key {key!r}; expected (relative_context, name)")
             context_id = str(key[0]).strip().strip("/")
             matter_name = str(key[1]).strip()
-            if not matter_name or entry is None:
-                continue
+            if not matter_name:
+                raise RuntimeError(f"matter binding {key!r} has an empty name")
+            if not callable(entry) and not isinstance(entry, dict):
+                raise RuntimeError(f"matter binding {(context_id, matter_name)!r} must be callable or a dict")
+            if isinstance(entry, dict):
+                for accessor in ("read", "write", "event_value"):
+                    value = entry.get(accessor)
+                    if value is not None and not callable(value):
+                        raise RuntimeError(
+                            f"matter binding {(context_id, matter_name)!r} accessor {accessor!r} must be callable"
+                        )
+                if entry.get("read") is None and entry.get("write") is None:
+                    raise RuntimeError(
+                        f"matter binding {(context_id, matter_name)!r} needs a read or write accessor"
+                    )
+            if (context_id, matter_name) in out:
+                raise RuntimeError(f"duplicate matter binding {(context_id, matter_name)!r}")
             out[(context_id, matter_name)] = build_matter_binding(
                 self.runtime,
                 context_id=context_id,
@@ -100,6 +119,10 @@ class RuntimeRegistry:
     def _build_shutdown_hooks(self, fragment: dict[str, Any]) -> list[Any]:
         out: list[Any] = []
         hooks = fragment.get("shutdown", [])
-        if isinstance(hooks, list):
-            out.extend(hooks)
+        if not isinstance(hooks, list):
+            raise RuntimeError("bindings 'shutdown' must be a list")
+        for index, hook in enumerate(hooks):
+            if not callable(hook):
+                raise RuntimeError(f"shutdown hook at index {index} must be callable")
+            out.append(hook)
         return out

@@ -87,8 +87,9 @@ type SubstanceHTTPHandle struct {
 type leaseMode string
 
 const (
-	leaseRead  leaseMode = "read"
-	leaseWrite leaseMode = "write"
+	leaseRead   leaseMode = "read"
+	leaseWrite  leaseMode = "write"
+	leaseAppend leaseMode = "append"
 )
 
 type lease struct {
@@ -112,6 +113,12 @@ type lease struct {
 	tmpSubstancePath string
 	tmpMatterPath    string
 	uploading        bool // guarded by HTTPSubstanceGetter.mu
+	baseBytes        int64
+	baseLines        int64
+	framing          string
+	readOffset       int64
+	readLength       int64
+	readRanged       bool
 }
 
 // expired
@@ -454,7 +461,7 @@ func (g *HTTPSubstanceGetter) Stop() error {
 
 	g.mu.Lock()
 	for _, lz := range g.leases {
-		if lz != nil && lz.mode == leaseWrite {
+		if lz != nil && (lz.mode == leaseWrite || lz.mode == leaseAppend) {
 			_ = os.Remove(lz.tmpSubstancePath)
 			_ = os.Remove(lz.tmpMatterPath)
 		}
@@ -593,6 +600,26 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 	ttl time.Duration,
 	sizeHint int64,
 ) (SubstanceHTTPHandle, error) {
+	handle, err := g.OpenReadRangeLease(ctxDir, matterID, ext, rev, ttl, 0, sizeHint)
+	if err == nil {
+		g.mu.Lock()
+		if lz := g.leases[handle.RID]; lz != nil {
+			lz.readRanged = false
+		}
+		g.mu.Unlock()
+	}
+	return handle, err
+}
+
+func (g *HTTPSubstanceGetter) OpenReadRangeLease(
+	ctxDir string,
+	matterID string,
+	ext string,
+	rev int64,
+	ttl time.Duration,
+	offset int64,
+	length int64,
+) (SubstanceHTTPHandle, error) {
 	if matterID == "" {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenReadLease: empty matter_id")
 	}
@@ -618,6 +645,9 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 		ctxDir:        ctxDir,
 		matterRoot:    matterRoot,
 		substancePath: subPath,
+		readOffset:    offset,
+		readLength:    length,
+		readRanged:    true,
 	}
 
 	g.mu.Lock()
@@ -639,7 +669,7 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 		Tok:       tok,
 		ExpiresAt: lz.expires.UnixNano(),
 		Rev:       rev,
-		SizeHint:  sizeHint,
+		SizeHint:  length,
 		Method:    "GET",
 	}
 	return h, nil
@@ -781,6 +811,52 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 	return h, nil
 }
 
+func (g *HTTPSubstanceGetter) OpenAppendLease(
+	ctxDir, matterID, ext string,
+	expectedRev, baseBytes, baseLines int64,
+	framing, srcIntentionID string,
+	stagedMatter []byte,
+	ttl time.Duration,
+) (SubstanceHTTPHandle, error) {
+	if matterID == "" || baseBytes < 0 || baseLines < 0 {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: invalid binding")
+	}
+	if ttl <= 0 {
+		ttl = g.defaultTTL
+	}
+	if g.BaseURL() == "" {
+		return SubstanceHTTPHandle{}, fmt.Errorf("substance http not running")
+	}
+	rid, tok := randTok(18), randTok(24)
+	matterRoot := filepath.Join(ctxDir, matterDirName)
+	finalSub := filepath.Join(matterRoot, matterID+"."+ext)
+	tmpSub := finalSub + "." + rid + ".append" + tmpSuffix
+	tmpMatter := filepath.Join(matterRoot, matterID+matterDescriptorSuffix+"."+rid+".append"+tmpSuffix)
+	if len(stagedMatter) == 0 {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: empty staged matter descriptor")
+	}
+	if err := os.WriteFile(tmpMatter, stagedMatter, 0o644); err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: stage matter descriptor: %w", err)
+	}
+	lz := &lease{
+		rid: rid, tok: tok, mode: leaseAppend, matter: matterID, rev: expectedRev,
+		srcIntentionID: srcIntentionID, expires: time.Now().Add(ttl), ctxDir: ctxDir,
+		matterRoot: matterRoot, substancePath: finalSub, tmpSubstancePath: tmpSub,
+		tmpMatterPath: tmpMatter, baseBytes: baseBytes, baseLines: baseLines, framing: framing,
+	}
+	g.mu.Lock()
+	g.leases[rid] = lz
+	g.mu.Unlock()
+	g.traceLease(circulation.ValueTraceLeaseOpen, srcIntentionID, lz, map[string]any{
+		"mode": "append", "expires_at": lz.expires.UnixNano(), "expectedRev": expectedRev,
+		"expected_byte_size": baseBytes, "matter_id": matterID,
+	})
+	return SubstanceHTTPHandle{
+		Kind: circulation.ValueDataKindHTTP, BaseURL: g.BaseURL(), Path: substancePathPrefix + rid,
+		RID: rid, Tok: tok, ExpiresAt: lz.expires.UnixNano(), Rev: expectedRev, Method: http.MethodPut,
+	}, nil
+}
+
 // closeLease
 //
 // Functional role (Brique DSL):
@@ -844,11 +920,11 @@ func (g *HTTPSubstanceGetter) closeLease(rid string, why string) {
 	delete(g.leases, rid)
 	g.mu.Unlock()
 	if lz != nil {
-		if lz.mode == leaseWrite {
-			_ = os.Remove(lz.tmpSubstancePath)
-			// A descriptor that failed after payload replacement is retained as
-			// recovery evidence for the explicitly reported partial commit.
-			if why != "fail:partial_commit" {
+		if lz.mode == leaseWrite || lz.mode == leaseAppend {
+			if why != "fail:recovery_pending" {
+				_ = os.Remove(lz.tmpSubstancePath)
+			}
+			if why != "fail:recovery_pending" {
 				_ = os.Remove(lz.tmpMatterPath)
 			}
 		}
@@ -1072,7 +1148,7 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 		g.closeLease(rid, "read_done")
 		return
 
-	case leaseWrite:
+	case leaseWrite, leaseAppend:
 		if r.Method != http.MethodPut {
 			writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", rid, "PUT", map[string]any{})
 			return
@@ -1322,6 +1398,11 @@ func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, r *http.Request, 
 		writeProblem(w, http.StatusInternalServerError, "stat_failed", lz.rid, "", map[string]any{})
 		return
 	}
+	if lz.readRanged {
+		reader := io.NewSectionReader(f, lz.readOffset, lz.readLength)
+		http.ServeContent(w, r, filepath.Base(lz.substancePath), st.ModTime(), reader)
+		return
+	}
 	http.ServeContent(w, r, filepath.Base(lz.substancePath), st.ModTime(), f)
 }
 
@@ -1456,16 +1537,38 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if lz.mode == leaseAppend {
+		result, err := g.ml.finalizeAppendLeaseAfterUpload(lz, n)
+		if err != nil {
+			if _, journalErr := os.Stat(matterTransactionPath(lz.matterRoot, lz.matter)); journalErr == nil {
+				g.failWrite(w, lz, http.StatusInternalServerError, "recovery_pending", err)
+				return
+			}
+			_ = os.Remove(lz.tmpSubstancePath)
+			if errors.Is(err, errWriteLeaseStale) {
+				g.failWrite(w, lz, http.StatusConflict, "stale", err)
+				return
+			}
+			g.failWrite(w, lz, http.StatusInternalServerError, "finalize_failed", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		g.traceLease(circulation.ValueTraceLeaseDone, lz.srcIntentionID, lz, map[string]any{"bytes": n, "matter_id": lz.matter})
+		g.closeLease(lz.rid, "append_done")
+		return
+	}
+
 	newRev, warning, err := g.ml.finalizeWriteLeaseAfterUpload(lz, n)
 	if err != nil {
-		// Best-effort cleanup of tmp file on finalize error.
+		// A journal means commit began. Preserve all staged files so startup can
+		// deterministically roll the transaction forward.
+		if _, journalErr := os.Stat(matterTransactionPath(lz.matterRoot, lz.matter)); journalErr == nil {
+			g.failWrite(w, lz, http.StatusInternalServerError, "recovery_pending", err)
+			return
+		}
 		_ = os.Remove(lz.tmpSubstancePath)
 		if errors.Is(err, errWriteLeaseStale) {
 			g.failWrite(w, lz, http.StatusConflict, "stale", err)
-			return
-		}
-		if errors.Is(err, errWriteLeasePartialCommit) {
-			g.failWrite(w, lz, http.StatusInternalServerError, "partial_commit", err)
 			return
 		}
 		g.failWrite(w, lz, http.StatusInternalServerError, "finalize_failed", err)

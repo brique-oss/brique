@@ -48,6 +48,7 @@
       },
       "effects": {
         "subscriptions": "A local brique-mode subscription may be removed from MatterLoop memory.",
+        "durable_state": "Removing a durable subscription also persists its removal and clears its pending outbox entries.",
         "wrapper_transport": "Wrapper-mode unsubscribe requests are forwarded to the wrapper boundary."
       },
       "transformation_contract": {

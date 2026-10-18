@@ -76,6 +76,12 @@ func (c *BriqueCapacityClient) CognitiveFramework() (string, error) {
 // <brique:section id="#dispatch">
 // <brique:section id="#wrap_response">
 func (c *BriqueCapacityClient) ForwardIntention(intention map[string]any) (map[string]any, error) {
+	return c.ForwardIntentionWithProgress(intention, nil)
+}
+
+// ForwardIntentionWithProgress is ForwardIntention that tells onRunning about each `running`
+// acknowledgement of a long-running capacity, before the single final response.
+func (c *BriqueCapacityClient) ForwardIntentionWithProgress(intention map[string]any, onRunning wrapper.RunningFunc) (map[string]any, error) {
 	// #extract_intention — validate that a non-empty intention is present.
 	if len(intention) == 0 {
 		return nil, fmt.Errorf("brique.intention #extract_intention: missing intention")
@@ -102,7 +108,7 @@ func (c *BriqueCapacityClient) ForwardIntention(intention map[string]any) (map[s
 		"root_intention_id": id,
 	}
 
-	result, err := c.rt.Outbound().SendRawIntention(patched)
+	result, err := c.rt.Outbound().SendRawIntentionWithProgress(patched, onRunning)
 	if err != nil {
 		return nil, fmt.Errorf("brique.intention #dispatch: %w", err)
 	}
@@ -122,7 +128,7 @@ func BuildBindings(rt *wrapper.Runtime) wrapper.BindingsFragment {
 			{
 				Context: "",
 				Name:    "mcp.response",
-				Handler: func(params wrapper.Params) (any, error) {
+				Handler: func(params *wrapper.Params) (any, error) {
 					return map[string]any{"ok": true}, nil
 				},
 			},

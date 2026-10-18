@@ -39,9 +39,12 @@ package matter
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"brique_engine/circulation"
@@ -276,7 +279,6 @@ func writeEmptyFileAtomic(dst string) error {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -358,6 +360,11 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 			}
 			payloadBytes = b
 		}
+		if int64(len(payloadBytes)) > l.matterInlineLimit() {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": l.matterInlineLimit()}, "initial payload exceeds the configured inline limit; create the matter empty, then use matter.write with http_data=true"))
+			return
+		}
 	}
 
 	// Substance spec for payload writes (brique-mode uses fixed file name)
@@ -370,6 +377,24 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 			},
 			"payload write refused: matter is not in brique substance_mode"))
 		return
+	}
+	if isBriqueMode(subMode) {
+		framing, framingErr := matterSubstanceFraming(matterObj)
+		if framingErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: framingErr.Error()},
+				"invalid substance framing"))
+			return
+		}
+		state, stateErr := stateForPayload(payloadBytes, framing)
+		if stateErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: stateErr.Error()},
+				"invalid line-framed substance"))
+			return
+		}
+		syn = setMatterSubstanceState(matterObj, state)
+		synProj = shallowCopyMapAny(syn)
 	}
 
 	// Commit:
@@ -403,38 +428,28 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 			"failed to create matter directory"))
 		return
 	}
+	if pending, pendingErr := pendingMatterTransaction(mRoot, mid); pendingErr != nil || pending {
+		details := map[string]any{circulation.KeyReason: circulation.ValueReasonRecoveryPending, circulation.KeyMatterID: mid}
+		if pendingErr != nil {
+			details[circulation.KeyErrorText] = pendingErr.Error()
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal, details, "matter has a recovery-pending transaction; restart is required"))
+		return
+	}
 
 	// Substance file semantics on create:
 	// - If brique-mode: ensure the payload file exists (<id>.<ext>).
 	//   - If payload provided: write payload into that file (tmp + atomic replace)
 	//   - If no payload: create/replace an empty file with that name (tmp + atomic replace)
 	// - If not brique-mode: do not create/modify any payload file.
+	var dataTmp, dataDst string
 	if isBriqueMode(subMode) {
-		dataDst := filepath.Join(mRoot, mid+"."+subFile) // subFile is now an extension, e.g. "data"
-
-		if hasPayload {
-			dataTmp := dataDst + tmpSuffix
-
-			if err := os.WriteFile(dataTmp, payloadBytes, 0o644); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to write payload temp file"))
-				return
-			}
-			if err := shared.AtomicReplace(dataTmp, dataDst); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to commit payload file"))
-				return
-			}
-		} else {
-			// Ensure empty file exists (architect may write later via matter.write / data-plane).
-			if err := writeEmptyFileAtomic(dataDst); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to create empty substance file"))
-				return
-			}
+		dataDst = filepath.Join(mRoot, mid+"."+subFile)
+		dataTmp = dataDst + tmpSuffix
+		if err := os.WriteFile(dataTmp, payloadBytes, 0o644); err != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to stage payload"))
+			return
 		}
 	}
 
@@ -455,7 +470,12 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 			"failed to write matter temp file"))
 		return
 	}
-	if err := shared.AtomicReplace(matterTmp, matterDst); err != nil {
+	steps := make([]matterTransactionStep, 0, 2)
+	if dataTmp != "" {
+		steps = append(steps, matterTransactionStep{Temporary: filepath.Base(dataTmp), Final: filepath.Base(dataDst)})
+	}
+	steps = append(steps, matterTransactionStep{Temporary: filepath.Base(matterTmp), Final: filepath.Base(matterDst)})
+	if err := commitMatterTransaction(mRoot, mid, "create", steps); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit matter file"))
@@ -475,7 +495,6 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capMatterDelete(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -500,25 +519,79 @@ func (l *MatterLoop) capMatterDelete(msg circulation.Message) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if !l.catalogHasMatter(mid) {
+	entry, present := l.catalogGetMatter(mid)
+	if !present {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonUnknownMatter, circulation.KeyMatterID: mid},
 			"matter is not present in runtime catalog"))
 		return
 	}
+	currentRev := shared.AnyToInt64(entry.Brique[circulation.KeyRevision])
+	if expectedRev, supplied, guardErr := parseExpectedRevisionGuard(in.Params); guardErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, circulation.KeyErrorText: guardErr.Error()}, guardErr.Error()))
+		return
+	} else if supplied && expectedRev != currentRev {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonRevisionMismatch, circulation.KeyExpectedRevision: expectedRev, circulation.KeyCurrentRevision: currentRev}, "revision mismatch"))
+		return
+	}
 
-	// Best-effort remove: if missing on disk, still remove from catalog (catalog is authority).
-	// Flat layout: read the descriptor once to learn (mode, ext) before deleting it, since
-	// after removal we can no longer know which payload extension to target.
+	// Read the descriptor once to learn (mode, ext), then delete all owned files
+	// through a recoverable journal so an interrupted removal rolls forward.
 	mRoot := filepath.Join(l.frame.ContextDir, matterDirName)
 	matterPath := filepath.Join(mRoot, mid+matterDescriptorSuffix)
+	if pending, pendingErr := pendingMatterTransaction(mRoot, mid); pendingErr != nil || pending {
+		details := map[string]any{circulation.KeyReason: circulation.ValueReasonRecoveryPending, circulation.KeyMatterID: mid}
+		if pendingErr != nil {
+			details[circulation.KeyErrorText] = pendingErr.Error()
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal, details, "matter has a recovery-pending transaction; restart is required"))
+		return
+	}
 	subMode, subExt := circulation.ValueModeBrique, defaultSubstanceExt
 	if doc, err := readJSONMapFile(matterPath); err == nil {
 		subMode, subExt = briqueSubstanceSpec(doc)
 	}
-	_ = os.Remove(matterPath)
+	if expectedBytes, supplied, guardErr := optionalSizeGuard(in.Params, circulation.KeyExpectedByteSize); guardErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, circulation.KeyErrorText: guardErr.Error()}, guardErr.Error()))
+		return
+	} else if supplied {
+		currentBytes := int64(0)
+		if isBriqueMode(subMode) {
+			if info, statErr := os.Stat(filepath.Join(mRoot, mid+"."+subExt)); statErr == nil {
+				currentBytes = info.Size()
+			} else if !os.IsNotExist(statErr) {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyErrorText: statErr.Error()}, "failed to stat matter substance"))
+				return
+			}
+		}
+		if expectedBytes != currentBytes {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: "byte_size_mismatch", circulation.KeyExpectedByteSize: expectedBytes, circulation.KeyTotalBytes: currentBytes}, "byte size mismatch"))
+			return
+		}
+	}
+	eventMarker, markerErr := l.prepareMatterEventMarker(mid, currentRev, true, matterDeletedEventParams(mid, in.IntentionID))
+	if markerErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: markerErr.Error()}, "failed to stage durable matter event"))
+		return
+	}
+	deleteNames := []string{filepath.Base(matterPath)}
 	if isBriqueMode(subMode) {
-		_ = os.Remove(filepath.Join(mRoot, mid+"."+subExt))
+		payloadPath := filepath.Join(mRoot, mid+"."+subExt)
+		deleteNames = append(deleteNames, filepath.Base(payloadPath), filepath.Base(lineIndexPath(payloadPath)))
+	}
+	if err := commitMatterDeleteTransaction(mRoot, mid, deleteNames); err != nil {
+		if _, journalErr := os.Stat(matterTransactionPath(mRoot, mid)); os.IsNotExist(journalErr) {
+			l.abandonMatterEventMarker(eventMarker)
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyErrorText: err.Error()}, "failed to commit matter deletion"))
+		return
 	}
 
 	// Update catalog projection (short)
@@ -527,6 +600,7 @@ func (l *MatterLoop) capMatterDelete(msg circulation.Message) {
 	// Notify subscribers only for brique-mode matters.
 	// NOTE: catalog entry is gone; infer mode from disk metadata is overkill.
 	// We choose: notify deletion if we *had* local subs (which only exist for brique-mode).
+	_ = l.completeMatterEventMarker(eventMarker)
 	l.notifyBriqueMatterDeleted(mid, in.IntentionID)
 
 	l.emitResponseOK(in, map[string]any{circulation.KeyOK: true, circulation.KeyMatterID: mid})
@@ -539,7 +613,6 @@ func (l *MatterLoop) capMatterDelete(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -620,6 +693,21 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 			"source matter is not present in runtime catalog"))
 		return
 	}
+	sourceEntry, _ := l.catalogGetMatter(src)
+	sourceRevision := shared.AnyToInt64(sourceEntry.Brique[circulation.KeyRevision])
+	if raw, supplied := in.Params[circulation.KeyExpectedSourceRevision]; supplied {
+		expected, valid := parsePositiveRevision(raw)
+		if !valid {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "expected_source_revision must be a positive integer"))
+			return
+		}
+		if expected != sourceRevision {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonRevisionMismatch, circulation.KeyExpectedSourceRevision: expected, circulation.KeyCurrentRevision: sourceRevision}, "source revision mismatch"))
+			return
+		}
+	}
 
 	// Under src lock: read source files
 	srcRoot := filepath.Join(l.frame.ContextDir, matterDirName)
@@ -655,11 +743,33 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 	// Determine which substance file to copy (brique-mode only)
 	subMode, subExt := briqueSubstanceSpec(matterObj)
 
-	// payload is optional
-	var dataBytes []byte
+	// Snapshot source payload metadata under the source lock. Large substances
+	// are streamed later and are never loaded wholesale into memory.
+	var dataSrcPath string
+	sourceBytes := int64(0)
+	sourcePayloadExists := false
 	if isBriqueMode(subMode) {
-		dataSrcPath := filepath.Join(srcRoot, src+"."+subExt)
-		dataBytes, _ = os.ReadFile(dataSrcPath) // if missing => nil, handled by "create empty" below
+		dataSrcPath = filepath.Join(srcRoot, src+"."+subExt)
+		if info, statErr := os.Stat(dataSrcPath); statErr == nil {
+			sourceBytes, sourcePayloadExists = info.Size(), true
+		} else if !os.IsNotExist(statErr) {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: statErr.Error()}, "failed to stat source payload"))
+			return
+		}
+	}
+	if raw, supplied := in.Params[circulation.KeyExpectedSourceByteSize]; supplied {
+		expected, valid := parseNonNegativeInt64(raw)
+		if !valid {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "expected_source_byte_size must be a non-negative integer"))
+			return
+		}
+		if expected != sourceBytes {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: "byte_size_mismatch", circulation.KeyExpectedSourceByteSize: expected, circulation.KeyTotalBytes: sourceBytes}, "source byte size mismatch"))
+			return
+		}
 	}
 
 	if crossContext {
@@ -683,49 +793,101 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 			"failed to create destination matter directory"))
 		return
 	}
+	if pending, pendingErr := pendingMatterTransaction(dstRoot, dst); pendingErr != nil || pending {
+		details := map[string]any{circulation.KeyReason: circulation.ValueReasonRecoveryPending, circulation.KeyMatterID: dst}
+		if pendingErr != nil {
+			details[circulation.KeyErrorText] = pendingErr.Error()
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal, details, "destination matter has a recovery-pending transaction; restart is required"))
+		return
+	}
 
 	// Copy payload semantics:
 	// - If brique-mode: destination MUST have the payload file (<id>.<ext>) even if empty.
 	//   - If source file exists and is non-empty -> copy bytes
 	//   - If source file missing OR empty -> create/replace empty substance file
 	// - If not brique-mode: metadata-only clone (no payload file created)
+	var clonePayloadTmp, clonePayloadDst string
 	if isBriqueMode(subMode) {
-		dstp := filepath.Join(dstRoot, dst+"."+subExt)
-		if len(dataBytes) > 0 {
-			tmp := dstp + tmpSuffix
-			if err := os.WriteFile(tmp, dataBytes, 0o644); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to write destination payload temp file"))
-				return
-			}
-			if err := shared.AtomicReplace(tmp, dstp); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to commit destination payload"))
-				return
-			}
+		framing, framingErr := matterSubstanceFraming(matterObj)
+		if framingErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: framingErr.Error()},
+				"invalid substance framing"))
+			return
+		}
+		state := substanceState{Framing: framing}
+		var stateErr error
+		if sourcePayloadExists {
+			state, stateErr = stateForPayloadFile(dataSrcPath, framing)
 		} else {
-			// Ensure empty file exists even if source payload is missing/empty.
-			if err := writeEmptyFileAtomic(dstp); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to create empty destination substance file"))
-				return
+			state, stateErr = stateForPayload(nil, framing)
+		}
+		if stateErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: stateErr.Error()},
+				"invalid line-framed substance"))
+			return
+		}
+		syn = setMatterSubstanceState(matterObj, state)
+		synProj = shallowCopyMapAny(syn)
+		clonePayloadDst = filepath.Join(dstRoot, dst+"."+subExt)
+		clonePayloadTmp = clonePayloadDst + tmpSuffix
+		destination, openErr := os.OpenFile(clonePayloadTmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if openErr == nil && sourcePayloadExists {
+			var source *os.File
+			source, openErr = os.Open(dataSrcPath)
+			if openErr == nil {
+				_, openErr = io.Copy(destination, source)
+				_ = source.Close()
 			}
 		}
+		if destination != nil {
+			if syncErr := destination.Sync(); openErr == nil {
+				openErr = syncErr
+			}
+			if closeErr := destination.Close(); openErr == nil {
+				openErr = closeErr
+			}
+		}
+		if openErr != nil {
+			_ = os.Remove(clonePayloadTmp)
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: openErr.Error()}, "failed to stage destination payload"))
+			return
+		}
+	}
+	cloneRevision, revErr := nextRevision(sourceRevision)
+	if revErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure, circulation.KeyErrorText: revErr.Error()}, "failed to create clone revision"))
+		return
+	}
+	setBriqueRev(matterObj, cloneRevision)
+	syn, _ = matterObj[circulation.KeyBrique].(map[string]any)
+	synProj = shallowCopyMapAny(syn)
+	cloneBytes, marshalErr := json.MarshalIndent(matterObj, "", "  ")
+	if marshalErr != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonJSONInvalid, circulation.KeyErrorText: marshalErr.Error()}, "failed to marshal clone descriptor"))
+		return
 	}
 
 	// Copy matter.json
 	mtmp := filepath.Join(dstRoot, dst+matterDescriptorSuffix+tmpSuffix)
 	mdst := filepath.Join(dstRoot, dst+matterDescriptorSuffix)
-	if err := os.WriteFile(mtmp, matterBytes, 0o644); err != nil {
+	if err := os.WriteFile(mtmp, cloneBytes, 0o644); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to write destination matter temp file"))
 		return
 	}
-	if err := shared.AtomicReplace(mtmp, mdst); err != nil {
+	steps := make([]matterTransactionStep, 0, 2)
+	if clonePayloadTmp != "" {
+		steps = append(steps, matterTransactionStep{Temporary: filepath.Base(clonePayloadTmp), Final: filepath.Base(clonePayloadDst)})
+	}
+	steps = append(steps, matterTransactionStep{Temporary: filepath.Base(mtmp), Final: filepath.Base(mdst)})
+	if err := commitMatterTransaction(dstRoot, dst, "clone", steps); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit destination matter file"))
@@ -742,6 +904,7 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 		circulation.KeyOK:             true,
 		circulation.KeySourceMatterID: src,
 		circulation.KeyTargetMatterID: dst,
+		circulation.KeyRevision:       cloneRevision,
 	})
 }
 
@@ -752,7 +915,6 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
@@ -830,6 +992,11 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 			}
 			payloadBytes = b
 		}
+		if int64(len(payloadBytes)) > l.matterInlineLimit() {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": l.matterInlineLimit()}, "derived payload exceeds the configured inline limit; create or derive metadata first, then use matter.write with http_data=true"))
+			return
+		}
 	}
 
 	// Substance spec for payload writes (brique-mode uses a derived extension)
@@ -843,16 +1010,128 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 			"payload write refused: matter is not in brique substance_mode"))
 		return
 	}
-
-	mu := l.lockFor(matterLockKey(dst))
-	if mu == nil {
-		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-			map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure},
-			"missing matter lock"))
-		return
+	if isBriqueMode(subMode) {
+		framing, framingErr := matterSubstanceFraming(matterObj)
+		if framingErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: framingErr.Error()},
+				"invalid substance framing"))
+			return
+		}
+		state, stateErr := stateForPayload(payloadBytes, framing)
+		if stateErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyErrorText: stateErr.Error()},
+				"invalid line-framed substance"))
+			return
+		}
+		syn = setMatterSubstanceState(matterObj, state)
+		synProj = shallowCopyMapAny(syn)
 	}
-	mu.Lock()
-	defer mu.Unlock()
+
+	type deriveSourceGuard struct {
+		MatterID    string
+		Revision    int64
+		HasRevision bool
+		ByteSize    int64
+		HasByteSize bool
+	}
+	guards := make([]deriveSourceGuard, 0)
+	if rawGuards, exists := in.Params[circulation.KeySourceGuards]; exists {
+		items, valid := rawGuards.([]any)
+		if !valid {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "source_guards must be an array"))
+			return
+		}
+		for index, raw := range items {
+			object, valid := raw.(map[string]any)
+			if !valid {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, "index": index}, "source guard must be an object"))
+				return
+			}
+			guard := deriveSourceGuard{MatterID: strings.TrimSpace(shared.GetParamString(object, circulation.KeyMatterID))}
+			if guard.MatterID == "" || guard.MatterID == dst {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, "index": index}, "source guard requires a source matter distinct from the target"))
+				return
+			}
+			if rawRevision, exists := object[circulation.KeyExpectedRevision]; exists {
+				guard.Revision, valid = parsePositiveRevision(rawRevision)
+				guard.HasRevision = true
+				if !valid {
+					l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+						map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, "index": index}, "source expected_revision must be positive"))
+					return
+				}
+			}
+			if rawSize, exists := object[circulation.KeyExpectedByteSize]; exists {
+				guard.ByteSize, valid = parseNonNegativeInt64(rawSize)
+				guard.HasByteSize = true
+				if !valid {
+					l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+						map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest, "index": index}, "source expected_byte_size must be non-negative"))
+					return
+				}
+			}
+			guards = append(guards, guard)
+		}
+	}
+	lockIDs := []string{dst}
+	for _, guard := range guards {
+		lockIDs = append(lockIDs, guard.MatterID)
+	}
+	sort.Strings(lockIDs)
+	locked := make([]*sync.RWMutex, 0, len(lockIDs))
+	lastID := ""
+	for _, id := range lockIDs {
+		if id == lastID {
+			continue
+		}
+		lastID = id
+		mu := l.lockFor(matterLockKey(id))
+		if mu == nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "missing matter lock"))
+			return
+		}
+		mu.Lock()
+		locked = append(locked, mu)
+	}
+	defer func() {
+		for index := len(locked) - 1; index >= 0; index-- {
+			locked[index].Unlock()
+		}
+	}()
+	for _, guard := range guards {
+		entry, exists := l.catalogGetMatter(guard.MatterID)
+		if !exists {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonUnknownMatter, circulation.KeyMatterID: guard.MatterID}, "guarded source matter is unknown"))
+			return
+		}
+		if guard.HasRevision && shared.AnyToInt64(entry.Brique[circulation.KeyRevision]) != guard.Revision {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonRevisionMismatch, circulation.KeyMatterID: guard.MatterID}, "source revision mismatch"))
+			return
+		}
+		if guard.HasByteSize {
+			doc, readErr := readJSONMapFile(filepath.Join(l.frame.ContextDir, matterDirName, guard.MatterID+matterDescriptorSuffix))
+			if readErr != nil {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyErrorText: readErr.Error()}, "failed to read guarded source"))
+				return
+			}
+			_, sourceExt := briqueSubstanceSpec(doc)
+			info, statErr := os.Stat(filepath.Join(l.frame.ContextDir, matterDirName, guard.MatterID+"."+sourceExt))
+			if statErr != nil || info.Size() != guard.ByteSize {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+					map[string]any{circulation.KeyReason: "byte_size_mismatch", circulation.KeyMatterID: guard.MatterID}, "source byte size mismatch"))
+				return
+			}
+		}
+	}
 
 	if l.catalogHasMatter(dst) {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
@@ -868,36 +1147,28 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 			"failed to create matter directory"))
 		return
 	}
+	if pending, pendingErr := pendingMatterTransaction(dstRoot, dst); pendingErr != nil || pending {
+		details := map[string]any{circulation.KeyReason: circulation.ValueReasonRecoveryPending, circulation.KeyMatterID: dst}
+		if pendingErr != nil {
+			details[circulation.KeyErrorText] = pendingErr.Error()
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal, details, "destination matter has a recovery-pending transaction; restart is required"))
+		return
+	}
 
 	// Substance file semantics on derive:
 	// - If brique-mode: destination MUST have the payload file (<id>.<ext>) even if empty.
 	//   - If payload provided: write payload into that file (tmp + atomicReplace)
 	//   - If no payload: create/replace an empty file with that name (tmp + atomicReplace)
 	// - If not brique-mode: do not create/modify any payload file; refuse payload if provided.
+	var payloadTmp, payloadDst string
 	if isBriqueMode(subMode) {
-		dstp := filepath.Join(dstRoot, dst+"."+subExt)
-		if hasPayload {
-			tmp := dstp + tmpSuffix
-			if err := os.WriteFile(tmp, payloadBytes, 0o644); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to write payload temp file"))
-				return
-			}
-			if err := shared.AtomicReplace(tmp, dstp); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to commit payload file"))
-				return
-			}
-		} else {
-			// Ensure empty file exists (architect may write later via matter.write / data-plane).
-			if err := writeEmptyFileAtomic(dstp); err != nil {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
-					"failed to create empty substance file"))
-				return
-			}
+		payloadDst = filepath.Join(dstRoot, dst+"."+subExt)
+		payloadTmp = payloadDst + tmpSuffix
+		if err := os.WriteFile(payloadTmp, payloadBytes, 0o644); err != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to stage payload"))
+			return
 		}
 	}
 
@@ -916,7 +1187,12 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 			"failed to write matter temp file"))
 		return
 	}
-	if err := shared.AtomicReplace(mtmp, mdst); err != nil {
+	steps := make([]matterTransactionStep, 0, 2)
+	if payloadTmp != "" {
+		steps = append(steps, matterTransactionStep{Temporary: filepath.Base(payloadTmp), Final: filepath.Base(payloadDst)})
+	}
+	steps = append(steps, matterTransactionStep{Temporary: filepath.Base(mtmp), Final: filepath.Base(mdst)})
+	if err := commitMatterTransaction(dstRoot, dst, "derive", steps); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit matter file"))

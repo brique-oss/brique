@@ -43,6 +43,8 @@ const (
 	ValueModeWrapper  = "wrapper"
 	ValueModeExtRef   = "ext_ref"
 	ValueModePhysical = "physical"
+	ValueFramingBytes = "bytes"
+	ValueFramingLines = "lines"
 
 	// param section
 	ValueBrique     = "brique"
@@ -59,11 +61,15 @@ const (
 	ValueDataKindHTTP   = "http"
 
 	// Capability names / event values
-	ValueCapMatterEvent     = "matter_event"
-	ValueEventMatterWritten = "matter_written"
-	ValueEventMatterDeleted = "matter_deleted"
-	ValueOpDelete           = "delete"
-	ValueOpWrite            = "write"
+	ValueCapMatterEvent       = "matter_event"
+	ValueEventMatterWritten   = "matter_written"
+	ValueEventMatterDeleted   = "matter_deleted"
+	ValueEventMatterAppended  = "matter_appended"
+	ValueEventMatterTruncated = "matter_truncated"
+	ValueOpDelete             = "delete"
+	ValueOpWrite              = "write"
+	ValueOpAppend             = "append"
+	ValueOpTruncate           = "truncate"
 
 	// response.status
 	ValueStatusOK      = "ok"
@@ -214,6 +220,7 @@ const (
 	ValueReasonInvalidPayload  = "payload is invalid"
 	ValueReasonMissingPayload  = "payload is missing"
 	ValueReasonPayloadTooLarge = "payload_too_large"
+	ValueReasonRecoveryPending = "recovery_pending"
 
 	ValueReasonMissingMatterID    = "matter id is missing"
 	ValueReasonMissingMatterIDs   = "matter ids are missing"

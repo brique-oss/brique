@@ -20,7 +20,7 @@ limitations under the License.
 
 This directory provides the generic Go wrapper runtime for Brique.
 
-It mirrors the Python wrapper model at full depth:
+It mirrors the Python wrapper's protocol and execution guarantees:
 
 - one `main.go` entry point
 - one `bindings.go` for user-defined capacity and matter bindings
@@ -40,7 +40,8 @@ code/
     correlator.go
     registry.go
     executor.go
-    matter.go
+    scheduler.go
+    errors.go
     outbound.go
     router.go
     runtime.go
@@ -59,7 +60,7 @@ func BuildBindings(rt *wrapper.Runtime) wrapper.BindingsFragment {
             {
                 Context: "",
                 Name:    "my_capacity",
-                Handler: func(params wrapper.Params) (any, error) {
+                Handler: func(params *wrapper.Params) (any, error) {
                     return map[string]any{"result": params.String("input")}, nil
                 },
             },
@@ -93,4 +94,25 @@ A wrapper binary is built with:
 go build -o mcp_server_go ./code
 ```
 
-No external dependencies beyond the standard library and `golang.org/x/net/websocket` or `nhooyr.io/websocket`.
+No external dependencies beyond the standard library and `golang.org/x/net/websocket`.
+
+## Runtime guarantees
+
+- current Brique `response.status` and structured-error contract
+- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
+- FIFO ordering per addressed capacity or matter, with parallel unrelated bindings
+- responses and `wrapper_stop` outside the work queue
+- strict binding validation before connection
+- 4 MiB control-message ceiling and five bounded connection attempts
+- matter commit before notification, relative notification origins and isolated delivery failures
+- idempotent subscriptions with owner-checked unsubscription
+- `running` responses renew the outbound inactivity budget
+- correlation and `intention.matters` are preserved by the message model
+
+Run validation with `go test -race ./...`.
+
+## Placement and transit
+
+Handlers receive `*Params`. Existing typed accessors (`String`, `Float`, `Bool`) remain; `Value(name)` additionally resolves inline values, wrapper-local `@object`, shared-filesystem `@file`, and transient cross-instance `@matter`. Semantic entries from `intention.matters` return a `MatterRef` and are never read implicitly.
+
+`params.Call(Address{Context: ..., Cap: ..., Type: TypeUser}, values)` emits each ordinary value according to the destination and routes the call through the engine. `params.Emit(value, address)` exposes the same selection when emission and calling are separated. The runtime creates transient Matters in the destination, uploads through the HTTP lease, verifies `brique.transient`, revision and size at consumption, then guarded-deletes them. Unread references are released when the handler returns. `Outbound()` remains available for raw non-capacity intentions.

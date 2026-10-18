@@ -45,7 +45,6 @@ import (
 )
 
 var errWriteLeaseStale = errors.New("write lease revision mismatch")
-var errWriteLeasePartialCommit = errors.New("write lease payload committed but descriptor commit failed")
 
 // capMatterWrite
 //
@@ -95,6 +94,11 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 				openHTTP = n != 0
 			}
 		}
+	}
+	if openHTTP && hasDataUpdate {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "data and http_data=true are mutually exclusive"))
+		return
 	}
 
 	// No-op guard.
@@ -203,6 +207,7 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	// Apply metadata patch (minimal merge semantics).
 	var newMatterObj map[string]any
 	newMatterObj = deepCloneMap(curMatterObj)
+	currentEngineBrique, _ := curMatterObj[circulation.KeyBrique].(map[string]any)
 
 	if hasMeaningPatch {
 		patchMap, ok := meaningPatch.(map[string]any)
@@ -255,6 +260,11 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			return
 		}
 	}
+	// Revision and committed substance counters are engine-owned. A metadata or
+	// semantic patch may change framing, but it cannot forge commit state.
+	if nextBrique, _ := newMatterObj[circulation.KeyBrique].(map[string]any); nextBrique != nil {
+		restoreEngineOwnedBriqueFields(nextBrique, currentEngineBrique)
+	}
 
 	// brique payload is bytes in data.bin.
 	// Inline payload accepts:
@@ -287,6 +297,12 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 				"payload_update must be bytes, string, object, or array"))
 			return
 		}
+		inlineLimit := l.matterInlineLimit()
+		if int64(len(payloadBytes)) > inlineLimit {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": inlineLimit}, "inline substance exceeds the configured limit; use http_data=true"))
+			return
+		}
 	}
 
 	// Ensure matter root exists (flat layout: shared by all matter ids).
@@ -295,6 +311,14 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
 			fmt.Sprintf("failed to ensure matter dir: %v", err)))
+		return
+	}
+	if pending, pendingErr := pendingMatterTransaction(mRoot, matterID); pendingErr != nil || pending {
+		details := map[string]any{circulation.KeyReason: circulation.ValueReasonRecoveryPending, circulation.KeyMatterID: matterID}
+		if pendingErr != nil {
+			details[circulation.KeyErrorText] = pendingErr.Error()
+		}
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal, details, "matter has a recovery-pending transaction; restart is required"))
 		return
 	}
 
@@ -306,6 +330,29 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	tmpPayload := finalPayload + tmpSuffix
 	finalMatter := filepath.Join(mRoot, matterID+matterDescriptorSuffix)
 	tmpMatter := filepath.Join(mRoot, matterID+matterDescriptorSuffix+tmpSuffix)
+
+	framing, err := matterSubstanceFraming(newMatterObj)
+	if err != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyMatterID: matterID, circulation.KeyErrorText: err.Error()},
+			"invalid substance framing"))
+		return
+	}
+	if mode == circulation.ValueModeBrique && !openHTTP {
+		var state substanceState
+		if hasDataUpdate {
+			state, err = stateForPayload(payloadBytes, framing)
+		} else {
+			state, err = stateForPayloadFile(finalPayload, framing)
+		}
+		if err != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidPayload, circulation.KeyMatterID: matterID, circulation.KeyErrorText: err.Error()},
+				"invalid line-framed substance"))
+			return
+		}
+		setMatterSubstanceState(newMatterObj, state)
+	}
 
 	//any successful write bumps rev (metadata OR payload).
 	// Also: HTTP finalize expects matter.json<tmpSuffix> to exist (even for payload-only writes),
@@ -369,13 +416,17 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			synMap = map[string]any{}
 			newMatterObj[circulation.KeyBrique] = synMap
 		}
+		sourceIntentionID := ""
+		if in.Correlation != nil {
+			sourceIntentionID = in.Correlation.RootIntentionID
+		}
 
 		h, err := l.subHTTP.OpenWriteLease(
 			l.frame.ContextDir,
 			matterID,
 			subExt,
 			expectedRev,
-			in.Correlation.RootIntentionID,
+			sourceIntentionID,
 			synMap,
 			stagedMatterBytes,
 			0,
@@ -400,15 +451,9 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	}
 
 	// --- Inline write path (no HTTP) ---
-	// We need an atomic-ish commit boundary:
-	// 1) write tmp payload (if any)
-	// 2) ensure matter.json<tmpSuffix> exists if meta changed (already staged above)
-	// 3) atomicReplace payload tmp -> data.bin  (if any)
-	// 4) atomicReplace matter.json<tmpSuffix> -> matter.json (if meta changed)
-	// 5) bump rev + update catalog + persist
-	//
-	// If you want *perfect* atomicity across both files, you need a journal/txn layer.
-	// Here we keep “double rename” order: payload then metadata.
+	// Stage payload and descriptor, then commit them through the recoverable
+	// per-Matter transaction journal. An interrupted multi-file replacement is
+	// deterministically rolled forward when the Matter loop starts again.
 	if hasDataUpdate {
 		if err := os.WriteFile(tmpPayload, payloadBytes, 0o644); err != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -416,26 +461,38 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 				fmt.Sprintf("failed to write payload tmp: %v", err)))
 			return
 		}
-		if err := shared.AtomicReplace(tmpPayload, finalPayload); err != nil {
-			_ = os.Remove(tmpPayload)
+	}
+	sourceIntentionID := ""
+	if in.Correlation != nil {
+		sourceIntentionID = in.Correlation.RootIntentionID
+	}
+	var eventMarker *matterEventMarker
+	if mode == circulation.ValueModeBrique {
+		eventMarker, err = l.prepareMatterEventMarker(matterID, stagedRev, false, matterWrittenEventParams(matterID, stagedRev, sourceIntentionID))
+		if err != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
-				fmt.Sprintf("failed to commit payload: %v", err)))
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to stage durable matter event"))
 			return
 		}
 	}
-
-	if stageMatterJSON {
-		if err := shared.AtomicReplace(tmpMatter, finalMatter); err != nil {
-			// payload may already be committed: surface error + leave tmp around for debugging
-			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
-				fmt.Sprintf("failed to commit matter.json: %v", err)))
-			return
-		}
-	} else {
+	if !stageMatterJSON {
 		// If we staged tmpMatter only because openHTTP (but openHTTP=false here), remove it.
 		_ = os.Remove(tmpMatter)
+	} else {
+		steps := make([]matterTransactionStep, 0, 2)
+		if hasDataUpdate {
+			steps = append(steps, matterTransactionStep{Temporary: filepath.Base(tmpPayload), Final: filepath.Base(finalPayload)})
+		}
+		steps = append(steps, matterTransactionStep{Temporary: filepath.Base(tmpMatter), Final: filepath.Base(finalMatter)})
+		if err := commitMatterTransaction(mRoot, matterID, circulation.ValueOpWrite, steps); err != nil {
+			if _, journalErr := os.Stat(matterTransactionPath(mRoot, matterID)); os.IsNotExist(journalErr) {
+				l.abandonMatterEventMarker(eventMarker)
+			}
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonFilesystemError, circulation.KeyMatterID: matterID},
+				fmt.Sprintf("failed to commit matter transaction: %v", err)))
+			return
+		}
 	}
 
 	// After successful commits, the rev we return must be the one actually staged into matter.json.
@@ -464,7 +521,8 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 
 	// Notify subscribers (brique-mode only). Wrapper-mode notifications live in wrapper.
 	if mode == circulation.ValueModeBrique {
-		l.notifyBriqueMatterWritten(matterID, newRev, in.Correlation.RootIntentionID)
+		_ = l.completeMatterEventMarker(eventMarker)
+		l.notifyBriqueMatterWritten(matterID, newRev, sourceIntentionID)
 	}
 }
 
@@ -627,6 +685,9 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 	if curRev != lz.rev {
 		return 0, "", fmt.Errorf("%w: expected %d, got %d", errWriteLeaseStale, lz.rev, curRev)
 	}
+	if pending, pendingErr := pendingMatterTransaction(lz.matterRoot, matterID); pendingErr != nil || pending {
+		return 0, "", fmt.Errorf("recovery_pending: matter has an unfinished transaction")
+	}
 
 	// Best-effort sanity: tmp file exists (and size hint check if provided).
 	if st, err := os.Stat(lz.tmpSubstancePath); err != nil {
@@ -635,23 +696,55 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 		// non-fatal
 	}
 
-	// 1) Commit payload bytes first.
-	if err := shared.AtomicReplace(lz.tmpSubstancePath, lz.substancePath); err != nil {
-		return 0, "", fmt.Errorf("finalize: commit payload failed: %w", err)
+	// Complete the engine-owned committed substance projection only after the
+	// upload has finished, because its size and LF framing are unknown when the
+	// lease is opened.
+	stagedDoc, err := readJSONMapFile(lz.tmpMatterPath)
+	if err != nil {
+		return 0, "", fmt.Errorf("finalize: read staged matter failed: %w", err)
+	}
+	framing, err := matterSubstanceFraming(stagedDoc)
+	if err != nil {
+		return 0, "", fmt.Errorf("finalize: invalid framing: %w", err)
+	}
+	state, err := stateForPayloadFile(lz.tmpSubstancePath, framing)
+	if err != nil {
+		return 0, "", fmt.Errorf("finalize: invalid uploaded substance: %w", err)
+	}
+	if nBytes >= 0 && state.Bytes != nBytes {
+		return 0, "", fmt.Errorf("finalize: uploaded size mismatch: expected %d, got %d", nBytes, state.Bytes)
+	}
+	lz.newBrique = setMatterSubstanceState(stagedDoc, state)
+	if revision := shared.AnyToInt64(lz.newBrique[circulation.KeyRevision]); revision > 0 {
+		lz.newBrique[circulation.KeyRevision] = revision
+	}
+	stagedBytes, err := json.MarshalIndent(stagedDoc, "", "  ")
+	if err != nil {
+		return 0, "", fmt.Errorf("finalize: marshal staged matter failed: %w", err)
+	}
+	if err := os.WriteFile(lz.tmpMatterPath, stagedBytes, 0o644); err != nil {
+		return 0, "", fmt.Errorf("finalize: update staged matter failed: %w", err)
+	}
+	newRev := shared.AnyToInt64(lz.newBrique[circulation.KeyRevision])
+	eventMarker, err := l.prepareMatterEventMarker(matterID, newRev, false, matterWrittenEventParams(matterID, newRev, lz.srcIntentionID))
+	if err != nil {
+		return 0, "", fmt.Errorf("finalize: stage durable event: %w", err)
 	}
 
-	// 2) Commit matter.json if a tmp exists (prepared earlier by capMatterWrite).
+	// Commit payload and descriptor under a recoverable roll-forward journal.
 	// Flat layout: matterRoot is shared by all matter ids, so the filename MUST be
 	// prefixed by matterID here, otherwise concurrent writes to different matters
 	// would race on a single shared descriptor file.
 	finalMatter := filepath.Join(lz.matterRoot, matterID+matterDescriptorSuffix)
-
-	if _, err := os.Stat(lz.tmpMatterPath); err == nil {
-		if err := shared.AtomicReplace(lz.tmpMatterPath, finalMatter); err != nil {
-			return 0, "", fmt.Errorf("%w: %v", errWriteLeasePartialCommit, err)
+	steps := []matterTransactionStep{
+		{Temporary: filepath.Base(lz.tmpSubstancePath), Final: filepath.Base(lz.substancePath)},
+		{Temporary: filepath.Base(lz.tmpMatterPath), Final: filepath.Base(finalMatter)},
+	}
+	if err := commitMatterTransaction(lz.matterRoot, matterID, circulation.ValueOpWrite, steps); err != nil {
+		if _, journalErr := os.Stat(matterTransactionPath(lz.matterRoot, matterID)); os.IsNotExist(journalErr) {
+			l.abandonMatterEventMarker(eventMarker)
 		}
-	} else if !os.IsNotExist(err) {
-		return 0, "", fmt.Errorf("finalize: stat matter.json%s failed: %w", tmpSuffix, err)
+		return 0, "", fmt.Errorf("finalize: transaction commit failed: %w", err)
 	}
 
 	// 3) Update runtime catalog rev + persist.
@@ -662,8 +755,6 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 		lz.newBrique = syn
 	}
 
-	newRev := shared.AnyToInt64(syn[circulation.KeyRevision])
-
 	l.catalogSetMatter(matterID, CatalogEntry{Brique: syn})
 
 	ctxDir, ok := l.contextDir()
@@ -673,6 +764,7 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 	}
 
 	// Notify subscribers (brique-mode only). Wrapper-mode notifications live in wrapper.
+	_ = l.completeMatterEventMarker(eventMarker)
 	l.notifyBriqueMatterWritten(matterID, newRev, lz.srcIntentionID)
 
 	return newRev, "", nil

@@ -3957,7 +3957,8 @@ func isVocabularyEligiblePath(path string) bool {
 	}
 	if segments[0] == circulation.KeyBrique && len(segments) > 1 {
 		switch segments[1] {
-		case "revision", "cap_name", "rel_ctx", "wrapper", "wrapper_name", "file":
+		case "revision", "cap_name", "rel_ctx", "wrapper", "wrapper_name", "file",
+			circulation.KeySubstanceFraming, circulation.KeySubstanceSizeBytes, circulation.KeySubstanceLineCount:
 			return false
 		}
 	}

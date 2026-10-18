@@ -32,7 +32,7 @@ Condensed operational reference. Full rationale: `wrapper/Wrapper.md`. Read that
 1. Copy verbatim into `<context_dir>/code/<wrapper_name>/`:
    - `wrapper/python/code/main.py`
    - `wrapper/python/code/requirements.txt`
-   - `wrapper/python/code/wrapper/` (entire dir: runtime.py, registry.py, router.py, execution.py, matter.py, outbound.py, correlator.py, transport.py, constants.py, models.py, util.py)
+   - `wrapper/python/code/wrapper/` (entire dir: runtime.py, registry.py, router.py, execution.py, matter.py, outbound.py, correlator.py, transit.py, calls.py, transport.py, constants.py, models.py, util.py, plus `__init__.py` and `_ws_stdlib.py`)
    - **Never modify these files.** They are the generic runtime, identical across every wrapper in this instance.
 2. Declare in `context.json`:
 ```json
@@ -44,16 +44,19 @@ Condensed operational reference. Full rationale: `wrapper/Wrapper.md`. Read that
     },
     "execution": {
       "wrappers": [{"wrapper_name":"<wrapper_name>","mode":"interpreted","ready_timeout_ms":5000,"stop_timeout_ms":1000,
-        "run":{"cmd":["python3","main.py"],"env_name":"env1","shell":false,"env":{"BRIQUE_WRAPPER_NAME":"<wrapper_name>"}}}]
+        "run":{"cmd":["python3","main.py"],"env_name":"env1","shell":false,"env":{"BRIQUE_WRAPPER_NAME":"<wrapper_name>","BRIQUE_MAX_CONCURRENCY":"16","BRIQUE_QUEUE_LIMIT":"256","BRIQUE_TRANSIT_MAX_BYTES":"67108864","BRIQUE_TRANSIT_TTL_SECONDS":"3600"}}}]
     }
   }
 }
 ```
+Wrapper defaults shown above: globally bounded execution, bounded pending queue, 64 MiB maximum serialized `@file` payload, one-hour transient lifetime. Responses and stop control bypass the work queue. A full queue refuses an awaited call with `code:"refused", details.reason:"busy"`; do not retry without backoff. Python, Go and C++ automatically switch transit above the file limit to a transient Matter; use a semantic Matter explicitly only when data must survive.
 3. Capacity descriptor (`capacity/<name>.json`) must set `brique.kind:"interpreted"`, `brique.lang:"python"`, `brique.wrapper:"<wrapper_name>"`, `brique.rel_ctx:"<context relative to wrapper root, "" if same as boundary>"`.
 
 ## The one rule that matters most
 
 **`bindings.py` = pure import + assembly. Zero business logic.**
+
+The Python runtime validates binding keys and callables at bootstrap. Invalid capacity symbols, matter accessors or shutdown hooks fail startup immediately; they are never silently skipped.
 
 If `bindings.py` contains a function or class that does real work → wrong. Extract it.
 
@@ -134,7 +137,7 @@ Rules:
 
 ## Calling out from a capacity (outbound intentions)
 
-Native direct access only within the same wrapper root for a bound matter (`./...` ref). Everything else → outbound intention via `runtime.outbound.emit_intention(...)` / `emit_and_wait(...)`.
+Native direct access only within the same wrapper root for a bound matter (`./...` ref). Everything else → outbound intention via `runtime.outbound.emit_intention(...)` / `emit_and_wait(...)`. To call another **capacity** with parameters, prefer `runtime.calls.call(...)` (next section).
 
 ```python
 async def import_recolte(runtime, params: dict) -> dict:
@@ -153,9 +156,58 @@ Bind `runtime` via `functools.partial(import_recolte, runtime)` or a closure at 
 
 **Critical failure mode**: `from_context=""` / `from_cap=""` defaults are only safe when the wrapper root is the sole owner of the calling capacity. In a shared wrapper root (§ contributing subcontext above), omitting these silently breaks response routing — the call hangs to timeout, no error pointing at the real cause. Always pass both explicitly once more than one context contributes to a wrapper.
 
+## Passing data between capacities (Wrapper.md §17)
+
+**State and transit differ by lifecycle.** State must outlive the call. Transit is consumed by its receiver; across instances its physical carrier may be an automatically consumed Matter.
+
+Chart A — where does this state live? In order:
+1. Must outlive the call? No → transit (chart B).
+2. Must survive the wrapper process? No → `substance_mode=wrapper`.
+3. Does anyone but the owning wrapper read/write it directly (other wrapper, DSL plan, UI)? Yes → `brique`. No → `ext_ref`: absolute locator, file next to the descriptor, owned and written only by this wrapper.
+Size and write pattern pick the file format only: append-only → JSON Lines, replaced as a whole → JSON via temp file + rename, written once → plain file. JSONL: a line counts only after its LF, written in one append; ignore and cut an unterminated last line at open. `schema_ref` of a JSONL matter = schema of one line.
+
+Chart B — in which form does a parameter travel? In order:
+1. Already a semantic Matter → `MatterRef` in `intention.matters` (untouched).
+2. Scalar → value.
+3. Receiver bound in this wrapper → `@object`: `{"@object","wrapper","type"}`, posted by the caller, taken once by the receiver.
+4. Same instance/filesystem: small (≤ 64 KiB) → value; large or binary → consumed `@file`; above the safe file limit → transient Matter.
+5. Address `@ext_*`: small → value; large or binary → transient `@matter`, created in the destination, read and guarded-deleted by `get`.
+`@matter` / `@file` / `@object` are reserved exact reference shapes. Never persist them in business data or a journal.
+
+In the capacity body you only declare the parameter name and schema. The form is the caller's choice:
+
+```python
+async def summarize(runtime, params: dict) -> dict:
+    doc = await params.value("document")      # inline/@object/@file/transient @matter — same value
+    src = await params.value("source")        # semantic matter → MatterRef, NOT read
+    ...
+```
+
+- `await params.value(name, expect_type=None)` is lazy and memoized. A transient `@matter` is fully read, decoded, revision/size checked, then deleted. A semantic Matter still returns `MatterRef` and is never implicitly consumed.
+- A reference has one consumer. To pass it on, emit a new one.
+- Unconsumed references are released at the end of the call, by the runtime. You do not clean up.
+
+Chart C — which path does a call take? From outside the wrapper → engine. Internal and trace wanted → engine. Otherwise capacity bound here → direct, else engine. Tracing is the architect's configuration, not your choice.
+
+```python
+res = await runtime.calls.call(
+    to={"context":"image", "cap":"resize", "type":"user"},
+    params={"image": big_bytes, "width": 256},
+    direct=False,          # True = plain function call, only for a capacity bound in this wrapper
+    timeout_s=30,          # inactivity budget; renewed by runtime.notify_running()
+)
+out = await res.value("image")
+```
+
+`call` emits each parameter in the right form, moves every `MatterRef` to `intention.matters` with the parameter name as `repr`, picks the path, and releases what it posted if the callee is not found or answers with an error (not on an engine timeout). A timed-out direct call is cancelled and awaited through cleanup before release. Errors: `CapacityCallError` (engine path, carries the engine code), the callee's own exception (direct path), `asyncio.TimeoutError`. Use `emit_intention` / `emit_and_wait` directly only for non-capacity targets (`matter.*`, `meaning.query`, traces).
+
+Returns are plain data unless the wrapper turned on `runtime.transit.emit_returns`; do not return `@file`/`@object` yourself. The serialized control message is always capped at 4 MiB; return a matter reference when compatibility mode would otherwise exceed it.
+
+A temporary object remains transit. The runtime may create an ephemeral destination Matter only to cross an instance boundary; it is not a semantic binding and is deleted after successful `get`.
+
 ## Matter bindings
 
-Same discipline: accessor functions in a small dedicated file, imported into `bindings.py`, never inlined there.
+Same discipline: accessor functions in a small dedicated file, imported into `bindings.py`, never inlined there. Matter bindings are static, like capacity bindings.
 
 ```python
 # demo_cache_state.py
@@ -171,7 +223,7 @@ def write_cache(value: object) -> dict:
     ("", "demo_cache"): {"read": read_cache, "write": write_cache, "notify_on_write": True},
 }
 ```
-`notify_on_write: True` → runtime auto-wraps writer, emits `matter_written` to subscribers. Don't hand-roll notification in the accessor.
+`notify_on_write: True` → after the writer commits and releases the matter lock, the runtime emits `matter_written` to subscribers. Notification failure is logged and reported as `notification_failed:true`, but never turns the already committed write into a write failure. Don't hand-roll notification in the accessor.
 
 ## Long-running capacities
 
@@ -200,6 +252,8 @@ Model as an outbound intention to a trace-writing capability (`trace_kind:"user"
 - Matter writes: no intermediate invalid state exposed — visible only as completed.
 - Communication loop must stay responsive; never block it on outbound waits.
 - Excess concurrent work queues; never breaks the runtime.
+- State = matter, transit = `@file`/`@object`, never the reverse. A capacity keeps nothing between calls.
+- Wrapper-owned files (`ext_ref`): single writer, atomic replace for state, a JSONL line is committed by its LF.
 - Wrapper never does global routing / global context reconstruction / meaning interpretation — that's the engine's job.
 
 ## Known-bad pattern still present in this instance — do not copy

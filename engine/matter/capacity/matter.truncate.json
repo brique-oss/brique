@@ -1,0 +1,28 @@
+{
+  "brique": { "_comment": "Engine-native Matter family capacity.", "cap_name": "matter.truncate", "family": "matter", "file": "engine/matter/matter_truncate.go", "function": "capMatterTruncate" },
+  "objective": { "name": "matter.truncate", "description": "Shorten brique-managed substance to a guarded byte or line boundary." },
+  "functional": {
+    "#root": {
+      "role": "Atomically replace substance with a guarded prefix and advance its revision.",
+      "inputs": { "params": {
+        "matter_id": { "type": "string" },
+        "expected_revision": { "type": "integer", "_comment": "Required because truncate is destructive." },
+        "expected_byte_size": { "type": "integer", "_comment": "Required because truncate is destructive." },
+        "truncate_to": { "type": "object", "_comment": "Required: {unit:'bytes'|'lines',size:non-negative integer}. Unit defaults to bytes." }
+      } },
+      "outputs": { "payload": {
+        "ok": { "type": "boolean" }, "matter_id": { "type": "string" }, "revision": { "type": "integer" },
+        "previous_total_bytes": { "type": "integer" }, "total_bytes": { "type": "integer" },
+        "previous_total_lines": { "type": "integer", "_comment": "Lines framing only." }, "total_lines": { "type": "integer", "_comment": "Lines framing only." }
+      } },
+      "effects": { "matter_substance": "A new prefix file atomically replaces the old substance.", "notifications": "Subscribers receive matter_truncated without business bytes." },
+      "transformation_contract": {
+        "morphing": "A guarded current substance becomes a shorter committed prefix.",
+        "invariants": ["Both guards are mandatory.", "A line-framed byte target must be an LF boundary.", "The operation uses replacement rather than in-place truncation; revision-bound read leases opened before the commit become stale and are refused."],
+        "success": ["Revision and committed dimensions advance atomically."],
+        "failure": ["A stale guard, larger target, invalid boundary, or storage failure refuses the operation."]
+      }
+    }
+  },
+  "subjective": {}
+}

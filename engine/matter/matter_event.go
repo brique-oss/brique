@@ -32,6 +32,7 @@ package matter
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,10 +151,11 @@ func (l *MatterLoop) rewriteToWrapperTransport(msg *circulation.Message, entry C
 // -----------------------------
 
 type MatterSubscription struct {
-	ID        string
-	MatterID  string
-	Target    circulation.Address // where to send notifications (typically in.From)
-	CreatedAt int64
+	ID        string              `json:"sub_id"`
+	MatterID  string              `json:"matter_id"`
+	Target    circulation.Address `json:"target"`
+	CreatedAt int64               `json:"created_at"`
+	Durable   bool                `json:"durable"`
 }
 
 // ensureSubsInit
@@ -432,7 +434,19 @@ func (l *MatterLoop) listSubs(matterID string) []MatterSubscription {
 	for _, s := range m {
 		out = append(out, s)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (l *MatterLoop) getSub(matterID, subID string) (MatterSubscription, bool) {
+	if matterID == "" || subID == "" {
+		return MatterSubscription{}, false
+	}
+	l.ensureSubsInit()
+	l.subsMu.RLock()
+	defer l.subsMu.RUnlock()
+	subscription, ok := l.subs[matterID][subID]
+	return subscription, ok
 }
 
 // capMatterSubscribe
@@ -456,6 +470,14 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 			"matter_id is required"))
 		return
 	}
+	matterMu := l.lockFor(matterLockKey(matterID))
+	if matterMu == nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "missing matter lock"))
+		return
+	}
+	matterMu.Lock()
+	defer matterMu.Unlock()
 
 	// Strict catalog check
 	entry, ok := l.catalogGetMatter(matterID)
@@ -521,20 +543,66 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 	}
 
 	target := in.From
-	// Optional override: params[KeyTarget] could be something else later (minimal: ignore unless needed).
+	if rawTarget, exists := in.Params[circulation.KeyTarget]; exists {
+		object, valid := rawTarget.(map[string]any)
+		if !valid {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "target must be an address object"))
+			return
+		}
+		contextName, _ := object[circulation.KeyContext].(string)
+		capName, _ := object[circulation.KeyCap].(string)
+		typeName, _ := object[circulation.KeyType].(string)
+		version, _ := object[circulation.KeyVersion].(string)
+		if strings.TrimSpace(contextName) == "" || strings.TrimSpace(capName) == "" || strings.TrimSpace(typeName) == "" {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "target requires context, type, and cap"))
+			return
+		}
+		target = circulation.Address{Context: circulation.ContextID(contextName), Cap: capName, Type: typeName, Version: version}
+	}
+	durable := false
+	if raw, ok := in.Params[circulation.KeyDurable].(bool); ok {
+		durable = raw
+	}
 
-	l.addSub(matterID, MatterSubscription{
+	previous, hadPrevious := l.getSub(matterID, subID)
+	subscription := MatterSubscription{
 		ID:        subID,
 		MatterID:  matterID,
 		Target:    target,
 		CreatedAt: time.Now().UnixNano(),
-	})
+		Durable:   durable,
+	}
+	l.addSub(matterID, subscription)
+	if durable || (hadPrevious && previous.Durable) {
+		if err := l.persistMatterSubscriptions(); err != nil {
+			if hadPrevious {
+				l.addSub(matterID, previous)
+			} else {
+				l.removeSub(matterID, subID)
+			}
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to persist durable subscription"))
+			return
+		}
+		if hadPrevious && previous.Durable && !durable {
+			if err := l.removePendingEventsForSubscription(subID); err != nil {
+				l.addSub(matterID, previous)
+				_ = l.persistMatterSubscriptions()
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to remove pending durable events"))
+				return
+			}
+		}
+	}
 
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyOK:            true,
 		circulation.KeyMatterID:      matterID,
 		circulation.KeySubID:         subID,
 		circulation.KeySubstanceMode: mode,
+		circulation.KeyDurable:       durable,
 	})
 }
 
@@ -571,6 +639,14 @@ func (l *MatterLoop) capMatterUnsubscribe(msg circulation.Message) {
 			"sub_id is required"))
 		return
 	}
+	matterMu := l.lockFor(matterLockKey(matterID))
+	if matterMu == nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "missing matter lock"))
+		return
+	}
+	matterMu.Lock()
+	defer matterMu.Unlock()
 
 	// Strict catalog check to decide delegation.
 	entry, ok := l.catalogGetMatter(matterID)
@@ -609,7 +685,23 @@ func (l *MatterLoop) capMatterUnsubscribe(msg circulation.Message) {
 	}
 
 	// Brique-mode -> remove locally.
+	previous, _ := l.getSub(matterID, subID)
 	removed := l.removeSub(matterID, subID)
+	if removed && previous.Durable {
+		if err := l.persistMatterSubscriptions(); err != nil {
+			l.addSub(matterID, previous)
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to persist durable unsubscription"))
+			return
+		}
+		if err := l.removePendingEventsForSubscription(subID); err != nil {
+			l.addSub(matterID, previous)
+			_ = l.persistMatterSubscriptions()
+			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to remove pending durable events"))
+			return
+		}
+	}
 
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyOK:            true,
@@ -682,26 +774,16 @@ func (l *MatterLoop) notifyBriqueMatterWritten(matterID string, rev int64, srcIn
 		return
 	}
 	for _, s := range subs {
-		params := map[string]any{
-			circulation.KeyEvent:         circulation.ValueEventMatterWritten,
-			circulation.KeyOp:            circulation.ValueOpWrite,
-			circulation.KeyMatterID:      matterID,
-			circulation.KeyRevision:      rev,
-			circulation.KeySubstanceMode: circulation.ValueModeBrique,
-		}
-		if srcIntentionID != "" {
-			params[circulation.KeySourceIntentionID] = srcIntentionID
-		}
-		l.emitToComm(circulation.Message{
-			Kind: circulation.ValueKindIntention,
-			Intention: circulation.Intention{
-				IntentionID: circulation.NewIntentionID(),
-				To:          s.Target,
-				From:        circulation.Address{Context: circulation.ContextID(l.frame.CtxId), Type: circulation.ValueTypeMatter, Cap: circulation.ValueCapMatterEvent},
-				Params:      params,
-			},
-		})
+		l.emitMatterSubscriptionEvent(s, matterWrittenEventParams(matterID, rev, srcIntentionID))
 	}
+}
+
+func matterWrittenEventParams(matterID string, rev int64, srcIntentionID string) map[string]any {
+	params := map[string]any{circulation.KeyEvent: circulation.ValueEventMatterWritten, circulation.KeyOp: circulation.ValueOpWrite, circulation.KeyMatterID: matterID, circulation.KeyRevision: rev, circulation.KeySubstanceMode: circulation.ValueModeBrique}
+	if srcIntentionID != "" {
+		params[circulation.KeySourceIntentionID] = srcIntentionID
+	}
+	return params
 }
 
 // notifyBriqueMatterDeleted
@@ -765,23 +847,69 @@ func (l *MatterLoop) notifyBriqueMatterDeleted(matterID string, srcIntentionID s
 		return
 	}
 	for _, s := range subs {
-		params := map[string]any{
-			circulation.KeyEvent:         circulation.ValueEventMatterDeleted,
-			circulation.KeyOp:            circulation.ValueOpDelete,
-			circulation.KeyMatterID:      matterID,
-			circulation.KeySubstanceMode: circulation.ValueModeBrique,
-		}
-		if srcIntentionID != "" {
-			params[circulation.KeySourceIntentionID] = srcIntentionID
-		}
-		l.emitToComm(circulation.Message{
-			Kind: circulation.ValueKindIntention,
-			Intention: circulation.Intention{
-				IntentionID: circulation.NewIntentionID(),
-				To:          s.Target,
-				From:        circulation.Address{Context: circulation.ContextID(l.frame.CtxId), Type: circulation.ValueTypeMatter, Cap: circulation.ValueCapMatterEvent},
-				Params:      params,
-			},
-		})
+		l.emitMatterSubscriptionEvent(s, matterDeletedEventParams(matterID, srcIntentionID))
 	}
+}
+
+func matterDeletedEventParams(matterID, srcIntentionID string) map[string]any {
+	params := map[string]any{circulation.KeyEvent: circulation.ValueEventMatterDeleted, circulation.KeyOp: circulation.ValueOpDelete, circulation.KeyMatterID: matterID, circulation.KeySubstanceMode: circulation.ValueModeBrique}
+	if srcIntentionID != "" {
+		params[circulation.KeySourceIntentionID] = srcIntentionID
+	}
+	return params
+}
+
+func (l *MatterLoop) notifyBriqueMatterAppended(matterID string, rev, byteOffset, byteLength, lineOffset, lineLength int64, state substanceState, srcIntentionID string) {
+	for _, subscription := range l.listSubs(matterID) {
+		l.emitMatterSubscriptionEvent(subscription, matterAppendedEventParams(matterID, rev, byteOffset, byteLength, lineOffset, lineLength, state, srcIntentionID))
+	}
+}
+
+func matterAppendedEventParams(matterID string, rev, byteOffset, byteLength, lineOffset, lineLength int64, state substanceState, srcIntentionID string) map[string]any {
+	params := map[string]any{circulation.KeyEvent: circulation.ValueEventMatterAppended, circulation.KeyOp: circulation.ValueOpAppend, circulation.KeyMatterID: matterID, circulation.KeyRevision: rev, circulation.KeySubstanceMode: circulation.ValueModeBrique, circulation.KeyByteOffset: byteOffset, circulation.KeyByteLength: byteLength, circulation.KeyTotalBytes: state.Bytes}
+	if state.Framing == circulation.ValueFramingLines {
+		params[circulation.KeyLineOffset], params[circulation.KeyLineLength], params[circulation.KeyTotalLines] = lineOffset, lineLength, state.Lines
+	}
+	if srcIntentionID != "" {
+		params[circulation.KeySourceIntentionID] = srcIntentionID
+	}
+	return params
+}
+
+func (l *MatterLoop) notifyBriqueMatterTruncated(matterID string, rev, previousBytes, previousLines int64, state substanceState, srcIntentionID string) {
+	for _, subscription := range l.listSubs(matterID) {
+		l.emitMatterSubscriptionEvent(subscription, matterTruncatedEventParams(matterID, rev, previousBytes, previousLines, state, srcIntentionID))
+	}
+}
+
+func matterTruncatedEventParams(matterID string, rev, previousBytes, previousLines int64, state substanceState, srcIntentionID string) map[string]any {
+	params := map[string]any{circulation.KeyEvent: circulation.ValueEventMatterTruncated, circulation.KeyOp: circulation.ValueOpTruncate, circulation.KeyMatterID: matterID, circulation.KeyRevision: rev, "previous_total_bytes": previousBytes, circulation.KeyTotalBytes: state.Bytes, circulation.KeySubstanceMode: circulation.ValueModeBrique}
+	if state.Framing == circulation.ValueFramingLines {
+		params["previous_total_lines"], params[circulation.KeyTotalLines] = previousLines, state.Lines
+	}
+	if srcIntentionID != "" {
+		params[circulation.KeySourceIntentionID] = srcIntentionID
+	}
+	return params
+}
+
+func (l *MatterLoop) capMatterSubscriptionAck(msg circulation.Message) {
+	if msg.Kind != circulation.ValueKindIntention {
+		return
+	}
+	in := msg.Intention
+	subID := strings.TrimSpace(shared.GetParamString(in.Params, circulation.KeySubID))
+	eventID := strings.TrimSpace(shared.GetParamString(in.Params, circulation.KeyEventId))
+	if subID == "" || eventID == "" {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "sub_id and event_id are required"))
+		return
+	}
+	removed, err := l.ackPendingMatterEvent(subID, eventID)
+	if err != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()}, "failed to persist event acknowledgement"))
+		return
+	}
+	l.emitResponseOK(in, map[string]any{circulation.KeyOK: true, circulation.KeySubID: subID, circulation.KeyEventId: eventID, circulation.KeyRemoved: removed})
 }

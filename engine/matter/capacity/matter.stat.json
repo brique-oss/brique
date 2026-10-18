@@ -1,0 +1,49 @@
+{
+  "brique": {
+    "_comment": "Engine-native Matter family capacity.",
+    "cap_name": "matter.stat",
+    "family": "matter",
+    "file": "engine/matter/matter_stat.go",
+    "function": "capMatterStat"
+  },
+  "objective": {
+    "name": "matter.stat",
+    "description": "Read one matter revision and committed substance dimensions without returning its substance."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return lightweight committed metadata for one matter.",
+      "inputs": {
+        "params": {
+          "matter_id": {
+            "type": "string",
+            "_comment": "Required."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "ok": { "type": "boolean" },
+          "matter_id": { "type": "string" },
+          "revision": { "type": "integer" },
+          "substance_mode": { "type": "string" },
+          "substance_framing": { "type": "string" },
+          "total_bytes": { "type": "integer", "_comment": "Present for brique-managed substance." },
+          "total_lines": { "type": "integer", "_comment": "Present only for line-framed brique substance." }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A matter identity becomes a lightweight committed revision and size view.",
+        "invariants": [
+          "matter.stat never returns substance bytes.",
+          "Byte size is canonical; line count is supplementary and only exists in lines framing.",
+          "Descriptor and substance metadata are observed under the matter read lock."
+        ],
+        "success": ["Returns the current committed state."],
+        "failure": ["Refuses unknown matters and invalid framing metadata."]
+      }
+    }
+  },
+  "subjective": {}
+}

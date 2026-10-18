@@ -33,7 +33,7 @@ import (
 func newMatterLoopForGetter() *MatterLoop {
 	return &MatterLoop{
 		catalogMatter: map[string]CatalogEntry{},
-		locks:         map[string]*sync.Mutex{},
+		locks:         map[string]*sync.RWMutex{},
 	}
 }
 
@@ -314,6 +314,19 @@ func TestHTTPSubstanceGetter_N1_HSG_07_HandleSubstanceReadBranches(t *testing.T)
 	g.handleSubstance(rr, req)
 	if rr.Code != http.StatusPartialContent || rr.Body.String() != "ell" {
 		t.Fatalf("range read status/body: %d %q", rr.Code, rr.Body.String())
+	}
+
+	// A scoped lease exposes only its selected representation. An HTTP Range is
+	// relative to that scope, never to bytes outside it.
+	g.mu.Lock()
+	g.leases["r-scoped"] = &lease{rid: "r-scoped", tok: "t", mode: leaseRead, matter: "m1", rev: 5, expires: time.Now().Add(time.Second), substancePath: dataPath, readRanged: true, readOffset: 1, readLength: 3}
+	g.mu.Unlock()
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/substance/r-scoped?tok=t", nil)
+	req.Header.Set("Range", "bytes=1-1")
+	g.handleSubstance(rr, req)
+	if rr.Code != http.StatusPartialContent || rr.Body.String() != "l" {
+		t.Fatalf("scoped range status/body: %d %q", rr.Code, rr.Body.String())
 	}
 }
 

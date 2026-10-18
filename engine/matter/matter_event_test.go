@@ -102,7 +102,7 @@ func newMatterEventHarness() (*MatterLoop, chan circulation.Message) {
 		frame:         frame,
 		done:          make(chan struct{}),
 		catalogMatter: map[string]CatalogEntry{},
-		locks:         map[string]*sync.Mutex{},
+		locks:         map[string]*sync.RWMutex{},
 		subs:          map[string]map[string]MatterSubscription{},
 	}
 	return l, commCh

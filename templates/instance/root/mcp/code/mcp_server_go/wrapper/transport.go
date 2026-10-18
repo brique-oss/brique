@@ -24,11 +24,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/websocket"
 )
-
-const maxControlMessageBytes = 4 << 20
 
 // TransportClient manages the WebSocket connection to the Brique engine boundary.
 type TransportClient struct {
@@ -41,13 +40,27 @@ func NewTransportClient(url string) *TransportClient {
 	return &TransportClient{url: url}
 }
 
-func (t *TransportClient) Connect(_ context.Context) error {
-	conn, err := websocket.Dial(t.url, "", "http://localhost")
-	if err != nil {
-		return fmt.Errorf("transport connect: %w", err)
+func (t *TransportClient) Connect(ctx context.Context) error {
+	delay := 100 * time.Millisecond
+	for attempt := 1; attempt <= 5; attempt++ {
+		conn, err := websocket.Dial(t.url, "", "http://localhost")
+		if err == nil {
+			t.conn = conn
+			return nil
+		}
+		if attempt == 5 || !isRefused(err) {
+			return fmt.Errorf("transport connect: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay < time.Second {
+			delay *= 2
+		}
 	}
-	t.conn = conn
-	return nil
+	return fmt.Errorf("transport connect failed")
 }
 
 func (t *TransportClient) Send(msg any) error {
@@ -68,8 +81,8 @@ func marshalControlMessage(msg any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transport marshal: %w", err)
 	}
-	if len(data) > maxControlMessageBytes {
-		return nil, fmt.Errorf("transport: control message is %d bytes, limit is %d; store large payloads in Matter substance", len(data), maxControlMessageBytes)
+	if len(data) > ControlMessageLimitBytes {
+		return nil, fmt.Errorf("control message is %d bytes, limit is %d; store large payloads in Matter substance", len(data), ControlMessageLimitBytes)
 	}
 	return data, nil
 }
@@ -88,6 +101,9 @@ func (t *TransportClient) ReceiveLoop(ctx context.Context, handler func(raw []by
 				return nil
 			}
 			return err
+		}
+		if len(raw) > ControlMessageLimitBytes {
+			return fmt.Errorf("control message is %d bytes, limit is %d", len(raw), ControlMessageLimitBytes)
 		}
 		handler([]byte(raw))
 	}

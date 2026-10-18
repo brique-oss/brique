@@ -23,6 +23,10 @@
             "type": "string",
             "_comment": "Optional pipe-separated selector such as meaning|functional|data|brique. The four tokens are strictly disjoint — 'meaning' does NOT include 'functional' (meaning only assembles objective+subjective; request 'meaning|functional' to get both). When omitted, all sections are requested for each item. Same semantics as matter.read's read_mode."
           },
+          "data_range": {
+            "type": "object",
+            "_comment": "Optional common range applied to every requested matter. Same bytes/lines offset+length or tail contract as matter.read."
+          },
           "want_meaning": {
             "type": "boolean",
             "_comment": "Ignored when read_mode is present. Has no effect when read_mode is absent. Kept for compatibility only — use read_mode."
@@ -58,6 +62,7 @@
         "invariants": [
           "The batch preserves the original identifier order after blank entries are discarded.",
           "One failing item does not invalidate successful sibling items."
+          ,"Each item is read under its own per-matter read lock so its descriptor and substance view are coherent."
         ],
         "success": [
           "A successful batch response always returns result as one ordered list of per-item envelopes.",
