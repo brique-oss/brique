@@ -1,0 +1,141 @@
+{
+  "_comment": "Wrapper transport frames (engine <-> wrapper runtimes). Every runtime (engine junction, Go, Python, C++) must accept exactly the cases marked accept and, for those, extract the same message kind and delegation handle. Handles are 43 characters of the base64url alphabet; a raw message has no handle.",
+  "handle": "Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA",
+  "cases": [
+    {
+      "name": "raw response is accepted without a handle",
+      "raw": "{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}}",
+      "accept": true,
+      "message_kind": "response",
+      "delegation": ""
+    },
+    {
+      "name": "raw intention is accepted without a handle",
+      "raw": "{\"kind\":\"intention\",\"intention\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174001\",\"to\":{\"context\":\"/root/a\",\"cap\":\"x\",\"type\":\"user\"}}}",
+      "accept": true,
+      "message_kind": "intention",
+      "delegation": ""
+    },
+    {
+      "name": "framed response carries its handle",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": true,
+      "message_kind": "response",
+      "delegation": "Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA"
+    },
+    {
+      "name": "framed intention carries its handle",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"intention\",\"intention\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174001\",\"to\":{\"context\":\"/root/a\",\"cap\":\"x\",\"type\":\"user\"}}},\"delegation\":\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\"}",
+      "accept": true,
+      "message_kind": "intention",
+      "delegation": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+    },
+    {
+      "name": "framed with surrounding whitespace",
+      "raw": "  {\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}\n",
+      "accept": true,
+      "message_kind": "response",
+      "delegation": "Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA"
+    },
+    {
+      "name": "an extra key in a frame is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\",\"extra\":1}",
+      "accept": false
+    },
+    {
+      "name": "a missing handle is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}}}",
+      "accept": false
+    },
+    {
+      "name": "a missing message is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "another frame format is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/2\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "an empty frame format is refused",
+      "raw": "{\"brique_wrapper_frame\":\"\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "a handle that is too short is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OT\"}",
+      "accept": false
+    },
+    {
+      "name": "a handle that is too long is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTAA\"}",
+      "accept": false
+    },
+    {
+      "name": "an empty handle is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"\"}",
+      "accept": false
+    },
+    {
+      "name": "a handle with a character outside base64url is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"+m9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "a handle with padding is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OT=\"}",
+      "accept": false
+    },
+    {
+      "name": "a message that is not an object is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":\"text\",\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "a framed message of another kind is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"trace\",\"trace\":{}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "a framed message without kind is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"intention\":{}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}",
+      "accept": false
+    },
+    {
+      "name": "trailing JSON after a frame is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"} true",
+      "accept": false
+    },
+    {
+      "name": "trailing garbage after a frame is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"Qm9ndXNIYW5kbGVGb3JWZWN0b3JzMDEyMzQ1Njc4OTA\"}x",
+      "accept": false
+    },
+    {
+      "name": "a JSON array is refused",
+      "raw": "[1,2]",
+      "accept": false
+    },
+    {
+      "name": "a JSON string is refused",
+      "raw": "\"text\"",
+      "accept": false
+    },
+    {
+      "name": "not JSON is refused",
+      "raw": "not json",
+      "accept": false
+    },
+    {
+      "name": "an empty input is refused",
+      "raw": "",
+      "accept": false
+    },
+    {
+      "name": "a truncated frame is refused",
+      "raw": "{\"brique_wrapper_frame\":\"brique.wrapper/1\",\"message\":{\"kind\":\"response\",\"response\":{\"intention_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"status\":\"ok\"}},\"delegation\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "accept": false
+    }
+  ]
+}

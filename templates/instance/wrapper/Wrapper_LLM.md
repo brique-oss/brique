@@ -26,14 +26,21 @@ Condensed operational reference. Full rationale: `wrapper/Wrapper.md`. Read that
 - Wrapper resolution is **strictly local per context, no parent inheritance**. A wrapper declared in `parent/context.json` is NOT reachable from `parent/child`. Every capacity that runs inside a shared wrapper process must be declared in the owning context's own tree, even if its code physically imports from elsewhere.
 - Hosted code stays Brique-agnostic: no transport, no envelopes, no routing logic inside capacity code.
 - Capacity is stateless between calls. Anything persistent → matter, not capacity-local state.
+- An engine-delivered external call may arrive in `brique.wrapper/1`. The
+  runtime propagates its opaque handle; never copy it into params, identity,
+  correlation, logs, or capacity code. Python/C++ do this through execution
+  context. Go capacity children must use `params.Call`, `params.Emit`, or
+  `params.Outbound()`; `Runtime.Outbound()` is only for independent local work.
 
 ## Setting up a new Python wrapper
 
 1. Copy verbatim into `<context_dir>/code/<wrapper_name>/`:
    - `wrapper/python/code/main.py`
    - `wrapper/python/code/requirements.txt`
-   - `wrapper/python/code/wrapper/` (entire dir: runtime.py, registry.py, router.py, execution.py, matter.py, outbound.py, correlator.py, transit.py, calls.py, transport.py, constants.py, models.py, util.py, plus `__init__.py` and `_ws_stdlib.py`)
-   - **Never modify these files.** They are the generic runtime, identical across every wrapper in this instance.
+   - **Never copy the runtime library.** It lives once in `<instance>/wrapper/python/lib/wrapper/` and `main.py` finds it by itself (walks up to `wrapper/python/lib`; `BRIQUE_WRAPPER_LIB` overrides).
+   - **Never modify these files or the library.** They are the generic runtime, shared by every wrapper in this instance.
+   - Go: copy `wrapper/go/code/{main.go,bindings.go,go.mod,go.sum}`; `go.mod` references the library with `replace brique/wrapper => <relative path to <instance>/wrapper/go/lib>` (one `../` per level between the wrapper and the instance root). List it in `build.watch` of the wrapper's `context.json` so a library change triggers a rebuild.
+   - C++: copy `wrapper/cpp/code/{main.cpp,bindings.hpp}` and build with `-I<path to <instance>/wrapper/cpp/lib>`.
 2. Declare in `context.json`:
 ```json
 {
@@ -44,11 +51,12 @@ Condensed operational reference. Full rationale: `wrapper/Wrapper.md`. Read that
     },
     "execution": {
       "wrappers": [{"wrapper_name":"<wrapper_name>","mode":"interpreted","ready_timeout_ms":5000,"stop_timeout_ms":1000,
-        "run":{"cmd":["python3","main.py"],"env_name":"env1","shell":false,"env":{"BRIQUE_WRAPPER_NAME":"<wrapper_name>","BRIQUE_MAX_CONCURRENCY":"16","BRIQUE_QUEUE_LIMIT":"256","BRIQUE_TRANSIT_MAX_BYTES":"67108864","BRIQUE_TRANSIT_TTL_SECONDS":"3600"}}}]
+        "watch":["../../../../wrapper/python/lib"],"run":{"cmd":["python3","main.py"],"env_name":"env1","shell":false,"env":{"BRIQUE_WRAPPER_NAME":"<wrapper_name>","BRIQUE_MAX_CONCURRENCY":"16","BRIQUE_QUEUE_LIMIT":"256","BRIQUE_TRANSIT_MAX_BYTES":"67108864","BRIQUE_TRANSIT_TTL_SECONDS":"3600"}}}]
     }
   }
 }
 ```
+Source-change detection is off unless the wrapper entry sets `"source_check_interval_ms"` (e.g. `1000`). `watch` is relative to `<context_dir>/code/<wrapper_name>/` (the example assumes a context directly under the instance's `root/`; one `../` per directory level) and makes the engine restart the wrapper when the shared library changes.
 Wrapper defaults shown above: globally bounded execution, bounded pending queue, 64 MiB maximum serialized `@file` payload, one-hour transient lifetime. Responses and stop control bypass the work queue. A full queue refuses an awaited call with `code:"refused", details.reason:"busy"`; do not retry without backoff. Python, Go and C++ automatically switch transit above the file limit to a transient Matter; use a semantic Matter explicitly only when data must survive.
 3. Capacity descriptor (`capacity/<name>.json`) must set `brique.kind:"interpreted"`, `brique.lang:"python"`, `brique.wrapper:"<wrapper_name>"`, `brique.rel_ctx:"<context relative to wrapper root, "" if same as boundary>"`.
 
@@ -184,6 +192,7 @@ async def summarize(runtime, params: dict) -> dict:
 ```
 
 - `await params.value(name, expect_type=None)` is lazy and memoized. A transient `@matter` is fully read, decoded, revision/size checked, then deleted. A semantic Matter still returns `MatterRef` and is never implicitly consumed.
+- A semantic Matter has one wire form, in and out: `{"context","id"[,"mode"]}`. Incoming entries of `intention.matters` arrive under their `repr` (or `id`). `params.matter(name)` (Python) / `params.Matter(name)` (Go) / `params.matter(name)` (C++) gives a typed `MatterRef` for an incoming Matter or for a result field in that exact form, never reading it. A capacity returns a Matter by putting that object in its `payload`. A reference nested in a structured value is plain data.
 - A reference has one consumer. To pass it on, emit a new one.
 - Unconsumed references are released at the end of the call, by the runtime. You do not clean up.
 

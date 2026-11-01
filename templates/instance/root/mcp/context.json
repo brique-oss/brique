@@ -59,7 +59,10 @@
                 "."
               ],
               "shell": false,
-              "timeout_ms": 30000
+              "timeout_ms": 30000,
+              "watch": [
+                "../../../../wrapper/go/lib"
+              ]
             },
             "mode": "compiled",
             "ready_timeout_ms": 5000,

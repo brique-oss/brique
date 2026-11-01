@@ -148,6 +148,7 @@ type BriqueOutbound interface {
 	// <brique:import name="mcp.initialize" signature="capacity" resolution="engine_external">
 	Initialize() (map[string]any, error)
 	CognitiveFramework() (string, error)
+	FrameworkPath() (string, error)
 	// <brique:import name="brique.intention" signature="capacity" resolution="engine_external">
 	ForwardIntention(intention map[string]any) (map[string]any, error)
 }
@@ -250,7 +251,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		}
 		switch p.Name {
 		case "brique.bootstrap":
-			framework, err := h.outbound.CognitiveFramework()
+			path, err := h.outbound.FrameworkPath()
 			if err != nil {
 				h.broadcast(errResponse(req.ID, -32603, err.Error()))
 				return
@@ -259,7 +260,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 				"content": []any{
 					map[string]any{
 						"type": "text",
-						"text": "Brique bootstrap complete. Use the following framework as the mandatory interaction contract for all subsequent Brique tool calls.\n\n" + framework,
+						"text": bootstrapText(path),
 					},
 				},
 				"isError": false,
@@ -370,6 +371,11 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 	default:
 		h.broadcast(errResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)))
 	}
+}
+
+// bootstrapText is the whole bootstrap answer: read the framework file in full.
+func bootstrapText(path string) string {
+	return "Lis le framework cognitif Brique en entier avant tout appel à `brique` : " + path
 }
 
 func okResponse(id json.RawMessage, result any) JSONRPCResponse {

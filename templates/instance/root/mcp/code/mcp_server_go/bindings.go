@@ -19,6 +19,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"brique/wrapper/wrapper"
@@ -66,6 +67,35 @@ func (c *BriqueCapacityClient) CognitiveFramework() (string, error) {
 	}
 
 	return extractText(frameworkResp), nil
+}
+
+// FrameworkPath returns the absolute path of the cognitive framework file, resolved
+// from the context_dir reported by the engine (read.state).
+func (c *BriqueCapacityClient) FrameworkPath() (string, error) {
+	resp, err := c.rt.Outbound().EmitAndWait(wrapper.OutboundParams{
+		ToContext:     "",
+		ToCap:         "read.state",
+		ToType:        "reflexive",
+		FromCap:       "mcp.response",
+		Params:        map[string]any{"include": []any{"context"}},
+		AwaitResponse: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("mcp.bootstrap #framework_path: %w", err)
+	}
+	return frameworkPathFromState(resp)
+}
+
+// frameworkPathFromState extracts context_dir from a read.state response.
+func frameworkPathFromState(resp map[string]any) (string, error) {
+	dir := ""
+	if ctx, ok := resp["context"].(map[string]any); ok {
+		dir, _ = ctx["context_dir"].(string)
+	}
+	if dir == "" {
+		return "", fmt.Errorf("mcp.bootstrap #framework_path: context_dir missing from read.state")
+	}
+	return filepath.Join(dir, "matter", "brique_cognitive_framework.md"), nil
 }
 
 // ForwardIntention extracts the Brique intention from an MCP tools/call message,

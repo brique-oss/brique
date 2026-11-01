@@ -15,9 +15,35 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+from pathlib import Path
 
-from wrapper.runtime import WrapperRuntime
+_LIB_MARKER = Path("wrapper") / "python" / "lib" / "wrapper" / "__init__.py"
+
+
+def _find_lib() -> Path:
+    """Locate the instance-wide runtime library.
+
+    BRIQUE_WRAPPER_LIB overrides the lookup; otherwise walk up from this file
+    to the first ancestor holding wrapper/python/lib.
+    """
+    override = os.environ.get("BRIQUE_WRAPPER_LIB", "").strip()
+    if override:
+        return Path(override).resolve()
+    here = Path(__file__).resolve().parent
+    for ancestor in (here, *here.parents):
+        if (ancestor / _LIB_MARKER).is_file():
+            return ancestor / "wrapper" / "python" / "lib"
+    raise RuntimeError(
+        "python wrapper library not found: expected <instance>/wrapper/python/lib "
+        "above this directory (or set BRIQUE_WRAPPER_LIB)"
+    )
+
+
+sys.path.insert(0, str(_find_lib()))
+
+from wrapper.runtime import WrapperRuntime  # noqa: E402
 
 
 async def _amain() -> int:

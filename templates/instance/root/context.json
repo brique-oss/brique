@@ -19,7 +19,11 @@
       "communication": {
         "websocket_listener": {
           "_comment": "Root-only shared physical WebSocket listener. Child contexts and wrappers configure only logical paths; wrapper processes receive BRIQUE_WS_ADDR and BRIQUE_WS_URL automatically from the engine.",
-          "addr": "127.0.0.1:8080"
+          "addr": "127.0.0.1:8080",
+          "wrapper_auth": "required",
+          "_wrapper_auth_note": "required (also the engine default): a wrapper connection must carry the per-launch secret the engine puts in BRIQUE_WS_URL (ws://addr/k/<secret>); anything else gets 404. optional is reserved for explicit local development.",
+          "_origin_note": "Browser origin policy. By default only same-origin pages and clients that send no Origin header (wrappers, tools) may connect. List extra web UIs in 'allowed_origins' (exact scheme://host[:port]); 'allow_any_origin': true disables the check and is not recommended.",
+          "allowed_origins": []
         },
         "interfaces": [
           {
@@ -51,6 +55,10 @@
         "wrappers": []
       },
       "reflexive": {
+        "_projection_note": "Optional automatic maintenance of the meaning projection (0 or absent = off): projection_sync_interval_ms applies new/changed/deleted descriptors found on disk every N ms; projection_verify_interval_ms adds a slower pass that also catches in-place edits; projection_sync_on_edit (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. On demand: meaning.update with {sync:true}.",
+        "projection_sync_interval_ms": 0,
+        "projection_sync_on_edit": false,
+        "projection_verify_interval_ms": 0,
         "repo_name": "my-brique-instance",
         "root_repo": true
       },

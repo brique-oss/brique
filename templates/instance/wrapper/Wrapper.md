@@ -296,6 +296,15 @@ So the rule is:
 * same wrapper root and bound matter: direct access is allowed
 * otherwise: use engine capabilities
 
+### Matter references: one wire form, in and out
+
+A semantic Matter reference has one wire form in every wrapper language: `{"context", "id"}` plus an optional `"mode"` (omitted when empty).
+
+* **In.** Each entry of `intention.matters` reaches the capacity under its `repr`, or under its `id` when `repr` is missing. An entry without a non-empty `context` and `id` is ignored. Surrounding whitespace is not significant.
+* **Out.** A reference given to `call` as a top-level parameter is moved to `intention.matters` with the parameter name as `repr`; it is never read. A capacity that returns a Matter writes this same object in its `payload`: there is no separate return slot, and the payload is the set of return parameters.
+* **Typed access.** `get(name)` returns the reference of an incoming Matter. `matter(name)` returns a `MatterRef` for an incoming Matter **or** for a parameter or result field that holds exactly the wire form; it never reads the Matter. A field with any other member is business data. `matter` fails `not_found` when the name is absent and `type_mismatch` when the field is not a reference.
+* A reference nested inside a structured value is data, not a reference: it keeps no Matter semantics and the engine does not see it as a resource. Pass it as a top-level parameter when it must be treated as a Matter.
+
 ## 10.2 Outbound Intention Discipline
 
 When hosted code needs to call outside its direct native scope, it must do so through outbound intentions.
@@ -440,6 +449,26 @@ The wrapper must:
 
 Waiting must not block the communication loop.
 
+### 13.1 Opaque delegated calls
+
+When an externally admitted call reaches a wrapper, the engine sends a
+`brique.wrapper/1` transport frame containing the ordinary Brique message and
+an opaque delegation handle as sibling fields. The handle is transport
+authority: it must never enter `params`, `identity`, `correlation`, logs, or
+business code. Raw messages remain valid only for handle-free local traffic.
+
+The maintained runtimes propagate this handle automatically for the complete
+execution scope. Every child intention is framed with the same handle, has an
+empty identity, and receives root/parent correlation forced from the current
+call. Every `running`, terminal, overload, capacity, and matter response is
+returned in the same frame. The engine binds the handle to the exact wrapper
+name and WebSocket connection, so it cannot be moved after reconnect.
+
+Python and C++ use their task/thread execution context. Go deliberately avoids
+goroutine-local state: capacity code uses `params.Call`, `params.Emit`, or
+`params.Outbound()` for children of the current call. `Runtime.Outbound()` is
+only for independent local work that is not derived from a capacity call.
+
 ---
 
 ## 14. Cross-Language Invariants
@@ -466,7 +495,8 @@ The following apply regardless of host language.
 
 **Observability** — relies on engine traces and wrapper logs.
 
-**Security** — no restriction is enforced at wrapper level.
+**Security** — authorization remains engine-owned; the wrapper runtime only
+preserves the opaque delegation frame and never interprets or widens it.
 
 **State persistence** — wrapper state is ephemeral by default.
 
@@ -496,9 +526,19 @@ This section is the mandatory, concrete pattern for the Python wrapper. It super
 
 ### 15.1 What Already Exists — Copy It, Don't Reinvent It
 
-The generic Python wrapper runtime lives at `wrapper/python/code/wrapper/` in this repository: `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `transit.py`, `calls.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, plus `main.py` and `requirements.txt` at `wrapper/python/code/`. This is the membrane described in §1–§14 and §17, implemented and tested. The engine's own copy under `Engine/wrapper/python` and the copies already living in instance wrappers do not contain `transit.py` and `calls.py` until they are synchronized from here.
+The generic runtime is a **library shared by every wrapper of the instance**, one copy per language under `<instance>/wrapper/<lang>/lib/` (`python/lib/wrapper/`, `go/lib/` with package `wrapper/`, `cpp/lib/wrapper/*.hpp`). A wrapper's own directory `<context_dir>/code/<wrapper_name>/` holds only its entry point (`main.*`), its `bindings.*` and the dependency file. Fixing or upgrading the library is done once and benefits every wrapper. For Python the library is `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `transit.py`, `calls.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, plus `__init__.py` and `_ws_stdlib.py`; the tests live beside it in `python/lib/tests/`. This is the membrane described in §1–§14 and §17, implemented and tested.
 
-**To create a new wrapper for a context**: copy `wrapper/python/code/main.py`, `wrapper/python/code/requirements.txt`, and the entire `wrapper/python/code/wrapper/` directory verbatim into `<context_dir>/code/<wrapper_name>/`. Do not rewrite, re-derive, or "improve" this code — it is the generic runtime, and every real wrapper in this instance uses it unmodified. The only file you write yourself is `bindings.py` (§15.2) and the capacity files it imports (§15.3).
+**To create a new wrapper for a context**: copy `wrapper/python/code/main.py` and `wrapper/python/code/requirements.txt` verbatim into `<context_dir>/code/<wrapper_name>/`. Do **not** copy the library: `main.py` finds `<instance>/wrapper/python/lib` by walking up from its own directory (or from `BRIQUE_WRAPPER_LIB` when set). Do not rewrite, re-derive, or "improve" `main.py` or the library — every real wrapper in this instance uses them unmodified. The only file you write yourself is `bindings.py` (§15.2) and the capacity files it imports (§15.3).
+
+How each language references the shared library (no copy, no per-wrapper duplicate):
+
+| Language | Reference |
+|---|---|
+| Python | `main.py` inserts `<instance>/wrapper/python/lib` in `sys.path` (override: `BRIQUE_WRAPPER_LIB`) |
+| Go | `go.mod` of the wrapper: `require brique/wrapper v0.0.0` and `replace brique/wrapper => <relative path to <instance>/wrapper/go/lib>`; one `../` per directory level between the wrapper and the instance root |
+| C++ | add `-I<path to <instance>/wrapper/cpp/lib>` to the build command |
+
+Source-change detection is **off by default**: a wrapper is built (compiled) or started once and keeps running until it is stopped. To enable it, set `"source_check_interval_ms": <ms>` on the wrapper entry of `context.json` (`execution.wrappers[]`); the source tree is then scanned at most once per interval, and on the next call a compiled wrapper (Go, C++) is rebuilt and restarted and an interpreted one (Python) is restarted. Only the wrapper's own `code/<wrapper_name>/` tree is watched by default (`__pycache__`, `*.pyc` and `.git` are ignored). To also react to changes of the shared library, list it in the wrapper entry of `context.json` under `execution.wrappers[]`: `"watch": ["<path relative to the wrapper's code directory>"]` (for a compiled wrapper, `build.watch` is equivalent and both lists are merged). Pending calls of a restarted process fail.
 
 Declare the wrapper in the owning context's `context.json`:
 
@@ -859,7 +899,7 @@ A capacity declares what it needs: a parameter name and a schema. It declares no
 | Form | On the wire | Use |
 |---|---|---|
 | value | the value itself | small, at most 64 KiB serialized |
-| semantic Matter | an existing reference in `intention.matters` | the data is already state; the capacity receives a `MatterRef` |
+| semantic Matter | an existing reference in `intention.matters`; in a result, `{"context","id"[,"mode"]}` in `payload` (§10.1) | the data is already state; the capacity receives a `MatterRef` |
 | transient `@matter` | `{"@matter":"<id>","context":"...","consume":true,...}` | large or binary transfer to another Brique instance or engine |
 | `@file` | `{"@file": "<absolute path>", "format": "json"}` | too large for the payload, or the receiver is in another wrapper of the same filesystem-backed instance |
 | `@object` | `{"@object": "<name>", "wrapper": "<wrapper_name>", "type": "<type tag>"}` | the receiver is in the same wrapper |
@@ -885,7 +925,7 @@ The 64 KiB threshold is fixed. It is not configurable for now.
 Runtime operations share the same semantics in every language:
 
 * `get(name)` lazily resolves and memoizes inline values, `@object`, `@file`, and transient `@matter`; hosted code always receives the decoded value. Potentially large serialization, disk and HTTP work stays off the communication event loop.
-* A semantic Matter is different: `get(name)` returns its `MatterRef` without reading it. Revision, range, append and lease semantics remain explicit.
+* A semantic Matter is different: `get(name)` returns its `MatterRef` without reading it, and `matter(name)` returns the typed reference of either an incoming Matter or a result field in the wire form of §10.1. Revision, range, append and lease semantics remain explicit.
 * `emit(value, target_address)` picks the form from chart B. Hosted code never supplies `local` or a transport kind. A semantic `MatterRef` is moved to `intention.matters`; a transient Matter remains an ordinary parameter reference so `get` can consume it automatically.
 * The caller is local when its origin context is under the wrapper's boundary context and its origin capacity is bound in the wrapper's registry. A DSL capacity is never local.
 
@@ -933,6 +973,6 @@ It is:
 * context-aware
 * bidirectional
 
-For Python specifically: copy the generic runtime from `wrapper/python/code/` verbatim (§15.1); write `bindings.py` as pure import-and-assemble, never business logic (§15.2); write one file per capacity, named after the capacity (§15.3); read the capacity's own descriptor before writing its code (§15.4).
+For Python specifically: copy `main.py` and `requirements.txt` from `wrapper/python/code/` verbatim and use the shared library `wrapper/python/lib` (§15.1); write `bindings.py` as pure import-and-assemble, never business logic (§15.2); write one file per capacity, named after the capacity (§15.3); read the capacity's own descriptor before writing its code (§15.4).
 
 For placement and transit: decide where state lives with chart A (§17.2), in which form a parameter travels with chart B (§17.3), and which path a call takes with chart C (§17.4).

@@ -38,15 +38,16 @@ It mirrors the Python wrapper's protocol and execution guarantees:
 
 ## Layout
 
-- `code/main.cpp`
-- `code/bindings.hpp`
+- `code/main.cpp` (per wrapper)
+- `code/bindings.hpp` (per wrapper)
 - `code/bindings.hpp.example`
-- `code/wrapper/*.hpp`
+- `lib/wrapper/*.hpp` (runtime library, shared by every C++ wrapper of the instance at `<instance>/wrapper/cpp/lib/`)
+- `lib/tests/runtime_test.cpp`
 
 The implementation is header-only on purpose so a minimal compiled wrapper can be built with a simple command such as:
 
 ```bash
-c++ -std=c++17 -O2 -pthread main.cpp -lcurl -o sandbox_cpp
+c++ -std=c++17 -O2 -pthread -I<instance>/wrapper/cpp/lib main.cpp -lcurl -o sandbox_cpp
 ```
 
 ## Binding Model
@@ -92,6 +93,13 @@ fragment.matters.push_back(wrapper::MatterBinding{
 
 Hosted code receives the `Runtime&` passed to `build_bindings` and can call `emit_intention(...)` or `emit_and_wait(...)`. Outbound params and matter lists are supplied as JSON strings, while the runtime fills source address and parent/root correlation from the currently executing capacity when omitted.
 
+The runtime strictly unwraps `brique.wrapper/1` and carries its opaque
+delegation handle in the worker's `thread_local ExecutionContext`. Responses,
+matter operations, notifications, and child calls reuse the frame; child
+identity is empty and root/parent correlation is forced from the current call.
+The handle never enters hosted parameters. Raw envelopes remain available for
+handle-free local traffic.
+
 ## Runtime guarantees
 
 - current Brique response/status and structured-error envelopes
@@ -107,12 +115,13 @@ Hosted code receives the `Runtime&` passed to `build_bindings` and can call `emi
 Build and run the runtime test with:
 
 ```bash
-c++ -std=c++17 -pthread -Wall -Wextra -pedantic tests/runtime_test.cpp -lcurl -o runtime_test
+cd lib
+c++ -std=c++17 -pthread -Wall -Wextra -pedantic -I. tests/runtime_test.cpp -lcurl -o runtime_test
 ./runtime_test
 ```
 
 ## Placement and transit
 
-`ParamsView::value_raw(name)` resolves inline JSON, wrapper-local `@object`, shared-filesystem `@file`, and transient cross-instance `@matter`; `string_value(name)` uses that same resolution. The destructor releases references the capacity did not consume. Semantic Matters remain explicit and are never consumed by this path.
+`ParamsView::value_raw(name)` resolves inline JSON, wrapper-local `@object`, shared-filesystem `@file`, and transient cross-instance `@matter`; `string_value(name)` uses that same resolution. The destructor releases references the capacity did not consume. Semantic Matters remain explicit and are never consumed by this path: `ParamsView::matter(name)` returns a `MatterRef` for an incoming semantic Matter (`intention.matters`, delivered under its `repr`, or its `id` when `repr` is missing) or for a parameter or result field holding exactly the wire form `{"context","id"[,"mode"]}`, and throws `TransitError` with reason `not_found` or `type_mismatch`. `value_raw(name)` of an incoming Matter returns that wire form, and `MatterRef::json()` produces it for a returned payload. `Runtime::call(target, params, matters)` sends each `MatterRef` in `intention.matters` with its name as `repr`. A `MatterRef` nested in a structured value is data (Wrapper.md §10.1).
 
 Hosted code calls `Runtime::emit(value_raw, TransitTarget{...})` or `Runtime::call(target, params)` with ordinary JSON fragments. The runtime selects the carrier from the address, creates transient destination Matters through HTTP or HTTPS leases when necessary, verifies `brique.transient`, revision and size, and guarded-deletes after successful decoding. The C++ runtime links to libcurl (`-lcurl`) so HTTPS keeps normal certificate verification. `emit_intention` and `emit_and_wait` remain available for raw non-capacity intentions. C++ calls currently stay engine-routed; the Python-only optimization is direct in-process execution, not parameter transit.

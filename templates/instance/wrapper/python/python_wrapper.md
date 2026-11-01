@@ -18,7 +18,7 @@ limitations under the License.
 
 ## 1. Purpose
 
-This specification defines the Python implementation model of a Brique wrapper. The language-independent model, including placement and transit (section 17), is in `Wrapper.md`; this document does not restate it.
+This specification defines the Python implementation model of a Brique wrapper. The runtime is the shared library `<instance>/wrapper/python/lib/wrapper/` (tests in `lib/tests/`, run with `python3 -m unittest discover -s tests` from `lib/`); a wrapper keeps only `main.py`, `requirements.txt` and `bindings.py`. The language-independent model, including placement and transit (section 17), is in `Wrapper.md`; this document does not restate it.
 
 The Python wrapper is a runtime membrane placed between:
 
@@ -153,6 +153,13 @@ Its responsibilities are:
 It must not contain business logic.
 It must not perform binding resolution.
 It must not interpret meaning.
+
+For an engine-delegated call, the router strictly decodes the
+`brique.wrapper/1` transport frame and stores its opaque handle in a task-local
+`contextvar`. Responses and child calls automatically reuse that frame while
+forcing an empty child identity and the current root/parent correlation. The
+handle is never exposed to the capacity or its parameters. Raw envelopes stay
+supported for handle-free local traffic.
 
 #### Interface
 
@@ -549,6 +556,8 @@ It owns:
 * `resolve` and `release` of a reference
 
 `Params.value(name, expect_type=None)` resolves inline, `@file`, `@object` and transient `@matter` values lazily and memoizes the result. Before consuming a transient Matter, it verifies `brique.transient=true`; it then reads the substance completely, checks revision and size, decodes it and deletes it with guards. A forged transit-shaped object therefore cannot delete a semantic Matter, which remains an unread `MatterRef`. Disk and HTTP work run off the communication event loop.
+
+`Params.matter(name)` returns a `MatterRef` for an incoming semantic Matter (`intention.matters`, delivered under its `repr`, or its `id` when `repr` is missing) or for a parameter or result field that holds exactly the wire form `{"context","id"[,"mode"]}`; it never reads the Matter and raises `TransitError` `not_found` or `type_mismatch`. A `MatterRef` serializes to that wire form, so a capacity returns a Matter by putting the `MatterRef` in its result, and the caller reads it back with `matter(name)` (`value(name)` on a result field returns the plain `dict`). A `MatterRef` nested in a structured value is data (Wrapper.md §10.1).
 
 Errors are `TransitError(reason)`: reference not found, type mismatch, wrong wrapper, unreadable file, unsupported.
 
