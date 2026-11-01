@@ -1,0 +1,40 @@
+//go:build !windows
+
+/*
+ * Copyright 2026 Nicolas Cassan
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package execution
+
+import (
+	"os/exec"
+	"syscall"
+)
+
+// setWrapperProcGroup starts the command in its own process group so the whole
+// tree (for example a shell and its children) can be killed at once.
+func setWrapperProcGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+// killWrapperGroup kills the process group led by pid (pgid == pid, as set by
+// setWrapperProcGroup).
+func killWrapperGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+}

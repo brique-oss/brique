@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,27 +34,87 @@ import (
 )
 
 type InterfaceIngressItem struct {
-	Endpoint  string
-	IfaceName string
-	Msg       circulation.Message
+	Endpoint          string
+	IfaceName         string
+	Msg               circulation.Message
+	WrapperConnection WrapperConnection
+	WrapperDelegation WrapperDelegationHandle
+}
+
+// WrapperFrame is the internal representation of the wrapper-only transport
+// envelope. Connection identity never appears in the wire encoding.
+type WrapperFrame struct {
+	Message    circulation.Message
+	Delegation WrapperDelegationHandle
 }
 
 type WebSocketListenerConfig struct {
-	Addr           string
-	ReadLimit      int64
-	WriteTimeout   time.Duration
-	PingInterval   time.Duration
+	Addr         string
+	ReadLimit    int64
+	WriteTimeout time.Duration
+	PingInterval time.Duration
+	// AllowAnyOrigin disables the browser origin check entirely.
 	AllowAnyOrigin bool
+	// WrapperAuth is WrapperAuthRequired (the fail-closed default) or the explicit
+	// development-only WrapperAuthOptional mode.
+	WrapperAuth string
+	// AllowedOrigins lists extra exact origins (scheme://host[:port]) accepted
+	// in addition to same-origin requests and clients that send no Origin.
+	AllowedOrigins []string
+}
+
+// originAllowed is the WebSocket upgrade origin policy. Browsers always send
+// Origin and cannot forge it, so a web page from another site is refused;
+// non-browser clients (wrappers, tools) send none and are not a cross-site
+// threat.
+func (cfg WebSocketListenerConfig) originAllowed(r *http.Request) bool {
+	if cfg.AllowAnyOrigin {
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	for _, allowed := range cfg.AllowedOrigins {
+		if strings.EqualFold(strings.TrimRight(allowed, "/"), origin) {
+			return true
+		}
+	}
+	return false
+}
+
+func loopbackListenAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type WebSocketRoute struct {
-	Path      string
-	Owner     shared.ContextAddr
-	IfaceName string
-	Endpoint  string
-	Ingress   chan<- InterfaceIngressItem
-	Decode    func([]byte) (circulation.Message, bool)
-	Encode    func(circulation.Message) ([]byte, bool)
+	Path          string
+	Owner         shared.ContextAddr
+	IfaceName     string
+	Endpoint      string
+	Ingress       chan<- InterfaceIngressItem
+	Decode        func([]byte) (circulation.Message, bool)
+	Encode        func(circulation.Message) ([]byte, bool)
+	Wrapper       bool
+	DecodeWrapper func([]byte) (WrapperFrame, bool)
+	EncodeWrapper func(WrapperFrame) ([]byte, bool)
+	OnDisconnect  func(WrapperConnection)
 }
 
 type WebSocketRouteHandle interface {
@@ -60,10 +122,22 @@ type WebSocketRouteHandle interface {
 	Close() error
 }
 
+// WrapperWebSocketRouteHandle is available only on the shared listener's
+// concrete handle. Expected-connection binding closes the reconnect race
+// between granting a delegation and emitting its frame.
+type WrapperWebSocketRouteHandle interface {
+	WebSocketRouteHandle
+	CurrentWrapperConnection() (WrapperConnection, bool)
+	SendWrapper(WrapperConnection, WrapperFrame) error
+}
+
 type webSocketSharedListener struct {
 	mu     sync.RWMutex
 	cfg    WebSocketListenerConfig
 	routes map[string]*webSocketRouteState
+
+	secrets    *WrapperSecrets
+	restricted func(wrapper string) bool
 
 	upgrader websocket.Upgrader
 	server   *http.Server
@@ -76,10 +150,11 @@ type webSocketRouteState struct {
 	parent *webSocketSharedListener
 	route  WebSocketRoute
 
-	connMu   sync.RWMutex
-	writeMu  sync.Mutex
-	conn     *websocket.Conn
-	pingDone chan struct{}
+	connMu     sync.RWMutex
+	writeMu    sync.Mutex
+	conn       *websocket.Conn
+	connection WrapperConnection
+	pingDone   chan struct{}
 }
 
 func newWebSocketSharedListener() *webSocketSharedListener {
@@ -102,6 +177,12 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = 20 * time.Second
 	}
+	if cfg.WrapperAuth == "" {
+		cfg.WrapperAuth = WrapperAuthRequired
+	}
+	if cfg.WrapperAuth != WrapperAuthRequired && cfg.WrapperAuth != WrapperAuthOptional {
+		return errors.New("websocket listener: invalid wrapper authentication mode")
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -119,12 +200,7 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	l.upgrader = websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
-		CheckOrigin: func(r *http.Request) bool {
-			if cfg.AllowAnyOrigin {
-				return true
-			}
-			return false
-		},
+		CheckOrigin:     cfg.originAllowed,
 	}
 
 	mux := http.NewServeMux()
@@ -135,7 +211,12 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 		return err
 	}
 	l.ln = ln
-	l.server = &http.Server{Addr: cfg.Addr, Handler: mux}
+	l.server = &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * cfg.PingInterval,
+	}
 	l.started = true
 
 	go func() { _ = l.server.Serve(ln) }()
@@ -173,6 +254,9 @@ func (l *webSocketSharedListener) Register(route WebSocketRoute) (WebSocketRoute
 	if route.Decode == nil || route.Encode == nil {
 		return nil, errors.New("websocket listener: route codec is nil")
 	}
+	if route.Wrapper && (route.DecodeWrapper == nil || route.EncodeWrapper == nil) {
+		return nil, errors.New("websocket listener: wrapper route codec is nil")
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -181,6 +265,9 @@ func (l *webSocketSharedListener) Register(route WebSocketRoute) (WebSocketRoute
 	}
 	if !l.started {
 		return nil, errors.New("websocket listener: not configured")
+	}
+	if !route.Wrapper && !loopbackListenAddress(l.cfg.Addr) {
+		return nil, errors.New("websocket listener: unauthenticated non-wrapper routes require a loopback listener")
 	}
 	if existing, ok := l.routes[route.Path]; ok {
 		if existing.route.Owner == route.Owner && existing.route.IfaceName == route.IfaceName {
@@ -242,10 +329,31 @@ func (l *webSocketSharedListener) Close() error {
 }
 
 func (l *webSocketSharedListener) handleHTTP(rw http.ResponseWriter, r *http.Request) {
+	secret, routePath, hasSecret, wellFormed := splitWrapperSecret(r.URL.Path)
 	l.mu.RLock()
-	state := l.routes[r.URL.Path]
+	var state *webSocketRouteState
+	if wellFormed {
+		state = l.routes[routePath]
+	}
+	required := l.cfg.WrapperAuth == WrapperAuthRequired
 	l.mu.RUnlock()
 	if state == nil {
+		http.NotFound(rw, r)
+		return
+	}
+	authenticated := false
+	if state.route.Wrapper {
+		wrapper := state.route.IfaceName
+		needed := required || (l.restricted != nil && l.restricted(wrapper))
+		if hasSecret || needed {
+			// A wrong or missing secret answers like an unknown route.
+			if l.secrets == nil || !l.secrets.Verify(state.route.Owner, wrapper, secret) {
+				http.NotFound(rw, r)
+				return
+			}
+			authenticated = true
+		}
+	} else if hasSecret {
 		http.NotFound(rw, r)
 		return
 	}
@@ -257,10 +365,21 @@ func (l *webSocketSharedListener) handleHTTP(rw http.ResponseWriter, r *http.Req
 	conn.SetReadLimit(l.cfg.ReadLimit)
 
 	done := make(chan struct{})
+	var connection WrapperConnection
+	if state.route.Wrapper {
+		connection, err = NewWrapperConnection()
+		if err != nil {
+			_ = conn.Close()
+			return
+		}
+		connection.authenticated = authenticated
+	}
 	state.connMu.Lock()
 	old := state.conn
 	oldDone := state.pingDone
+	oldConnection := state.connection
 	state.conn = conn
+	state.connection = connection
 	state.pingDone = done
 	state.connMu.Unlock()
 	if old != nil {
@@ -269,6 +388,7 @@ func (l *webSocketSharedListener) handleHTTP(rw http.ResponseWriter, r *http.Req
 	if oldDone != nil {
 		close(oldDone)
 	}
+	state.notifyDisconnect(oldConnection)
 
 	go state.readLoop(conn)
 	go state.pingLoop(conn, done)
@@ -311,20 +431,76 @@ func (s *webSocketRouteState) Send(msg circulation.Message) error {
 	return nil
 }
 
+func (s *webSocketRouteState) CurrentWrapperConnection() (WrapperConnection, bool) {
+	if s == nil || !s.route.Wrapper {
+		return WrapperConnection{}, false
+	}
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	return s.connection, s.conn != nil && s.connection.Valid()
+}
+
+func (s *webSocketRouteState) SendWrapper(expected WrapperConnection, frame WrapperFrame) error {
+	if s == nil || !s.route.Wrapper || !expected.Valid() || !frame.Delegation.Valid() {
+		return errors.New("websocket route: invalid wrapper frame")
+	}
+	b, ok := s.route.EncodeWrapper(frame)
+	if !ok {
+		return errors.New("websocket route: wrapper encode failed")
+	}
+	limit := shared.DefaultControlMessageBytes
+	if s.parent != nil && s.parent.cfg.ReadLimit > 0 {
+		limit = s.parent.cfg.ReadLimit
+	}
+	if err := shared.ValidateControlMessageBytes(int64(len(b)), limit); err != nil {
+		return fmt.Errorf("websocket route: %w", err)
+	}
+
+	s.connMu.RLock()
+	conn := s.conn
+	connection := s.connection
+	s.connMu.RUnlock()
+	if conn == nil || connection.id != expected.id {
+		return errors.New("websocket route: wrapper connection changed")
+	}
+	return s.write(conn, b)
+}
+
+func (s *webSocketRouteState) write(conn *websocket.Conn, payload []byte) error {
+	if conn == nil {
+		return errors.New("websocket route: no active connection")
+	}
+	timeout := 5 * time.Second
+	if s.parent != nil && s.parent.cfg.WriteTimeout > 0 {
+		timeout = s.parent.cfg.WriteTimeout
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		s.dropConn(conn)
+		return err
+	}
+	return nil
+}
+
 func (s *webSocketRouteState) Close() error {
 	if s == nil {
 		return nil
 	}
 	s.connMu.Lock()
+	connection := s.connection
 	if s.conn != nil {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+	s.connection = WrapperConnection{}
 	if s.pingDone != nil {
 		close(s.pingDone)
 		s.pingDone = nil
 	}
 	s.connMu.Unlock()
+	s.notifyDisconnect(connection)
 	return nil
 }
 
@@ -345,15 +521,35 @@ func (s *webSocketRouteState) readLoop(conn *websocket.Conn) {
 			s.dropConn(conn)
 			return
 		}
-		msg, ok := s.route.Decode(b)
-		if !ok {
-			continue
+		var msg circulation.Message
+		var delegation WrapperDelegationHandle
+		if s.route.Wrapper {
+			frame, ok := s.route.DecodeWrapper(b)
+			if !ok {
+				continue
+			}
+			msg, delegation = frame.Message, frame.Delegation
+		} else {
+			var ok bool
+			msg, ok = s.route.Decode(b)
+			if !ok {
+				continue
+			}
+		}
+		s.connMu.RLock()
+		connection := s.connection
+		current := s.conn == conn
+		s.connMu.RUnlock()
+		if !current {
+			return
 		}
 		select {
 		case s.route.Ingress <- InterfaceIngressItem{
-			Endpoint:  s.route.Endpoint,
-			IfaceName: s.route.IfaceName,
-			Msg:       msg,
+			Endpoint:          s.route.Endpoint,
+			IfaceName:         s.route.IfaceName,
+			Msg:               msg,
+			WrapperConnection: connection,
+			WrapperDelegation: delegation,
 		}:
 		default:
 			s.dropConn(conn)
@@ -397,13 +593,23 @@ func (s *webSocketRouteState) dropConn(conn *websocket.Conn) {
 		return
 	}
 	s.connMu.Lock()
+	var connection WrapperConnection
 	if s.conn == conn {
+		connection = s.connection
 		_ = s.conn.Close()
 		s.conn = nil
+		s.connection = WrapperConnection{}
 		if s.pingDone != nil {
 			close(s.pingDone)
 			s.pingDone = nil
 		}
 	}
 	s.connMu.Unlock()
+	s.notifyDisconnect(connection)
+}
+
+func (s *webSocketRouteState) notifyDisconnect(connection WrapperConnection) {
+	if connection.Valid() && s != nil && s.route.OnDisconnect != nil {
+		s.route.OnDisconnect(connection)
+	}
 }

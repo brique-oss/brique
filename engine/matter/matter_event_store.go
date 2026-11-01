@@ -122,8 +122,12 @@ func (l *MatterLoop) loadMatterEventState() error {
 }
 
 func (l *MatterLoop) enqueueDurableEventWithID(subscription MatterSubscription, params map[string]any, eventID string) error {
+	if !l.subscriptionStillAuthorized(subscription) {
+		l.endSubscription(subscription)
+		return nil
+	}
 	cloned := make(map[string]any, len(params)+2)
-	for key, value := range params {
+	for key, value := range eventParamsFor(subscription, params) {
 		cloned[key] = value
 	}
 	cloned[circulation.KeyEventId] = eventID
@@ -246,6 +250,16 @@ func (l *MatterLoop) reconcileMatterEventMarkers(removeUncommitted bool) error {
 }
 
 func (l *MatterLoop) emitPendingMatterEvent(event MatterPendingEvent) {
+	subscription, exists := l.getSub(event.MatterID, event.SubID)
+	if exists && !l.subscriptionStillAuthorized(subscription) {
+		l.endSubscription(subscription)
+		return
+	}
+	if !exists && event.MatterID != "" && event.SubID != "" && l.hasSubscriptionTable() {
+		// The subscription was removed (revocation, unsubscribe): an event queued
+		// before that must not be delivered afterwards.
+		return
+	}
 	l.emitToComm(circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
 		IntentionID: event.EventID,
 		To:          event.Target,
@@ -255,6 +269,10 @@ func (l *MatterLoop) emitPendingMatterEvent(event MatterPendingEvent) {
 }
 
 func (l *MatterLoop) emitMatterSubscriptionEvent(subscription MatterSubscription, params map[string]any) {
+	if !l.subscriptionStillAuthorized(subscription) {
+		l.endSubscription(subscription)
+		return
+	}
 	if subscription.Durable {
 		// Durable mutation events are staged before the Matter commit and
 		// completed from their marker afterward (or during startup recovery).
@@ -264,7 +282,7 @@ func (l *MatterLoop) emitMatterSubscriptionEvent(subscription MatterSubscription
 		IntentionID: circulation.NewIntentionID(),
 		To:          subscription.Target,
 		From:        circulation.Address{Context: circulation.ContextID(l.frame.CtxId), Type: circulation.ValueTypeMatter, Cap: circulation.ValueCapMatterEvent},
-		Params:      params,
+		Params:      eventParamsFor(subscription, params),
 	}})
 }
 

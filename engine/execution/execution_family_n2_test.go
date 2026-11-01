@@ -50,8 +50,8 @@ func newExecutionFamilyN2Harness(t *testing.T, engineCfg map[string]any) *execut
 			"w1": "/ctx/a/w1",
 		}},
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm:  commCh,
-			shared.FamilyTrace: traceCh,
+			shared.FamilyComm:  executionDeliveryBridge(commCh, 64),
+			shared.FamilyTrace: executionDeliveryBridge(traceCh, 64),
 		},
 	}
 	loop := NewExecutionLoop(frame, engineCfg)
@@ -188,7 +188,7 @@ func TestExecutionFamily_N2_EXEC_01_UserIntentionDispatchesToComm(t *testing.T) 
 	h := newExecutionFamilyN2Harness(t, nil)
 	prepareReadyWrapperUserCap(h, "cap.user")
 
-	h.loop.in <- mkExecUserIntention("i-user", false)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-user", false))
 
 	got := recvExecMsg(t, h.commCh, "user intention dispatch")
 	if got.Kind != circulation.ValueKindIntention || got.Intention.IntentionID != "i-user" {
@@ -205,7 +205,7 @@ func TestExecutionFamily_N2_EXEC_02_AwaitFlagDoesNotCreateInboxCorrelation(t *te
 	h := newExecutionFamilyN2Harness(t, nil)
 	prepareReadyWrapperUserCap(h, "cap.user")
 
-	h.loop.in <- mkExecUserIntention("i-await", true)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-await", true))
 	first := recvExecMsg(t, h.commCh, "awaiting intention dispatch")
 	if first.Kind != circulation.ValueKindIntention || first.Intention.IntentionID != "i-await" {
 		t.Fatalf("unexpected first comm emission: %#v", first)
@@ -217,7 +217,7 @@ func TestExecutionFamily_N2_EXEC_02_AwaitFlagDoesNotCreateInboxCorrelation(t *te
 		t.Fatalf("correlation not preserved on await dispatch: %#v", first.Intention.Correlation)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-await",
@@ -225,7 +225,7 @@ func TestExecutionFamily_N2_EXEC_02_AwaitFlagDoesNotCreateInboxCorrelation(t *te
 			To:          circulation.Address{Context: "/ctx/caller", Cap: "caller"},
 			From:        circulation.Address{Context: "/ctx/a", Cap: "cap.user"},
 		},
-	}
+	})
 
 	execFamilyTraceContains(t, h.traceCh, circulation.ValueTracePendingOrphanId)
 	execFamilyNoComm(t, h.commCh, "await flag should not auto-relay inbox response")
@@ -234,7 +234,7 @@ func TestExecutionFamily_N2_EXEC_02_AwaitFlagDoesNotCreateInboxCorrelation(t *te
 func TestExecutionFamily_N2_EXEC_03_InvalidIntentionTypeFailsClosed(t *testing.T) {
 	h := newExecutionFamilyN2Harness(t, nil)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-bad",
@@ -242,7 +242,7 @@ func TestExecutionFamily_N2_EXEC_03_InvalidIntentionTypeFailsClosed(t *testing.T
 			To:          circulation.Address{Context: "/ctx/a", Type: "bad_type", Cap: "cap"},
 			From:        circulation.Address{Context: "/ctx/caller"},
 		},
-	}
+	})
 
 	out := recvExecMsg(t, h.commCh, "invalid type response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Error == nil || out.Response.Error.Code != circulation.ValueCodeInvalid {
@@ -271,7 +271,7 @@ func TestExecutionFamily_N2_EXEC_04_InternalWrapperReadySignalUpdatesState(t *te
 		t.Fatalf("ready channel should be set")
 	}
 
-	h.loop.in <- mkExecInternalSignalMsg("i-ready", "@wrapper_w1:/runtime", execCapWrapperReady)
+	h.loop.deliveryIn <- localTestDelivery(mkExecInternalSignalMsg("i-ready", "@wrapper_w1:/runtime", execCapWrapperReady))
 
 	waitExecutionFamilyPred(t, time.Second, func() bool {
 		st.Lock()
@@ -289,13 +289,13 @@ func TestExecutionFamily_N2_EXEC_05_PendingFirstResponsePath(t *testing.T) {
 		t.Fatalf("failed to register pending")
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-pending",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 
 	got := recvExecMsg(t, pch, "pending-first delivery")
 	if got.Response.IntentionID != "i-pending" {
@@ -311,7 +311,7 @@ func TestExecutionFamily_N2_EXEC_06_WrapperBackedResponseRewritesToComm(t *testi
 	})
 	h.loop.capCache["cap.comp"] = CapEntry{CapName: "cap.comp", Kind: "compiled", Wrapper: "w1"}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-wrap",
@@ -321,7 +321,7 @@ func TestExecutionFamily_N2_EXEC_06_WrapperBackedResponseRewritesToComm(t *testi
 				Context: "/ctx/a/w1/sub/node",
 			},
 		},
-	}
+	})
 
 	out := recvExecMsg(t, h.commCh, "wrapper-backed response")
 	if out.Kind != circulation.ValueKindResponse {
@@ -338,13 +338,13 @@ func TestExecutionFamily_N2_EXEC_07_OrphanResponseTracedAndDropped(t *testing.T)
 	h := newExecutionFamilyN2Harness(t, nil)
 	h.loop.capCache["cap.dsl"] = CapEntry{CapName: "cap.dsl", Kind: "dsl"}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-orphan",
 			To:          circulation.Address{Cap: "cap.dsl"},
 		},
-	}
+	})
 
 	execFamilyTraceContains(t, h.traceCh, circulation.ValueTracePendingOrphanId)
 	execFamilyNoComm(t, h.commCh, "orphan response should not emit comm")
@@ -353,13 +353,13 @@ func TestExecutionFamily_N2_EXEC_07_OrphanResponseTracedAndDropped(t *testing.T)
 func TestExecutionFamily_N2_EXEC_07b_ResponseResolutionFailureTracesErrorAndOrphan(t *testing.T) {
 	h := newExecutionFamilyN2Harness(t, nil)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-resp-fail",
 			To:          circulation.Address{Cap: "unknown.cap"},
 		},
-	}
+	})
 
 	tr1 := execFamilyTraceContains(t, h.traceCh, circulation.ValueTraceFamilyError)
 	if tr1.Trace.ReasonCode != circulation.ValueReasonUnknownCap {
@@ -398,7 +398,7 @@ func TestExecutionFamily_N2_EXEC_08_DSLInvokeEmitsSingleTerminalResponse(t *test
 		},
 	})
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID:   "i-dsl-one",
@@ -407,14 +407,14 @@ func TestExecutionFamily_N2_EXEC_08_DSLInvokeEmitsSingleTerminalResponse(t *test
 			To:            circulation.Address{Context: "/ctx/a", Type: circulation.ValueTypeUser, Cap: "cap.dsl"},
 			From:          circulation.Address{Context: "/ctx/caller", Type: circulation.ValueTypeUser, Cap: "caller"},
 		},
-	}
+	})
 
 	outbound := recvExecMsg(t, h.commCh, "dsl outbound sub-intention")
 	if outbound.Kind != circulation.ValueKindIntention || outbound.Intention.To.Cap != "down.echo" {
 		t.Fatalf("unexpected outbound dsl sub-intention: %#v", outbound)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: outbound.Intention.IntentionID,
@@ -425,7 +425,7 @@ func TestExecutionFamily_N2_EXEC_08_DSLInvokeEmitsSingleTerminalResponse(t *test
 				"echo": "ok",
 			},
 		},
-	}
+	})
 
 	final := recvExecMsg(t, h.commCh, "dsl final response")
 	if final.Kind != circulation.ValueKindResponse {
@@ -480,7 +480,7 @@ func TestExecutionFamily_N2_EXEC_09_DSLSubResponseDoesNotLeakIntermediateRespons
 		},
 	})
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID:   "i-dsl-seq",
@@ -489,10 +489,10 @@ func TestExecutionFamily_N2_EXEC_09_DSLSubResponseDoesNotLeakIntermediateRespons
 			To:            circulation.Address{Context: "/ctx/a", Type: circulation.ValueTypeUser, Cap: "cap.dsl.seq"},
 			From:          circulation.Address{Context: "/ctx/caller", Type: circulation.ValueTypeUser, Cap: "caller"},
 		},
-	}
+	})
 
 	first := recvExecMsg(t, h.commCh, "dsl sequence outbound 1")
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: first.Intention.IntentionID,
@@ -503,14 +503,14 @@ func TestExecutionFamily_N2_EXEC_09_DSLSubResponseDoesNotLeakIntermediateRespons
 				"cap": "first.echo",
 			},
 		},
-	}
+	})
 
 	second := recvExecMsg(t, h.commCh, "dsl sequence outbound 2")
 	if second.Kind != circulation.ValueKindIntention || second.Intention.To.Cap != "second.echo" {
 		t.Fatalf("unexpected second outbound message: %#v", second)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: second.Intention.IntentionID,
@@ -521,7 +521,7 @@ func TestExecutionFamily_N2_EXEC_09_DSLSubResponseDoesNotLeakIntermediateRespons
 				"cap": "second.echo",
 			},
 		},
-	}
+	})
 
 	final := recvExecMsg(t, h.commCh, "dsl sequence final")
 	if final.Kind != circulation.ValueKindResponse || final.Response.IntentionID != "i-dsl-seq" {
@@ -537,7 +537,7 @@ func TestExecutionFamily_N2_EXEC_CONC_01_MixedInboxTrafficRemainsIsolated(t *tes
 	h := newExecutionFamilyN2Harness(t, nil)
 	prepareReadyWrapperUserCap(h, "cap.user")
 
-	h.loop.in <- mkExecUserIntention("i-mixed", true)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-mixed", true))
 	first := recvExecMsg(t, h.commCh, "mixed first intention")
 	if first.Kind != circulation.ValueKindIntention {
 		t.Fatalf("expected first intention emission, got %#v", first)
@@ -546,7 +546,7 @@ func TestExecutionFamily_N2_EXEC_CONC_01_MixedInboxTrafficRemainsIsolated(t *tes
 		t.Fatalf("correlation not preserved on mixed dispatch: %#v", first.Intention.Correlation)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-mixed",
@@ -554,14 +554,14 @@ func TestExecutionFamily_N2_EXEC_CONC_01_MixedInboxTrafficRemainsIsolated(t *tes
 			To:          circulation.Address{Context: "/ctx/caller"},
 			From:        circulation.Address{Context: "/ctx/a"},
 		},
-	}
-	h.loop.in <- circulation.Message{
+	})
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-orphan-mixed",
 			To:          circulation.Address{Cap: "unknown.cap"},
 		},
-	}
+	})
 
 	execFamilyTraceContains(t, h.traceCh, circulation.ValueTracePendingOrphanId)
 	execFamilyTraceContains(t, h.traceCh, circulation.ValueTracePendingOrphanId)
@@ -572,9 +572,9 @@ func TestExecutionFamily_N2_EXEC_CONC_02_UserBurstDoesNotBlockLoop(t *testing.T)
 	h := newExecutionFamilyN2Harness(t, nil)
 	prepareReadyWrapperUserCap(h, "cap.user")
 
-	h.loop.in <- mkExecUserIntention("i-burst-1", false)
-	h.loop.in <- mkExecUserIntention("i-burst-2", false)
-	h.loop.in <- mkExecUserIntention("i-burst-3", false)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-burst-1", false))
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-burst-2", false))
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-burst-3", false))
 
 	got1 := recvExecMsg(t, h.commCh, "burst msg 1")
 	got2 := recvExecMsg(t, h.commCh, "burst msg 2")
@@ -599,8 +599,8 @@ func TestExecutionFamily_N2_EXEC_CONC_03_StopDoesNotDeadlockOrDoubleEmit(t *test
 	h := newExecutionFamilyN2Harness(t, nil)
 	prepareReadyWrapperUserCap(h, "cap.user")
 
-	h.loop.in <- mkExecUserIntention("i-stop-1", false)
-	h.loop.in <- mkExecUserIntention("i-stop-2", false)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-stop-1", false))
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-stop-2", false))
 	_ = recvExecMsg(t, h.commCh, "pre-stop msg 1")
 	_ = recvExecMsg(t, h.commCh, "pre-stop msg 2")
 

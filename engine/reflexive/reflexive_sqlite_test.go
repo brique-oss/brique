@@ -109,7 +109,7 @@ func newReflexiveSQLiteHarness(t *testing.T, ctxID string) (*ReflexiveLoop, chan
 		CtxId:      ctxID,
 		ContextDir: ctxDir,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: reflexiveDeliveryBridge(commCh, 64),
 		},
 	}
 	l := NewReflexiveLoop(frame, nil)

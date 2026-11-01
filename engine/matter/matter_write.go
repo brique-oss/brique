@@ -206,7 +206,7 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 
 	// Apply metadata patch (minimal merge semantics).
 	var newMatterObj map[string]any
-	newMatterObj = deepCloneMap(curMatterObj)
+	newMatterObj = shared.DeepCloneMap(curMatterObj)
 	currentEngineBrique, _ := curMatterObj[circulation.KeyBrique].(map[string]any)
 
 	if hasMeaningPatch {
@@ -442,6 +442,11 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			return
 		}
 
+		if !l.bindLeaseToCaller(h.RID, in, "write") {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "lease authorization unavailable"))
+			return
+		}
 		l.emitResponseOK(in, map[string]any{
 			circulation.KeyOK:       true,
 			circulation.KeyMatterID: matterID,
@@ -1194,24 +1199,6 @@ func readJSONMapFile(path string) (map[string]any, error) {
 // - Nil input yields empty map.
 //
 
-func deepCloneMap(in map[string]any) map[string]any {
-	if in == nil {
-		return map[string]any{}
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		switch vv := v.(type) {
-		case map[string]any:
-			out[k] = deepCloneMap(vv)
-		case []any:
-			out[k] = deepCloneSlice(vv)
-		default:
-			out[k] = v
-		}
-	}
-	return out
-}
-
 // deepCloneSlice
 //
 // Functional role (Brique DSL):
@@ -1264,21 +1251,6 @@ func deepCloneMap(in map[string]any) map[string]any {
 // Contract:
 // - Preserves original item ordering.
 //
-
-func deepCloneSlice(in []any) []any {
-	out := make([]any, 0, len(in))
-	for _, v := range in {
-		switch vv := v.(type) {
-		case map[string]any:
-			out = append(out, deepCloneMap(vv))
-		case []any:
-			out = append(out, deepCloneSlice(vv))
-		default:
-			out = append(out, v)
-		}
-	}
-	return out
-}
 
 // mergeMapRecursive
 //
@@ -1343,7 +1315,7 @@ func mergeMapRecursive(dst map[string]any, patch map[string]any) {
 				mergeMapRecursive(dvMap, pvMap)
 				dst[k] = dvMap
 			} else {
-				dst[k] = deepCloneMap(pvMap)
+				dst[k] = shared.DeepCloneMap(pvMap)
 			}
 			continue
 		}

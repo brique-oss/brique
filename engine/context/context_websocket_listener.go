@@ -17,6 +17,7 @@
 package context
 
 import (
+	"strings"
 	"time"
 
 	"brique_engine/configuration"
@@ -76,7 +77,8 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 		ReadLimit:      shared.DefaultControlMessageBytes,
 		WriteTimeout:   5 * time.Second,
 		PingInterval:   20 * time.Second,
-		AllowAnyOrigin: true,
+		AllowAnyOrigin: false,
+		WrapperAuth:    junction.WrapperAuthRequired,
 	}
 	if raw == nil {
 		return cfg
@@ -95,6 +97,17 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 	}
 	if v, ok := raw[configuration.KeyIntAnyOri].(bool); ok {
 		cfg.AllowAnyOrigin = v
+	}
+	switch v, _ := raw[configuration.KeyIntWrapperAuth].(string); v {
+	case junction.WrapperAuthRequired, junction.WrapperAuthOptional:
+		cfg.WrapperAuth = v
+	}
+	if list, ok := raw[configuration.KeyIntAllowedOri].([]any); ok {
+		for _, item := range list {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				cfg.AllowedOrigins = append(cfg.AllowedOrigins, strings.TrimSpace(s))
+			}
+		}
 	}
 	return cfg
 }

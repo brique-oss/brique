@@ -18,6 +18,7 @@ package comm
 
 import (
 	"brique_engine/circulation"
+	"brique_engine/junction"
 	"brique_engine/shared"
 	"fmt"
 	"strings"
@@ -42,7 +43,7 @@ import (
 //   - `to.context`
 //   - `to.type`
 //   - `from.context`
-//   - `identity.pubkey` (root outer ingress crypto branch)
+//   - authenticated Delivery authority (raw outer ingress is rejected)
 //   - `intention.params` (root scattered branch)
 //
 // Expected Params Keys/values:
@@ -96,19 +97,39 @@ import (
 // - Single ingress entry point for CommLoop routing.
 // - No business dispatch here; only variant selection.
 
-func (l *CommLoop) routeIngress(msg circulation.Message, endpoint string, ifacename string) {
+func (l *CommLoop) routeIngress(msg circulation.Message, endpoint string, ifacename string, source ...junction.Delivery) {
 	var allowed bool
-	msg, allowed = l.enforceControlMessageLimit(msg)
+	msg, allowed = l.enforceControlMessageLimit(msg, source...)
 	if !allowed {
 		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonPayloadTooLarge, "control message too large; use Matter substance")
 		return
 	}
-	l.sendToTrace(msg, circulation.ValueTraceCommIngress, "", "")
-	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
-		l.routeIngressRoot(msg, endpoint, ifacename)
+	delivery, err := l.deliveryForMessage(msg, source...)
+	if err != nil {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
 		return
 	}
-	l.routeIngressLocal(msg, endpoint, ifacename)
+	if wrapperName, connection, handle, delegated := delivery.ExternalWrapperReturn(); delegated && msg.Kind == circulation.ValueKindResponse {
+		l.sendToTrace(msg, circulation.ValueTraceCommIngress, "", "")
+		l.routeExternalWrapperReturn(delivery, wrapperName, connection, handle)
+		return
+	}
+	if wrapperName, delegated := delivery.ExternalWrapperDispatch(); delegated {
+		l.sendToTrace(msg, circulation.ValueTraceCommIngress, "", "")
+		l.routeExternalWrapperDispatch(delivery, wrapperName)
+		return
+	}
+	if hasExternalAuthority(delivery) && l.isScatteredIntention(&msg) {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
+			"externally admitted scatter requires authorized derivation")
+		return
+	}
+	l.sendToTrace(msg, circulation.ValueTraceCommIngress, "", "")
+	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
+		l.routeIngressRoot(msg, endpoint, ifacename, delivery)
+		return
+	}
+	l.routeIngressLocal(msg, endpoint, ifacename, delivery)
 }
 
 // routeIngressLocal
@@ -198,8 +219,16 @@ func (l *CommLoop) routeIngress(msg circulation.Message, endpoint string, ifacen
 // - Nil `frame` is a silent no-op.
 // - Missing control/family channels and unresolved local dispatch targets fail closed by dropping the message without emitting a response.
 
-func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, ifacename string) {
+func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, ifacename string, source ...junction.Delivery) {
 	if l.frame == nil {
+		return
+	}
+	if endpoint == EndpointOuterCtx {
+		// The only valid outer-context ingress is the root signed-envelope
+		// membrane. A raw interface attached to a child context must never be
+		// upgraded to that child's local authority.
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
+			"unprotected external ingress is disabled outside the root security membrane")
 		return
 	}
 
@@ -236,6 +265,11 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 			}
 			toCtx = canon
 		}
+	}
+	if strings.HasPrefix(toCtx, "@") && hasExternalAuthority(source...) {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
+			"externally authorized delivery cannot cross a physical interface without a dedicated adapter")
+		return
 	}
 
 	// -------- helpers (factorized) --------
@@ -278,7 +312,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 				l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("invalid ext_ ingress on local context: %s", toCtx))
 				return
 			}
-			l.forwardToRoot(msg)
+			l.forwardToRoot(msg, source...)
 			return
 		}
 
@@ -292,7 +326,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 			ownerID, ok := resolveUIOwner(uiName)
 			if !ok {
 				if fromEndpoint == EndpointWrapper && !shared.IsRootContext(l.frame.CtxId) {
-					l.forwardToRoot(msg)
+					l.forwardToRoot(msg, source...)
 					return
 				}
 				// no registry info => drop (do not assume ownership)
@@ -306,10 +340,10 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 					return
 				}
 				if fromEndpoint == EndpointWrapper && !shared.IsRootContext(l.frame.CtxId) {
-					l.forwardToRoot(msg)
+					l.forwardToRoot(msg, source...)
 					return
 				}
-				l.forwardToContext(ownerID, msg)
+				l.forwardToContext(ownerID, msg, source...)
 				return
 			}
 			// we own it: relay directly to iface (no stamping)
@@ -390,8 +424,13 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 						fmt.Sprintf("execution family unavailable for wrapper delivery: %s", wrapperName))
 					return
 				}
+				delivery, err := l.deliveryForMessage(msg, source...)
+				if err != nil {
+					l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
+					return
+				}
 				select {
-				case execCh <- msg:
+				case execCh <- delivery:
 				case <-l.done:
 				}
 				return
@@ -423,7 +462,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 		if len(toCtx) > 0 && toCtx[0] == '@' {
 			// continue; it will go to exec/family below
 		} else if toCtx != "" && shared.ContextAddr(toCtx) != shared.ContextAddr(l.frame.CtxId) {
-			l.forwardToContext(shared.ContextAddr(toCtx), msg)
+			l.forwardToContext(shared.ContextAddr(toCtx), msg, source...)
 			return
 		}
 
@@ -435,23 +474,25 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	// --------------------------------------
 	if endpoint == EndpointWrapper {
 		// Project wrapper-local origin into instance space by prepending boundary ctx_id to from.context.
-		switch msg.Kind {
-		case circulation.ValueKindIntention:
-			// Wrapper Ready Message
-			if msg.Intention.To.Type == circulation.ValueTypeExecution && string(msg.Intention.To.Context) == l.frame.CtxId {
-				msg.Intention.From.Context = circulation.ContextID("@wrapper_" + ifacename)
-			} else {
-				if msg.Intention.From.Context == "" {
-					msg.Intention.From.Context = circulation.ContextID(l.frame.CtxId)
+		if !hasExternalAuthority(source...) {
+			switch msg.Kind {
+			case circulation.ValueKindIntention:
+				// Wrapper Ready Message
+				if msg.Intention.To.Type == circulation.ValueTypeExecution && string(msg.Intention.To.Context) == l.frame.CtxId {
+					msg.Intention.From.Context = circulation.ContextID("@wrapper_" + ifacename)
 				} else {
-					msg.Intention.From.Context = circulation.ContextID(l.frame.CtxId + "/" + string(msg.Intention.From.Context))
+					if msg.Intention.From.Context == "" {
+						msg.Intention.From.Context = circulation.ContextID(l.frame.CtxId)
+					} else {
+						msg.Intention.From.Context = circulation.ContextID(l.frame.CtxId + "/" + string(msg.Intention.From.Context))
+					}
 				}
-			}
-		case circulation.ValueKindResponse:
-			if msg.Response.From.Context == "" {
-				msg.Response.From.Context = circulation.ContextID(l.frame.CtxId)
-			} else {
-				msg.Response.From.Context = circulation.ContextID(l.frame.CtxId + "/" + string(msg.Response.From.Context))
+			case circulation.ValueKindResponse:
+				if msg.Response.From.Context == "" {
+					msg.Response.From.Context = circulation.ContextID(l.frame.CtxId)
+				} else {
+					msg.Response.From.Context = circulation.ContextID(l.frame.CtxId + "/" + string(msg.Response.From.Context))
+				}
 			}
 		}
 
@@ -461,14 +502,14 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 			if ok && strings.HasPrefix(tag, "ui_") && !shared.IsRootContext(l.frame.CtxId) {
 				uiName := strings.TrimPrefix(tag, "ui_")
 				if ownerID, ok := resolveUIOwner(uiName); ok && shared.ContextAddr(l.frame.CtxId) != ownerID {
-					l.forwardToContext(ownerID, msg)
+					l.forwardToContext(ownerID, msg, source...)
 					return
 				} else if !ok {
-					l.forwardToRoot(msg)
+					l.forwardToRoot(msg, source...)
 					return
 				}
 			}
-			l.routeEgressLocal(msg)
+			l.routeEgressLocal(msg, source...)
 			return
 		}
 
@@ -477,7 +518,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 		if len(toCtx) > 0 && toCtx[0] == '@' {
 			// continue; it will go to exec/family below
 		} else if toCtx != "" && shared.ContextAddr(toCtx) != shared.ContextAddr(l.frame.CtxId) {
-			l.forwardToContext(shared.ContextAddr(toCtx), msg)
+			l.forwardToContext(shared.ContextAddr(toCtx), msg, source...)
 			return
 		}
 
@@ -521,8 +562,13 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 		if l.frame.CtrlIn == nil {
 			return
 		}
+		delivery, err := l.deliveryForMessage(msg, source...)
+		if err != nil {
+			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
+			return
+		}
 		select {
-		case l.frame.CtrlIn <- msg:
+		case l.frame.CtrlIn <- delivery:
 			return
 		case <-l.done:
 			return
@@ -541,8 +587,13 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 		if !ok || execCh == nil {
 			return
 		}
+		delivery, err := l.deliveryForMessage(msg, source...)
+		if err != nil {
+			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
+			return
+		}
 		select {
-		case execCh <- msg:
+		case execCh <- delivery:
 			return
 		case <-l.done:
 			return
@@ -556,8 +607,13 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	if !ok || famCh == nil {
 		return
 	}
+	delivery, err := l.deliveryForMessage(msg, source...)
+	if err != nil {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
+		return
+	}
 	select {
-	case famCh <- msg:
+	case famCh <- delivery:
 		return
 	case <-l.done:
 		return
@@ -569,15 +625,8 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 // Functional role (Brique DSL):
 // - >switch by endpoint:
 //   - EndpointOuterCtx:
-//     - verify signature and extract public identity
-//     - stamp from.context as "@ext_<pubkey>"
-//     - >if to.context is @ui_*: delegate to local ingress
-//     - >if to.context is other @*: reject
-//     - resolve external ctx name to internal ctx id
-//     - >if destination is root:
-//       - optional scattered fan-out
-//       - delegate to local ingress
-//     - >else: forward to target internal context
+//     - reject raw application messages; signed envelopes enter through the
+//       dedicated verified membrane as authenticated Deliveries
 //   - EndpointWrapper:
 //     - reject (wrapper ingress forbidden at root)
 //   - EndpointUI:
@@ -604,7 +653,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 //   - `to.cap`
 //   - `to.type`
 //   - `from.context`
-//   - `identity.pubkey`
+//   - authenticated Delivery authority
 //   - `intention.params`
 //
 // Expected Params Keys/values:
@@ -638,8 +687,8 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 //   - emits trace messages describing rejected root ingress traffic.
 //
 // State/Storage Effects:
-// - mutates message source/destination context fields in place for root boundary handling.
-// - may verify external signatures and resolve external names.
+// - mutates message source/destination context fields in place for local root handling.
+// - raw external signatures are never inspected here.
 // - may trigger root scatter fan-out.
 // - may enqueue the message on local family/context/interface channels.
 //
@@ -665,9 +714,19 @@ func (l *CommLoop) routeIngressRoot(
 	msg circulation.Message,
 	endpoint string,
 	ifacename string,
+	source ...junction.Delivery,
 ) {
 	if l.frame == nil {
 		return
+	}
+	// A non-root context can complete an externally admitted request. Its
+	// response reservation must cross the inner-context hop unchanged and is
+	// consumed only by the root signed egress adapter.
+	if len(source) == 1 && msg.Kind == circulation.ValueKindResponse {
+		if _, signedResponse := source[0].ExternalResponse(); signedResponse {
+			l.routeSignedExternalResponse(source[0])
+			return
+		}
 	}
 
 	toCtx := string(msgToContext(&msg))
@@ -676,88 +735,11 @@ func (l *CommLoop) routeIngressRoot(
 	// 1) Messages coming from outside the instance
 	// -------------------------------------------------
 	if endpoint == EndpointOuterCtx {
-		origFrom := ""
-		switch msg.Kind {
-		case circulation.ValueKindIntention:
-			origFrom = strings.TrimSpace(string(msg.Intention.From.Context))
-		case circulation.ValueKindResponse:
-			origFrom = strings.TrimSpace(string(msg.Response.From.Context))
-		}
-
-		// --- crypto / identity boundary ---
-		if err := l.verifyMessageSignature(msg); err != nil {
-			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, "invalid signature")
-			return
-		}
-
-		pub := extractPublicKey(&msg)
-		if pub == "" {
-			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, "public key empty")
-			return
-		}
-		switch msg.Kind {
-		case circulation.ValueKindIntention:
-			if origFrom != "" && !strings.HasPrefix(origFrom, "@ext_") {
-				l.rememberExternalReplyTarget(msg, origFrom, pub)
-			}
-			msg.Intention.From.Context = circulation.ContextID("@ext_" + pub)
-		case circulation.ValueKindResponse:
-			msg.Response.From.Context = circulation.ContextID("@ext_" + pub)
-		}
-
-		// --- destination handling ---
-		if strings.HasPrefix(toCtx, "@") {
-			tag, _, ok := parseAtAddress(toCtx)
-			if !ok {
-				l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("invalid to context address: %s", toCtx))
-				return
-			}
-
-			// @ui_ allowed
-			if strings.HasPrefix(tag, "ui_") {
-				uiName := strings.TrimPrefix(tag, "ui_")
-				if uiName == "" || l.frame.CtxCommReg == nil {
-					l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("invalid ui name at root outer ingress: %s", toCtx))
-					return
-				}
-				ownerID, ok := l.frame.CtxCommReg.ResolveUI(uiName)
-				if !ok || ownerID == "" {
-					l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("unknown ui owner id: %s", toCtx))
-					return
-				}
-				if shared.ContextAddr(l.frame.CtxId) != ownerID {
-					l.forwardToContext(ownerID, msg)
-					return
-				}
-				l.routeIngressLocal(msg, EndpointInnerCtx, ifacename)
-				return
-			}
-
-			// @ext_ chaining not allowed
-			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("invalid external chaining at root: %s", toCtx))
-			return
-		}
-
-		// external ctx_ext_name → internal ctx_id
-		if !l.resolveExtContext(&msg) {
-			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("no internal context corresponding to: %s", toCtx))
-			return
-		}
-
-		toCtx = string(msgToContext(&msg))
-
-		// Outer → root (resolved): enter local root handling (control/family only)
-		if toCtx == shared.RootContextID {
-			// scattered fan-out (root-only)
-			if l.isScatteredIntention(&msg) {
-				l.handleScatteredIngress(msg, endpoint, ifacename)
-				return
-			}
-			l.routeIngressLocal(msg, EndpointInnerCtx, ifacename)
-			return
-		}
-
-		l.forwardToContext(shared.ContextAddr(toCtx), msg)
+		// Raw circulation.Message is no longer an authenticated inter-instance
+		// protocol. External traffic must enter through the signed-envelope
+		// adapter, which creates a non-forgeable Delivery after verification.
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
+			"unprotected external ingress is disabled")
 		return
 	}
 
@@ -797,13 +779,13 @@ func (l *CommLoop) routeIngressRoot(
 
 			// @ext_ : external boundary
 			if strings.HasPrefix(tag, "ext_") {
-				l.routeEgressRoot(msg)
+				l.routeEgressRoot(msg, source...)
 				return
 			}
 
 			// @ui_ : handled locally (root may own UIs)
 			if strings.HasPrefix(tag, "ui_") {
-				l.routeIngressLocal(msg, endpoint, ifacename)
+				l.routeIngressLocal(msg, endpoint, ifacename, source...)
 				return
 			}
 
@@ -818,11 +800,11 @@ func (l *CommLoop) routeIngressRoot(
 				l.handleScatteredIngress(msg, endpoint, ifacename)
 				return
 			}
-			l.routeIngressLocal(msg, endpoint, ifacename)
+			l.routeIngressLocal(msg, endpoint, ifacename, source...)
 			return
 		}
 
-		l.forwardToContext(shared.ContextAddr(toCtx), msg)
+		l.forwardToContext(shared.ContextAddr(toCtx), msg, source...)
 		return
 	}
 
@@ -838,7 +820,7 @@ func (l *CommLoop) routeIngressRoot(
 				l.handleScatteredIngress(msg, endpoint, ifacename)
 				return
 			}
-			l.routeIngressLocal(msg, endpoint, ifacename)
+			l.routeIngressLocal(msg, endpoint, ifacename, source...)
 			return
 		}
 
@@ -851,13 +833,13 @@ func (l *CommLoop) routeIngressRoot(
 			}
 
 			if strings.HasPrefix(tag, "ext_") {
-				l.routeEgressRoot(msg)
+				l.routeEgressRoot(msg, source...)
 				return
 			}
 
 			// @ui_ : handled locally (root may own UIs)
 			if strings.HasPrefix(tag, "ui_") {
-				l.routeIngressLocal(msg, endpoint, ifacename)
+				l.routeIngressLocal(msg, endpoint, ifacename, source...)
 				return
 			}
 

@@ -124,18 +124,9 @@ func (c *ContextLoop) installRuntimeAPI() {
 		// Hierarchy
 		// -----------------------------
 		ListChildrenNames: func() []string {
-			// On utilise la table runtime (childLoops) pas juste desc.Children,
-			// car ça reflète ce qui est effectivement instancié.
 			c.childMu.RLock()
 			defer c.childMu.RUnlock()
-
-			out := make([]string, 0, len(c.childLoops))
-			for name := range c.childLoops {
-				if name != "" {
-					out = append(out, name)
-				}
-			}
-			return out
+			return sortedNames(c.childLoops)
 		},
 
 		HasChild: func(name string) bool {

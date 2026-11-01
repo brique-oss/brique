@@ -20,15 +20,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
-	"brique_engine/circulation"
+	"brique_engine/security/audit"
+	securityruntime "brique_engine/security/runtime"
+	"brique_engine/security/trust"
 	"brique_engine/shared"
 )
 
 // ContextCommEntry is what the engine knows about a context for routing.
 // Keep it minimal; extend later (CtrlIn, metadata, stats, etc.).
 type ContextCommEntry struct {
-	CommIn chan<- circulation.Message
+	CommIn chan<- Delivery
 	// Later:
 	// CtrlIn chan<- ControlSignal
 	// Dir   string
@@ -45,6 +48,24 @@ type ContextCommEntry struct {
 // - byUINameOwners: scoped UI handler resolution (ui_name -> all owner ctx_ids)
 type ContextCommRegistry struct {
 	mu sync.RWMutex
+
+	// securityRuntime is the authoritative complete generation pointer.
+	// trustRuntime remains only as a fallback for isolated trust-only tests and
+	// installations that predate complete runtime publication.
+	trustRuntime      atomic.Pointer[trust.Runtime]
+	securityRuntime   atomic.Pointer[securityruntime.Runtime]
+	auditRecorder     atomic.Pointer[auditHolder]
+	securityInstallMu sync.Mutex
+
+	// projectionNotify is the root's listener for descriptor changes.
+	projectionNotify atomic.Pointer[func(...ProjectionHint)]
+
+	// wrapperDelegations is the single bounded bearer-handle registry shared by
+	// every context in this instance. It contains no wire-facing configuration.
+	wrapperDelegations *WrapperDelegationStore
+
+	// provenance maps a root intention to the principal it was admitted for.
+	provenance *ProvenanceBook
 
 	// Internal addressing: ctx_id -> entry
 	byID map[shared.ContextAddr]ContextCommEntry
@@ -65,6 +86,191 @@ type ContextCommRegistry struct {
 	byWrapperNameToBoundaryID map[string]shared.ContextAddr
 
 	wsListener *webSocketSharedListener
+	// wrapperSecrets proves which connection is the wrapper the engine launched.
+	wrapperSecrets *WrapperSecrets
+}
+
+// ProjectionHint names one element whose descriptor just changed. The zero
+// value means "something changed, I cannot say what": the root then runs a
+// regular fast pass instead of targeting a single file.
+type ProjectionHint struct {
+	CtxID       string
+	ElementType string
+	Name        string
+}
+
+// ProjectionNotifier lets any context tell the instance that descriptor files
+// it owns have just changed, so the root can refresh the meaning projection
+// without waiting for its next periodic pass. Notification is a hint: it is
+// coalesced, never blocks, and is a no-op when nobody listens.
+type ProjectionNotifier interface {
+	NotifyProjectionChange(hints ...ProjectionHint)
+}
+
+// ProjectionNotifierRegistrar is implemented by the shared registry; the root's
+// Reflexive family installs (or clears, with nil) the listener.
+type ProjectionNotifierRegistrar interface {
+	SetProjectionNotifier(func(...ProjectionHint))
+}
+
+// TrustRuntimeProvider is intentionally separate from ContextCommInRegistry.
+// Routing-only implementations and tests do not need to implement security
+// publication, while protected families can fail closed when it is absent.
+type TrustRuntimeProvider interface {
+	TrustRuntime() *trust.Runtime
+}
+
+// AuditProvider exposes the denial journal to families and Communication. It is
+// separate so routing-only implementations need not know about auditing.
+type AuditProvider interface {
+	AuditRecorder() audit.Recorder
+}
+
+type auditHolder struct{ recorder audit.Recorder }
+
+// SetAuditRecorder installs the denial journal. nil removes it.
+func (r *ContextCommRegistry) SetAuditRecorder(recorder audit.Recorder) {
+	if r == nil {
+		return
+	}
+	if recorder == nil {
+		r.auditRecorder.Store(nil)
+	} else {
+		r.auditRecorder.Store(&auditHolder{recorder: recorder})
+	}
+	if r.wrapperDelegations != nil {
+		r.wrapperDelegations.setAudit(recorder)
+	}
+}
+
+// AuditRecorder never returns nil: without a journal it returns audit.Nop.
+func (r *ContextCommRegistry) AuditRecorder() audit.Recorder {
+	if r != nil {
+		if holder := r.auditRecorder.Load(); holder != nil {
+			return holder.recorder
+		}
+	}
+	return audit.Nop
+}
+
+// AuditOf returns the recorder of any registry that provides one, else audit.Nop.
+func AuditOf(registry any) audit.Recorder {
+	if provider, ok := registry.(AuditProvider); ok && provider != nil {
+		return provider.AuditRecorder()
+	}
+	return audit.Nop
+}
+
+type SecurityRuntimeProvider interface {
+	SecurityRuntime() *securityruntime.Runtime
+}
+
+type WrapperDelegationProvider interface {
+	WrapperDelegations() *WrapperDelegationStore
+}
+
+// InstallTrustRuntime publishes the single trust runtime for this instance.
+// Reinstalling the same pointer is idempotent; replacing it is forbidden
+// because policy rotation occurs inside the stable Runtime itself.
+func (r *ContextCommRegistry) InstallTrustRuntime(runtime *trust.Runtime) error {
+	if r == nil || runtime == nil {
+		return fmt.Errorf("trust runtime is required")
+	}
+	r.securityInstallMu.Lock()
+	defer r.securityInstallMu.Unlock()
+	if complete := r.securityRuntime.Load(); complete != nil && complete.Trust() != runtime {
+		return fmt.Errorf("trust runtime conflicts with installed security runtime")
+	}
+	if r.trustRuntime.Load() == nil {
+		r.trustRuntime.Store(runtime)
+		return nil
+	}
+	if r.trustRuntime.Load() == runtime {
+		return nil
+	}
+	return fmt.Errorf("trust runtime is already installed")
+}
+
+// InstallSecurityRuntime publishes the complete instance security runtime in
+// one pointer. Its trust runtime must be the already installed instance trust
+// runtime, or becomes that stable runtime during first installation.
+func (r *ContextCommRegistry) InstallSecurityRuntime(runtime *securityruntime.Runtime) error {
+	if r == nil || runtime == nil || runtime.Trust() == nil {
+		return fmt.Errorf("complete security runtime is required")
+	}
+	r.securityInstallMu.Lock()
+	defer r.securityInstallMu.Unlock()
+	if active := r.securityRuntime.Load(); active != nil {
+		if active == runtime {
+			return nil
+		}
+		return fmt.Errorf("security runtime is already installed")
+	}
+	if activeTrust := r.trustRuntime.Load(); activeTrust != nil && activeTrust != runtime.Trust() {
+		return fmt.Errorf("security runtime uses another trust runtime")
+	}
+	if r.trustRuntime.Load() == nil {
+		r.trustRuntime.Store(runtime.Trust())
+	}
+	r.securityRuntime.Store(runtime)
+	return nil
+}
+
+// SwapSecurityRuntime atomically replaces the complete runtime and its trust
+// view during a validated reload. The expected pointer prevents stale reloads
+// from publishing over a newer generation.
+func (r *ContextCommRegistry) SwapSecurityRuntime(expected, next *securityruntime.Runtime) error {
+	if r == nil || expected == nil || next == nil || next.Trust() == nil {
+		return fmt.Errorf("complete security runtimes are required")
+	}
+	r.securityInstallMu.Lock()
+	defer r.securityInstallMu.Unlock()
+	if r.securityRuntime.Load() != expected {
+		return fmt.Errorf("security runtime changed during reload")
+	}
+	r.securityRuntime.Store(next)
+	// Keep the compatibility fallback coherent after the authoritative complete
+	// pointer is already visible. TrustRuntime never consults this while a
+	// complete runtime exists.
+	r.trustRuntime.Store(next.Trust())
+	return nil
+}
+
+func (r *ContextCommRegistry) SecurityRuntime() *securityruntime.Runtime {
+	if r == nil {
+		return nil
+	}
+	return r.securityRuntime.Load()
+}
+
+// TrustRuntime derives the trust view from the single complete-runtime pointer
+// whenever security is active. This prevents a reload from exposing a mixed
+// trust/provider generation across two separately loaded atomics.
+func (r *ContextCommRegistry) TrustRuntime() *trust.Runtime {
+	if r == nil {
+		return nil
+	}
+	if complete := r.securityRuntime.Load(); complete != nil {
+		return complete.Trust()
+	}
+	return r.trustRuntime.Load()
+}
+
+// WrapperDelegations returns the stable instance-wide wrapper delegation
+// registry. The pointer is created with the context registry and never swapped.
+// Provenance returns the book of admitted roots.
+func (r *ContextCommRegistry) Provenance() *ProvenanceBook {
+	if r == nil {
+		return nil
+	}
+	return r.provenance
+}
+
+func (r *ContextCommRegistry) WrapperDelegations() *WrapperDelegationStore {
+	if r == nil {
+		return nil
+	}
+	return r.wrapperDelegations
 }
 
 // NewContextCommRegistry
@@ -115,15 +321,25 @@ type ContextCommRegistry struct {
 // - Returned registry starts with no routing entries in any index.
 
 func NewContextCommRegistry() *ContextCommRegistry {
-	return &ContextCommRegistry{
+	secrets := newWrapperSecrets()
+	registry := &ContextCommRegistry{
 		byID:                      make(map[shared.ContextAddr]ContextCommEntry),
 		byCtxExtName:              make(map[string]shared.ContextAddr),
 		byIDToCtxExtName:          make(map[shared.ContextAddr]string),
 		byUIName:                  make(map[string]shared.ContextAddr),
 		byUINameOwners:            make(map[string]map[shared.ContextAddr]struct{}),
 		byWrapperNameToBoundaryID: make(map[string]shared.ContextAddr),
+		wrapperDelegations:        MustWrapperDelegationStore(DefaultWrapperDelegationConfig()),
+		provenance:                newProvenanceBook(),
 		wsListener:                newWebSocketSharedListener(),
+		wrapperSecrets:            secrets,
 	}
+	registry.wsListener.secrets = secrets
+	// A component the active policy restricts always needs its secret.
+	registry.wsListener.restricted = func(wrapper string) bool {
+		return registry.TrustRuntime().HasLocalPrincipal(trust.LocalPrincipalPrefix + wrapper)
+	}
+	return registry
 }
 
 func (r *ContextCommRegistry) ConfigureWebSocketListener(cfg WebSocketListenerConfig) error {
@@ -202,7 +418,7 @@ func (r *ContextCommRegistry) CloseWebSocketListener() error {
 //
 // Inputs:
 // - receiver `r *ContextCommRegistry`.
-// - addr shared.ContextAddr, commIn chan<- circulation.Message, extName string.
+// - addr shared.ContextAddr, commIn chan<- Delivery, extName string.
 //
 // Outputs:
 // - no direct return value; observable outputs are side effects defined in this function.
@@ -212,7 +428,7 @@ func (r *ContextCommRegistry) CloseWebSocketListener() error {
 // - Re-registering the same context id overwrites the stored internal channel entry.
 // - Empty `extName` leaves any previously stored inverse external-name entry unchanged unless a different previous alias is being replaced.
 
-func (r *ContextCommRegistry) Register(addr shared.ContextAddr, commIn chan<- circulation.Message, extName string) {
+func (r *ContextCommRegistry) Register(addr shared.ContextAddr, commIn chan<- Delivery, extName string) {
 	if addr == "" || commIn == nil {
 		return
 	}
@@ -366,12 +582,12 @@ func (r *ContextCommRegistry) Unregister(addr shared.ContextAddr, extName string
 // - addr shared.ContextAddr.
 //
 // Outputs:
-// - returns (chan<- circulation.Message, bool).
+// - returns (chan<- Delivery, bool).
 //
 // Contract:
 // - Returns `false` when the context id is not registered.
 
-func (r *ContextCommRegistry) ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool) {
+func (r *ContextCommRegistry) ResolveCh(addr shared.ContextAddr) (chan<- Delivery, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	e, ok := r.byID[addr]
@@ -983,4 +1199,27 @@ func (r *ContextCommRegistry) ResolveWrapperBoundary(wrapperName string) (shared
 	defer r.mu.RUnlock()
 	ctx, ok := r.byWrapperNameToBoundaryID[wrapperName]
 	return ctx, ok
+}
+
+// SetProjectionNotifier installs the listener called on descriptor changes;
+// nil removes it.
+func (r *ContextCommRegistry) SetProjectionNotifier(fn func(...ProjectionHint)) {
+	if r == nil {
+		return
+	}
+	if fn == nil {
+		r.projectionNotify.Store(nil)
+		return
+	}
+	r.projectionNotify.Store(&fn)
+}
+
+// NotifyProjectionChange signals that descriptor files changed. It never blocks.
+func (r *ContextCommRegistry) NotifyProjectionChange(hints ...ProjectionHint) {
+	if r == nil {
+		return
+	}
+	if fn := r.projectionNotify.Load(); fn != nil {
+		(*fn)(hints...)
+	}
 }

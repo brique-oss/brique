@@ -20,7 +20,6 @@ import (
 	"sort"
 	"testing"
 
-	"brique_engine/circulation"
 	"brique_engine/junction"
 	"brique_engine/shared"
 )
@@ -29,10 +28,10 @@ type fakeFamilyLoop struct {
 	state shared.FamilyState
 }
 
-func (f *fakeFamilyLoop) InChan() chan circulation.Message { return make(chan circulation.Message) }
-func (f *fakeFamilyLoop) Start()                           {}
-func (f *fakeFamilyLoop) Stop()                            {}
-func (f *fakeFamilyLoop) State() shared.FamilyState        { return f.state }
+func (f *fakeFamilyLoop) InChan() chan junction.Delivery { return make(chan junction.Delivery) }
+func (f *fakeFamilyLoop) Start()                         {}
+func (f *fakeFamilyLoop) Stop()                          {}
+func (f *fakeFamilyLoop) State() shared.FamilyState      { return f.state }
 
 func TestInstallRuntimeAPI_N1_CLRA_01_RuntimeInstalled(t *testing.T) {
 	c := &ContextLoop{

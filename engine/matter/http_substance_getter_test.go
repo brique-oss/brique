@@ -362,8 +362,8 @@ func TestHTTPSubstanceGetter_N1_HSG_09_UtilityHelpers(t *testing.T) {
 	if !subtleStringNe("abc", "abd") || !subtleStringNe("a", "ab") {
 		t.Fatalf("different strings should compare not equal")
 	}
-	if tok := randTok(0); tok == "" {
-		t.Fatalf("randTok should produce non-empty token")
+	if tok, err := randTok(0); err != nil || tok == "" {
+		t.Fatalf("randTok should produce non-empty token: %q, %v", tok, err)
 	}
 
 	rr := httptest.NewRecorder()

@@ -27,6 +27,7 @@ func rewriteExternalWireDestination(msg circulation.Message) circulation.Message
 	if !ok || path == "" {
 		return msg
 	}
+	path = "/" + path
 	switch msg.Kind {
 	case circulation.ValueKindIntention:
 		msg.Intention.To.Context = circulation.ContextID(path)

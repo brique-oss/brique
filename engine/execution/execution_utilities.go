@@ -17,12 +17,12 @@
 package execution
 
 import (
+	"brique_engine/circulation"
+	"brique_engine/configuration"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
-	"brique_engine/circulation"
-	"brique_engine/configuration"
 )
 
 // getBriqueSection
@@ -197,30 +197,64 @@ func synStr(m map[string]any, k string) string {
 // - Fails closed on missing file, invalid JSON, missing brique section, or cap-name mismatch.
 // - Empty capability name or empty `capRoot` returns `(CapEntry{}, false)` without filesystem access.
 
+// maxCapabilityNameBytes bounds a capacity name used as a descriptor file name.
+const maxCapabilityNameBytes = 255
+
+// validCapabilityName reports whether name may be used to build a descriptor
+// path under the capacity directory.
+//
+// Contract:
+//   - a capacity name is a file name: no path separator, no NUL or control
+//     character, bounded length. Dots are fine (`matter.read`, `sandbox.cpp.echo`);
+//   - rejecting here keeps every disk lookup inside the capacity directory.
+func validCapabilityName(name string) bool {
+	if name == "" || len(name) > maxCapabilityNameBytes {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '/' || c == '\\' || c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 func (l *ExecutionLoop) loadCapEntryFromDisk(capName string) (CapEntry, bool) {
+	ce, ok, _ := l.readCapEntry(capName)
+	return ce, ok
+}
+
+// readCapEntry loads one capacity descriptor. `absent` is true only when the
+// descriptor file does not exist (as opposed to being unreadable or invalid),
+// which is the only case eligible for negative caching.
+func (l *ExecutionLoop) readCapEntry(capName string) (ce CapEntry, ok bool, absent bool) {
 	capName = strings.TrimSpace(capName)
 	if capName == "" {
-		return CapEntry{}, false
+		return CapEntry{}, false, false
+	}
+	if !validCapabilityName(capName) {
+		return CapEntry{}, false, false
 	}
 	if strings.TrimSpace(l.capRoot) == "" {
-		return CapEntry{}, false
+		return CapEntry{}, false, false
 	}
 
 	path := filepath.Join(l.capRoot, capName+".json")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return CapEntry{}, false
+		return CapEntry{}, false, os.IsNotExist(err)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(b, &doc); err != nil || doc == nil {
-		return CapEntry{}, false
+		return CapEntry{}, false, false
 	}
 	syn := getBriqueSection(doc)
 	if syn == nil {
-		return CapEntry{}, false
+		return CapEntry{}, false, false
 	}
 
-	ce := CapEntry{}
+	ce = CapEntry{}
 	ce.CapName = synStr(syn, configuration.KeyCapName)
 	ce.RelCtx = synStr(syn, configuration.KeyCapRelCtx)
 	ce.Wrapper = synStr(syn, configuration.KeyCapWrp)
@@ -229,13 +263,13 @@ func (l *ExecutionLoop) loadCapEntryFromDisk(capName string) (CapEntry, bool) {
 
 	// Strict: cap_name must be present and must match the requested key (cache coherence).
 	if strings.TrimSpace(ce.CapName) == "" {
-		return CapEntry{}, false
+		return CapEntry{}, false, false
 	}
 	if strings.TrimSpace(ce.CapName) != capName {
 		// refuse mismatch (avoid surprising aliasing)
-		return CapEntry{}, false
+		return CapEntry{}, false, false
 	}
-	return ce, true
+	return ce, true, false
 }
 
 // getCapEntry
@@ -293,7 +327,7 @@ func (l *ExecutionLoop) loadCapEntryFromDisk(capName string) (CapEntry, bool) {
 
 func (l *ExecutionLoop) getCapEntry(capName string) (CapEntry, bool) {
 	capName = strings.TrimSpace(capName)
-	if capName == "" {
+	if !validCapabilityName(capName) {
 		return CapEntry{}, false
 	}
 
@@ -305,19 +339,30 @@ func (l *ExecutionLoop) getCapEntry(capName string) (CapEntry, bool) {
 		return ce, true
 	}
 
-	// slow path: load from disk + cache (best-effort singleflight using capMu write lock)
+	// negative cache: known absent and the capacity directory is unchanged
+	if l.knownMissing(capName) {
+		return CapEntry{}, false
+	}
+
+	// slow path: read the descriptor without holding any lock. Concurrent
+	// lookups of the same name may read twice; the first stored entry wins.
+	dirMTime, haveDir := l.capDirMTime()
+	loaded, ok, absent := l.readCapEntry(capName)
+	if !ok {
+		if absent && haveDir {
+			l.rememberMissing(capName, dirMTime)
+		}
+		return CapEntry{}, false
+	}
+
 	l.capMu.Lock()
-	// re-check
-	if ce, ok := l.capCache[capName]; ok {
+	if existing, ok := l.capCache[capName]; ok {
 		l.capMu.Unlock()
-		return ce, true
+		return existing, true
 	}
-	loaded, ok := l.loadCapEntryFromDisk(capName)
-	if ok {
-		l.capCache[capName] = loaded
-	}
+	l.capCache[capName] = loaded
 	l.capMu.Unlock()
-	return loaded, ok
+	return loaded, true
 }
 
 // rewriteResponseToWrapperTransport

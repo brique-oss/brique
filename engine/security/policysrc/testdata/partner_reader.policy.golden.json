@@ -1,0 +1,341 @@
+{
+  "format": "brique-trust-policy",
+  "format_version": "2",
+  "policy_id": "main",
+  "instance_id": "prod-a",
+  "revision": "7",
+  "previous_policy_hash": "bp1_previous",
+  "issued_at": "2026-11-01T10:00:00Z",
+  "principals": [
+    {
+      "principal_id": "partner-a",
+      "kind": "instance",
+      "status": "active",
+      "scope_ids": [
+        "s.partner-a"
+      ],
+      "signing_keys": [
+        {
+          "key_id": "bk1_oV0ySnCjoz03kpMBf4fUcAF-hp2SnbFvnGbxm__jBmw",
+          "algorithm": "ed25519",
+          "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+          "status": "active"
+        }
+      ]
+    }
+  ],
+  "scopes": [
+    {
+      "scope_id": "s.partner-a",
+      "description": "compiled from the access source for principal partner-a",
+      "allow": {
+        "capabilities": [],
+        "resources": [
+          {
+            "permission_id": "p.partner-a.a0",
+            "kind": "context",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "actions": [
+              "read",
+              "stat",
+              "read_recursive"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a1",
+            "kind": "capacity",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a2",
+            "kind": "schema",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a3",
+            "kind": "document",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a4",
+            "kind": "matter",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read",
+              "stat"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a5",
+            "kind": "structure",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a6",
+            "kind": "trace",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "selector": {
+              "ids": [
+                "events"
+              ]
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a7",
+            "kind": "matter",
+            "context": {
+              "path": "/root/catalog/inbox",
+              "include_descendants": false
+            },
+            "selector": {
+              "ids": [
+                "orders"
+              ]
+            },
+            "actions": [
+              "append",
+              "delete",
+              "truncate",
+              "write"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a8",
+            "kind": "matter",
+            "context": {
+              "path": "/root/catalog/inbox",
+              "include_descendants": false
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "create"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.a9",
+            "kind": "capacity",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": false
+            },
+            "selector": {
+              "ids": [
+                "f"
+              ]
+            },
+            "actions": [
+              "execute"
+            ]
+          }
+        ],
+        "verbs": [
+          {
+            "permission_id": "p.partner-a.v0",
+            "context": {
+              "path": "/root/catalog",
+              "include_descendants": true
+            },
+            "verbs": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.v1",
+            "context": {
+              "path": "/root/catalog/inbox",
+              "include_descendants": false
+            },
+            "verbs": [
+              "write"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.v2",
+            "context": {
+              "path": "/root/catalog/inbox",
+              "include_descendants": false
+            },
+            "verbs": [
+              "create"
+            ]
+          }
+        ]
+      },
+      "deny": {
+        "capabilities": [],
+        "resources": [
+          {
+            "permission_id": "p.partner-a.d0",
+            "kind": "context",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "actions": [
+              "read",
+              "stat",
+              "read_recursive"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d1",
+            "kind": "capacity",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d2",
+            "kind": "schema",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d3",
+            "kind": "document",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d4",
+            "kind": "matter",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read",
+              "stat"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d5",
+            "kind": "structure",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "all": true
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d6",
+            "kind": "trace",
+            "context": {
+              "path": "/root/catalog/secrets",
+              "include_descendants": true
+            },
+            "selector": {
+              "ids": [
+                "events"
+              ]
+            },
+            "actions": [
+              "read"
+            ]
+          },
+          {
+            "permission_id": "p.partner-a.d7",
+            "kind": "matter",
+            "context": {
+              "path": "/root/catalog/prix",
+              "include_descendants": false
+            },
+            "selector": {
+              "ids": [
+                "salaires"
+              ]
+            },
+            "actions": [
+              "read",
+              "stat"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

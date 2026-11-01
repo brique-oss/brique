@@ -36,8 +36,17 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/security/trust"
 	"brique_engine/shared"
 )
+
+const wrapperWebSocketFrameFormat = "brique.wrapper/1"
+
+type wrapperWebSocketFrame struct {
+	Format     string              `json:"brique_wrapper_frame"`
+	Message    circulation.Message `json:"message"`
+	Delegation string              `json:"delegation"`
+}
 
 type websocketRouteRegistry interface {
 	RegisterWebSocketRoute(route junction.WebSocketRoute) (junction.WebSocketRouteHandle, error)
@@ -111,6 +120,10 @@ func (w *wsInterface) loadConfig(m map[string]any) error {
 	return nil
 }
 
+func (w *wsInterface) Directions() InterfaceDirections {
+	return InterfaceDirections{WriteLoop: true}
+}
+
 func (w *wsInterface) Start() error {
 	if w.rt == nil {
 		return errors.New("ws: runtime is nil")
@@ -130,13 +143,17 @@ func (w *wsInterface) Start() error {
 		return errors.New("ws: shared listener unavailable")
 	}
 	handle, err := reg.RegisterWebSocketRoute(junction.WebSocketRoute{
-		Path:      w.path,
-		Owner:     shared.ContextAddr(w.frame.CtxId),
-		IfaceName: w.rt.Name,
-		Endpoint:  w.rt.Type,
-		Ingress:   w.rt.Ingress,
-		Decode:    decodeRawWebSocketMessage,
-		Encode:    encodeRawWebSocketMessage,
+		Path:          w.path,
+		Owner:         shared.ContextAddr(w.frame.CtxId),
+		IfaceName:     w.rt.Name,
+		Endpoint:      w.rt.Type,
+		Ingress:       w.rt.Ingress,
+		Decode:        decodeRawWebSocketMessage,
+		Encode:        encodeRawWebSocketMessage,
+		Wrapper:       w.rt.Type == EndpointWrapper,
+		DecodeWrapper: decodeWrapperWebSocketFrame,
+		EncodeWrapper: encodeWrapperWebSocketFrame,
+		OnDisconnect:  w.revokeWrapperConnection,
 	})
 	if err != nil {
 		return err
@@ -146,6 +163,49 @@ func (w *wsInterface) Start() error {
 		w.done = make(chan struct{})
 	}
 	return nil
+}
+
+func (w *wsInterface) revokeWrapperConnection(connection junction.WrapperConnection) {
+	if w == nil || w.frame == nil || w.frame.CtxCommReg == nil || !connection.Valid() {
+		return
+	}
+	provider, ok := w.frame.CtxCommReg.(junction.WrapperDelegationProvider)
+	if !ok || provider.WrapperDelegations() == nil {
+		return
+	}
+	provider.WrapperDelegations().RevokeConnection(connection)
+}
+
+func (w *wsInterface) currentWrapperConnection() (junction.WrapperConnection, bool) {
+	if w == nil || w.handle == nil {
+		return junction.WrapperConnection{}, false
+	}
+	handle, ok := w.handle.(junction.WrapperWebSocketRouteHandle)
+	if !ok {
+		return junction.WrapperConnection{}, false
+	}
+	return handle.CurrentWrapperConnection()
+}
+
+func (w *wsInterface) sendWrapperFrame(connection junction.WrapperConnection, frame junction.WrapperFrame) error {
+	if w == nil || w.handle == nil {
+		return errors.New("ws: wrapper route handle unavailable")
+	}
+	handle, ok := w.handle.(junction.WrapperWebSocketRouteHandle)
+	if !ok {
+		return errors.New("ws: wrapper route handle unsupported")
+	}
+	return handle.SendWrapper(connection, frame)
+}
+
+func (w *wsInterface) revokeWrapperHandle(handle junction.WrapperDelegationHandle) {
+	if w == nil || w.frame == nil || w.frame.CtxCommReg == nil || !handle.Valid() {
+		return
+	}
+	provider, ok := w.frame.CtxCommReg.(junction.WrapperDelegationProvider)
+	if ok && provider.WrapperDelegations() != nil {
+		provider.WrapperDelegations().Revoke(handle)
+	}
 }
 
 func (w *wsInterface) ReadLoop() error {
@@ -162,7 +222,7 @@ func (w *wsInterface) WriteLoop() error {
 	if w.rt == nil {
 		return nil
 	}
-	if w.rt.Egress == nil {
+	if w.rt.Egress == nil && w.rt.WrapperEgress == nil {
 		return errors.New("ws: runtime egress not wired")
 	}
 	if w.handle == nil {
@@ -171,17 +231,32 @@ func (w *wsInterface) WriteLoop() error {
 	if w.done == nil {
 		w.done = make(chan struct{})
 	}
-	for {
+	rawEgress := w.rt.Egress
+	wrapperEgress := w.rt.WrapperEgress
+	for rawEgress != nil || wrapperEgress != nil {
 		select {
 		case <-w.done:
 			return nil
-		case msg, ok := <-w.rt.Egress:
+		case msg, ok := <-rawEgress:
 			if !ok {
-				return nil
+				rawEgress = nil
+				continue
 			}
 			_ = w.handle.Send(msg)
+		case item, ok := <-wrapperEgress:
+			if !ok {
+				wrapperEgress = nil
+				continue
+			}
+			if err := w.sendWrapperFrame(item.Connection, item.Frame); err != nil {
+				w.revokeWrapperHandle(item.Frame.Delegation)
+				if w.rt.ReportEgressOutcome != nil {
+					w.rt.ReportEgressOutcome(item.Frame.Message, InterfaceEgressOutcome{Err: err})
+				}
+			}
 		}
 	}
+	return nil
 }
 
 func (w *wsInterface) Close() error {
@@ -213,4 +288,38 @@ func encodeRawWebSocketMessage(msg circulation.Message) ([]byte, bool) {
 		return nil, false
 	}
 	return b, true
+}
+
+func decodeWrapperWebSocketFrame(data []byte) (junction.WrapperFrame, bool) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return junction.WrapperFrame{}, false
+	}
+	// Compatibility is intentionally limited to handle-free traffic while the
+	// wrapper runtimes migrate. A frame claiming the wrapper protocol is always
+	// decoded strictly and can never fall back to a raw message: the claim is the
+	// presence of the key, whatever its value.
+	if _, framed := probe["brique_wrapper_frame"]; !framed {
+		message, ok := decodeRawWebSocketMessage(data)
+		return junction.WrapperFrame{Message: message}, ok
+	}
+	var wire wrapperWebSocketFrame
+	if err := trust.StrictDecodeApplicationJSON(data, &wire); err != nil || wire.Format != wrapperWebSocketFrameFormat {
+		return junction.WrapperFrame{}, false
+	}
+	handle, err := junction.ParseWrapperDelegationHandle(wire.Delegation)
+	if err != nil || (wire.Message.Kind != circulation.ValueKindIntention && wire.Message.Kind != circulation.ValueKindResponse) {
+		return junction.WrapperFrame{}, false
+	}
+	return junction.WrapperFrame{Message: wire.Message, Delegation: handle}, true
+}
+
+func encodeWrapperWebSocketFrame(frame junction.WrapperFrame) ([]byte, bool) {
+	if !frame.Delegation.Valid() || (frame.Message.Kind != circulation.ValueKindIntention && frame.Message.Kind != circulation.ValueKindResponse) {
+		return nil, false
+	}
+	encoded, err := json.Marshal(wrapperWebSocketFrame{
+		Format: wrapperWebSocketFrameFormat, Message: frame.Message, Delegation: frame.Delegation.String(),
+	})
+	return encoded, err == nil
 }

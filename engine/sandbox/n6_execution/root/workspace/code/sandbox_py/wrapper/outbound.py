@@ -14,16 +14,56 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from .constants import KIND_INTENTION, TYPE_EXECUTION
+from .execution import current_delegation, current_intention
 from .util import new_id, utc_now_rfc3339
 
 
 class OutboundIntentionAPI:
+    """
+    from_context and from_cap default to "" for convenience, but that
+    default is only safe when this wrapper is owned by, and lives in, the
+    exact same context as the capacity issuing the call. The engine stamps
+    an empty from_context with the wrapper's own boundary context; a
+    non-empty from_context is instead preserved as the internal path it
+    already names. A wrapper SHARED across several contexts (one process
+    invoked on behalf of capacities declared in different child contexts —
+    see photographie/code/import for the pattern) MUST pass the caller's own
+    relative context name explicitly, or a sub-intention's response can
+    never be routed back to it.
+
+    from_cap has the same trap even in a single-context wrapper: the engine
+    resolves a response by looking up from_cap as a real, existing capacity
+    name (it is never a free-text label). Passing a generic placeholder
+    instead of the exact name of the capacity currently executing silently
+    breaks response routing — the call hangs until timeout, then fails with
+    a misleading "unknown response.To.cap" error rather than anything
+    pointing at from_cap itself.
+
+    Always pass both explicitly: from_context as this capacity's own
+    relative context name, from_cap as this capacity's own exact name.
+    """
+
     def __init__(self, runtime: "WrapperRuntime") -> None:
         self.runtime = runtime
+
+    def _security_fields(self, correlation: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not current_delegation.get():
+            return self.runtime.wrapper_identity(), correlation or {
+                "root_intention_id": "",
+                "parent_intention_id": "",
+            }
+        parent = current_intention.get()
+        if not isinstance(parent, dict):
+            raise RuntimeError("delegated outbound call has no current parent intention")
+        parent_id = str(parent.get("intention_id", "")).strip()
+        inherited = parent.get("correlation") if isinstance(parent.get("correlation"), dict) else {}
+        root_id = str(inherited.get("root_intention_id", "")).strip() or parent_id
+        if not parent_id or not root_id:
+            raise RuntimeError("delegated outbound call has an invalid parent intention")
+        return {}, {"root_intention_id": root_id, "parent_intention_id": parent_id}
 
     async def emit_intention(
         self,
@@ -35,10 +75,12 @@ class OutboundIntentionAPI:
         from_cap: str = "",
         from_type: str = TYPE_EXECUTION,
         params: dict[str, Any] | None = None,
+        matters: list[dict[str, Any]] | None = None,
         await_response: bool = False,
         correlation: dict[str, Any] | None = None,
     ) -> str:
         intention_id = new_id()
+        identity, correlation = self._security_fields(correlation)
         message = {
             "kind": KIND_INTENTION,
             "ts": utc_now_rfc3339(),
@@ -55,15 +97,13 @@ class OutboundIntentionAPI:
                     "cap": from_cap,
                     "type": from_type,
                 },
-                "identity": self.runtime.wrapper_identity(),
+                "identity": identity,
                 "params": params or {},
-                "correlation": correlation or {
-                    "root_intention_id": "",
-                    "parent_intention_id": "",
-                },
+                "matters": matters or [],
+                "correlation": correlation,
             },
         }
-        await self.runtime.transport.send(message)
+        await self.runtime.send_message(message)
         return intention_id
 
     async def emit_and_wait(
@@ -76,11 +116,13 @@ class OutboundIntentionAPI:
         from_cap: str = "",
         from_type: str = TYPE_EXECUTION,
         params: dict[str, Any] | None = None,
+        matters: list[dict[str, Any]] | None = None,
         timeout_s: float | None = None,
         correlation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         intention_id = new_id()
-        future = await self.runtime.correlator.register(intention_id)
+        identity, correlation = self._security_fields(correlation)
+        pending = await self.runtime.correlator.register(intention_id)
         message = {
             "kind": KIND_INTENTION,
             "ts": utc_now_rfc3339(),
@@ -97,15 +139,14 @@ class OutboundIntentionAPI:
                     "cap": from_cap,
                     "type": from_type,
                 },
-                "identity": self.runtime.wrapper_identity(),
+                "identity": identity,
                 "params": params or {},
-                "correlation": correlation or {
-                    "root_intention_id": "",
-                    "parent_intention_id": "",
-                },
+                "matters": matters or [],
+                "correlation": correlation,
             },
         }
-        await self.runtime.transport.send(message)
-        if timeout_s is None:
-            return await future
-        return await asyncio.wait_for(future, timeout=timeout_s)
+        try:
+            await self.runtime.send_message(message)
+            return await pending.wait(timeout_s)
+        finally:
+            await self.runtime.correlator.unregister(intention_id, pending)

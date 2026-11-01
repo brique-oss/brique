@@ -126,6 +126,86 @@ func anyToInt(v any) (int, bool) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
+// NavItem is one node of the read.structure navigation tree.
+type NavItem struct {
+	Path          string    `json:"path"`
+	Kind          string    `json:"kind"`
+	Name          string    `json:"name,omitempty"`
+	ChildrenTotal int       `json:"children_total"`
+	ChildrenTrunc bool      `json:"children_truncated,omitempty"`
+	Children      []NavItem `json:"children,omitempty"`
+}
+
+// descriptorFileNode lists the "<ext>" descriptor files of dir/<sub> (sorted,
+// bounded by maxPerPath). ok is false when the sub-directory does not exist.
+func descriptorFileNode(dir, relPath, sub, ext string, maxPerPath int, pathJoin func(...string) string, keep func(name string) bool) (NavItem, bool) {
+	subDir := filepath.Join(dir, sub)
+	if st, err := os.Stat(subDir); err != nil || !st.IsDir() {
+		return NavItem{}, false
+	}
+	ents, _ := os.ReadDir(subDir)
+	var names []string
+	for _, e := range ents {
+		n := e.Name()
+		if e.IsDir() || n == "" || strings.HasPrefix(n, ".") {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(n), ext) && (keep == nil || keep(n[:len(n)-len(ext)])) {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	if keep != nil && len(names) == 0 {
+		return NavItem{}, false // an external caller is not told the directory exists
+	}
+	total := len(names)
+	shown := names
+	if total > maxPerPath {
+		shown = names[:maxPerPath]
+	}
+	node := NavItem{
+		Path:          pathJoin(relPath, sub),
+		Kind:          circulation.ValueDir,
+		Name:          sub,
+		ChildrenTotal: total,
+		ChildrenTrunc: total > len(shown),
+	}
+	for _, fn := range shown {
+		node.Children = append(node.Children, NavItem{Path: pathJoin(relPath, sub, fn), Kind: sub, Name: fn})
+	}
+	return node, true
+}
+
+// idDirNode builds the NavItem of dir/<sub> from an id lister (matter,
+// structure). ok is false when the sub-directory does not exist.
+func idDirNode(dir, relPath, sub, itemKind string, pathJoin func(...string) string, list func(dir string) ([]string, int), hideEmpty bool) (NavItem, bool) {
+	if st, err := os.Stat(filepath.Join(dir, sub)); err != nil || !st.IsDir() {
+		return NavItem{}, false
+	}
+	ids, total := list(dir)
+	if total == 0 && len(ids) == 0 && hideEmpty {
+		return NavItem{}, false
+	}
+	node := NavItem{
+		Path:          pathJoin(relPath, sub),
+		Kind:          circulation.ValueDir,
+		Name:          sub,
+		ChildrenTotal: total,
+		ChildrenTrunc: total > len(ids),
+	}
+	for _, id := range ids {
+		node.Children = append(node.Children, NavItem{Path: pathJoin(relPath, sub, id), Kind: itemKind, Name: id})
+	}
+	return node, true
+}
+
+// Upper bounds for read.structure: the request cannot make one call walk the
+// whole instance or return an unbounded listing.
+const (
+	maxReadStructureDepth   = 16
+	maxReadStructurePerPath = 1000
+)
+
 func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 	in := msg.Intention
 
@@ -150,21 +230,28 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 	if depth < 0 {
 		depth = 0
 	}
+	if depth > maxReadStructureDepth {
+		depth = maxReadStructureDepth
+	}
 	if maxPerPath <= 0 {
 		maxPerPath = 50
 	}
+	if maxPerPath > maxReadStructurePerPath {
+		maxPerPath = maxReadStructurePerPath
+	}
 	hierarchyOnly := depth == 0
 
-	// -----------------------------
-	// Types
-	// -----------------------------
-	type NavItem struct {
-		Path          string    `json:"path"`
-		Kind          string    `json:"kind"`
-		Name          string    `json:"name,omitempty"`
-		ChildrenTotal int       `json:"children_total"`
-		ChildrenTrunc bool      `json:"children_truncated,omitempty"`
-		Children      []NavItem `json:"children,omitempty"`
+	// An external caller sees only what its read right allows (model §9.1, D20).
+	readScope := l.externalReadScope(in)
+	external := readScope != nil
+	canSee := func(dir, kind, name string) bool {
+		return !external || readScope.CanRead(l.absoluteContext(dir), kind, name)
+	}
+	keepIn := func(dir, kind string) func(string) bool {
+		if !external {
+			return nil
+		}
+		return func(name string) bool { return canSee(dir, kind, name) }
 	}
 
 	// -----------------------------
@@ -230,7 +317,7 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 				continue
 			}
 			id := strings.TrimSuffix(name, MatterDescriptorExt)
-			if id == "" {
+			if id == "" || !canSee(dir, circulation.ValueMatter, id) {
 				continue
 			}
 			ids = append(ids, id)
@@ -263,7 +350,7 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 				continue
 			}
 			id := strings.TrimSuffix(name, StructureDescriptorExt)
-			if id == "" {
+			if id == "" || !canSee(dir, circulation.ValueStructure, id) {
 				continue
 			}
 			ids = append(ids, id)
@@ -276,11 +363,20 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 		return ids, total
 	}
 
-	// buildContextNode: pré-ordre (node puis children)
+	// buildContextNode: pré-ordre (node puis children).
+	//
+	// shown is false only for an external caller that may not read this context:
+	// node.Children then holds the readable descendants, which the caller splices
+	// into the nearest readable ancestor under their own relative path (Z04). The
+	// unreadable context's name and elements are never part of the result.
 	hierarchyVisited := make(map[string]struct{})
-	var buildContextNode func(dir string, relPath string, depthCtx int) NavItem
-	buildContextNode = func(dir string, relPath string, depthCtx int) NavItem {
+	var buildContextNode func(dir string, relPath string, depthCtx int) (NavItem, bool)
+	buildContextNode = func(dir string, relPath string, depthCtx int) (NavItem, bool) {
 		ctxName, childCtx := readContextChildren(dir)
+		readable := canSee(dir, circulation.ValueContext, "")
+		if !readable {
+			ctxName = ""
+		}
 
 		node := NavItem{
 			Path:          relPath,
@@ -291,13 +387,38 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 
 		children := make([]NavItem, 0, 8)
 
+		// attach builds one child context and adds it, or its readable
+		// descendants when it is not itself readable. Subtrees that cannot hold
+		// anything readable are not even walked.
+		attach := func(chDir, chRel string, remaining int) {
+			if external && !readScope.MayContainReadable(l.absoluteContext(chDir)) {
+				return
+			}
+			child, shown := buildContextNode(chDir, chRel, remaining)
+			if shown {
+				children = append(children, child)
+			} else {
+				children = append(children, child.Children...)
+			}
+		}
+		finish := func() {
+			sort.Slice(children, func(i, j int) bool { return children[i].Path < children[j].Path })
+			node.ChildrenTotal = len(children)
+			if node.ChildrenTotal > maxPerPath {
+				node.ChildrenTrunc = true
+				node.Children = children[:maxPerPath]
+			} else {
+				node.Children = children
+			}
+		}
+
 		if hierarchyOnly {
 			canonicalDir, err := filepath.EvalSymlinks(dir)
 			if err != nil {
 				canonicalDir = filepath.Clean(dir)
 			}
 			if _, seen := hierarchyVisited[canonicalDir]; seen {
-				return node
+				return node, readable
 			}
 			hierarchyVisited[canonicalDir] = struct{}{}
 
@@ -309,252 +430,104 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 				}
 			}
 
+			if external {
+				// Filter first, truncate after: the page is made of readable
+				// contexts only, so an unreadable prefix cannot hide the rest.
+				for _, ch := range validChildren {
+					attach(filepath.Join(dir, ch), pathJoin(relPath, ch), 0)
+				}
+				finish()
+				return node, readable
+			}
+
 			total := len(validChildren)
 			shown := validChildren
 			if total > maxPerPath {
 				shown = validChildren[:maxPerPath]
 			}
 			for _, ch := range shown {
-				children = append(children, buildContextNode(
-					filepath.Join(dir, ch),
-					pathJoin(relPath, ch),
-					0,
-				))
+				child, _ := buildContextNode(filepath.Join(dir, ch), pathJoin(relPath, ch), 0)
+				children = append(children, child)
 			}
 			node.ChildrenTotal = total
 			node.ChildrenTrunc = total > len(children)
 			node.Children = children
-			return node
+			return node, readable
 		}
 
-		// context.json
-		if _, err := os.Stat(filepath.Join(dir, ContextDescriptorFilename)); err == nil {
-			children = append(children, NavItem{
-				Path:          pathJoin(relPath, ContextDescriptorFilename),
-				Kind:          circulation.ValueContextFile,
-				Name:          ContextDescriptorFilename,
-				ChildrenTotal: 0,
-			})
-		}
-
-		// Capacities/*.json
-		{
-			capDir := filepath.Join(dir, circulation.ValueCapacity)
-			if st, err := os.Stat(capDir); err == nil && st.IsDir() {
-				ents, _ := os.ReadDir(capDir)
-				var caps []string
-				for _, e := range ents {
-					if e.IsDir() {
-						continue
-					}
-					n := e.Name()
-					if n == "" || strings.HasPrefix(n, ".") {
-						continue
-					}
-					if strings.HasSuffix(strings.ToLower(n), CapacityDescriptorExt) {
-						caps = append(caps, n)
-					}
-				}
-				sort.Strings(caps)
-				total := len(caps)
-				shown := caps
-				if total > maxPerPath {
-					shown = caps[:maxPerPath]
-				}
-				capNode := NavItem{
-					Path:          pathJoin(relPath, circulation.ValueCapacity),
-					Kind:          circulation.ValueDir,
-					Name:          circulation.ValueCapacity,
-					ChildrenTotal: total,
-					ChildrenTrunc: total > len(shown),
-				}
-				for _, fn := range shown {
-					capNode.Children = append(capNode.Children, NavItem{
-						Path:          pathJoin(relPath, circulation.ValueCapacity, fn),
-						Kind:          circulation.ValueCapacity,
-						Name:          fn,
-						ChildrenTotal: 0,
-					})
-				}
-				children = append(children, capNode)
-			}
-		}
-
-		// documents/*.json
-		{
-			docDir := filepath.Join(dir, circulation.ValueDocument)
-			if st, err := os.Stat(docDir); err == nil && st.IsDir() {
-				ents, _ := os.ReadDir(docDir)
-				var docs []string
-				for _, e := range ents {
-					if e.IsDir() {
-						continue
-					}
-					n := e.Name()
-					if n == "" || strings.HasPrefix(n, ".") {
-						continue
-					}
-					if strings.HasSuffix(strings.ToLower(n), DocumentDescriptorExt) {
-						docs = append(docs, n)
-					}
-				}
-				sort.Strings(docs)
-				total := len(docs)
-				shown := docs
-				if total > maxPerPath {
-					shown = docs[:maxPerPath]
-				}
-				docNode := NavItem{
-					Path:          pathJoin(relPath, circulation.ValueDocument),
-					Kind:          circulation.ValueDir,
-					Name:          circulation.ValueDocument,
-					ChildrenTotal: total,
-					ChildrenTrunc: total > len(shown),
-				}
-				for _, fn := range shown {
-					docNode.Children = append(docNode.Children, NavItem{
-						Path:          pathJoin(relPath, circulation.ValueDocument, fn),
-						Kind:          circulation.ValueDocument,
-						Name:          fn,
-						ChildrenTotal: 0,
-					})
-				}
-				children = append(children, docNode)
-			}
-		}
-
-		// schema/*.json
-		{
-			schemaDir := filepath.Join(dir, circulation.ValueSchema)
-			if st, err := os.Stat(schemaDir); err == nil && st.IsDir() {
-				ents, _ := os.ReadDir(schemaDir)
-				var schemas []string
-				for _, e := range ents {
-					if e.IsDir() {
-						continue
-					}
-					n := e.Name()
-					if n == "" || strings.HasPrefix(n, ".") {
-						continue
-					}
-					if strings.HasSuffix(strings.ToLower(n), SchemaDescriptorExt) {
-						schemas = append(schemas, n)
-					}
-				}
-				sort.Strings(schemas)
-				total := len(schemas)
-				shown := schemas
-				if total > maxPerPath {
-					shown = schemas[:maxPerPath]
-				}
-				sNode := NavItem{
-					Path:          pathJoin(relPath, circulation.ValueSchema),
-					Kind:          circulation.ValueDir,
-					Name:          circulation.ValueSchema,
-					ChildrenTotal: total,
-					ChildrenTrunc: total > len(shown),
-				}
-				for _, fn := range shown {
-					sNode.Children = append(sNode.Children, NavItem{
-						Path:          pathJoin(relPath, circulation.ValueSchema, fn),
-						Kind:          circulation.ValueSchema,
-						Name:          fn,
-						ChildrenTotal: 0,
-					})
-				}
-				children = append(children, sNode)
-			}
-		}
-
-		// matter (from disk) — only include if directory exists
-		{
-			matterDir := filepath.Join(dir, circulation.ValueMatter)
-			if st, err := os.Stat(matterDir); err == nil && st.IsDir() {
-				ids, total := listMatterIDsFromDisk(dir)
-				mNode := NavItem{
-					Path:          pathJoin(relPath, circulation.ValueMatter),
-					Kind:          circulation.ValueDir,
-					Name:          circulation.ValueMatter,
-					ChildrenTotal: total,
-					ChildrenTrunc: total > len(ids),
-				}
-				for _, id := range ids {
-					mNode.Children = append(mNode.Children, NavItem{
-						Path:          pathJoin(relPath, circulation.ValueMatter, id),
-						Kind:          circulation.ValueMatterItem,
-						Name:          id,
-						ChildrenTotal: 0,
-					})
-				}
-				children = append(children, mNode)
-			}
-		}
-
-		// structure (from disk) — only include if directory exists
-		{
-			structureDir := filepath.Join(dir, circulation.ValueStructure)
-			if st, err := os.Stat(structureDir); err == nil && st.IsDir() {
-				ids, total := listStructureIDsFromDisk(dir)
-				sNode := NavItem{
-					Path:          pathJoin(relPath, circulation.ValueStructure),
-					Kind:          circulation.ValueDir,
-					Name:          circulation.ValueStructure,
-					ChildrenTotal: total,
-					ChildrenTrunc: total > len(ids),
-				}
-				for _, id := range ids {
-					sNode.Children = append(sNode.Children, NavItem{
-						Path:          pathJoin(relPath, circulation.ValueStructure, id),
-						Kind:          circulation.ValueStructureItem,
-						Name:          id,
-						ChildrenTotal: 0,
-					})
-				}
-				children = append(children, sNode)
-			}
-		}
-
-		// code/ and ui/ directories — scanned recursively
-		{
-			var scanGenericDir func(absDir string, relBase string) NavItem
-			scanGenericDir = func(absDir string, relBase string) NavItem {
-				name := filepath.Base(absDir)
-				node := NavItem{
-					Path: relBase,
-					Kind: circulation.ValueDir,
-					Name: name,
-				}
-				ents, _ := os.ReadDir(absDir)
-				for _, e := range ents {
-					eName := e.Name()
-					if eName == "" || strings.HasPrefix(eName, ".") {
-						continue
-					}
-					childRel := pathJoin(relBase, eName)
-					childAbs := filepath.Join(absDir, eName)
-					if e.IsDir() {
-						child := scanGenericDir(childAbs, childRel)
-						node.Children = append(node.Children, child)
-					} else {
-						node.Children = append(node.Children, NavItem{
-							Path: childRel,
-							Kind: "file",
-							Name: eName,
-						})
-					}
-				}
-				node.ChildrenTotal = len(node.Children)
-				if node.ChildrenTotal > maxPerPath {
-					node.ChildrenTrunc = true
-					node.Children = node.Children[:maxPerPath]
-				}
-				return node
+		if readable {
+			// context.json
+			if _, err := os.Stat(filepath.Join(dir, ContextDescriptorFilename)); err == nil {
+				children = append(children, NavItem{
+					Path:          pathJoin(relPath, ContextDescriptorFilename),
+					Kind:          circulation.ValueContextFile,
+					Name:          ContextDescriptorFilename,
+					ChildrenTotal: 0,
+				})
 			}
 
-			for _, dirName := range []string{"code", "ui"} {
-				absDir := filepath.Join(dir, dirName)
-				if st, err := os.Stat(absDir); err == nil && st.IsDir() {
-					children = append(children, scanGenericDir(absDir, pathJoin(relPath, dirName)))
+			// capacity/, document/, schema/: one NavItem per descriptor file.
+			for _, kind := range []struct{ dir, ext string }{
+				{circulation.ValueCapacity, CapacityDescriptorExt},
+				{circulation.ValueDocument, DocumentDescriptorExt},
+				{circulation.ValueSchema, SchemaDescriptorExt},
+			} {
+				if n, ok := descriptorFileNode(dir, relPath, kind.dir, kind.ext, maxPerPath, pathJoin, keepIn(dir, kind.dir)); ok {
+					children = append(children, n)
+				}
+			}
+
+			// matter/, structure/ (from disk): one NavItem per entry id.
+			if n, ok := idDirNode(dir, relPath, circulation.ValueMatter, circulation.ValueMatterItem, pathJoin, listMatterIDsFromDisk, external); ok {
+				children = append(children, n)
+			}
+			if n, ok := idDirNode(dir, relPath, circulation.ValueStructure, circulation.ValueStructureItem, pathJoin, listStructureIDsFromDisk, external); ok {
+				children = append(children, n)
+			}
+
+			// code/ and ui/ directories — scanned recursively. They are not a
+			// resource genre of the policy, so an external caller never sees them.
+			if !external {
+				var scanGenericDir func(absDir string, relBase string) NavItem
+				scanGenericDir = func(absDir string, relBase string) NavItem {
+					name := filepath.Base(absDir)
+					node := NavItem{
+						Path: relBase,
+						Kind: circulation.ValueDir,
+						Name: name,
+					}
+					ents, _ := os.ReadDir(absDir)
+					for _, e := range ents {
+						eName := e.Name()
+						if eName == "" || strings.HasPrefix(eName, ".") {
+							continue
+						}
+						childRel := pathJoin(relBase, eName)
+						childAbs := filepath.Join(absDir, eName)
+						if e.IsDir() {
+							child := scanGenericDir(childAbs, childRel)
+							node.Children = append(node.Children, child)
+						} else {
+							node.Children = append(node.Children, NavItem{
+								Path: childRel,
+								Kind: "file",
+								Name: eName,
+							})
+						}
+					}
+					node.ChildrenTotal = len(node.Children)
+					if node.ChildrenTotal > maxPerPath {
+						node.ChildrenTrunc = true
+						node.Children = node.Children[:maxPerPath]
+					}
+					return node
+				}
+
+				for _, dirName := range []string{"code", "ui"} {
+					absDir := filepath.Join(dir, dirName)
+					if st, err := os.Stat(absDir); err == nil && st.IsDir() {
+						children = append(children, scanGenericDir(absDir, pathJoin(relPath, dirName)))
+					}
 				}
 			}
 		}
@@ -563,30 +536,22 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 		if depthCtx > 0 && len(childCtx) > 0 {
 			total := len(childCtx)
 			shown := childCtx
-			if total > maxPerPath {
+			if total > maxPerPath && !external {
 				shown = childCtx[:maxPerPath]
 			}
+			_ = total
 			for _, ch := range shown {
 				chDir := filepath.Join(dir, ch)
 				if st, err := os.Stat(chDir); err != nil || !st.IsDir() {
 					continue
 				}
-				children = append(children, buildContextNode(chDir, pathJoin(relPath, ch), depthCtx-1))
+				attach(chDir, pathJoin(relPath, ch), depthCtx-1)
 			}
 		}
 
-		// Tri alpha des siblings (déterministe)
-		sort.Slice(children, func(i, j int) bool { return children[i].Path < children[j].Path })
-
-		// Gate max_per_path sur CE node (en plus des gates internes déjà appliquées)
-		node.ChildrenTotal = len(children)
-		if node.ChildrenTotal > maxPerPath {
-			node.ChildrenTrunc = true
-			node.Children = children[:maxPerPath]
-		} else {
-			node.Children = children
-		}
-		return node
+		// Tri alpha des siblings (déterministe) et gate max_per_path sur CE node.
+		finish()
+		return node, readable
 	}
 
 	// -----------------------------
@@ -633,11 +598,31 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 			))
 			return
 		}
+		// A child context the caller can neither read nor reach anything readable
+		// through is, to it, a context that does not exist.
+		if external && !readScope.CanRead(l.absoluteContext(next), circulation.ValueContext, "") && !readScope.MayContainReadable(l.absoluteContext(next)) {
+			l.emitResponseError(errorResp(in,
+				circulation.ValueCodeNotFound,
+				map[string]any{circulation.KeyReason: "scope_not_found"},
+				"scope not found",
+			))
+			return
+		}
 		targetDir = next
 		rel = pathJoin(rel, s)
 	}
 
-	root := buildContextNode(targetDir, rel, depth)
+	root, rootShown := buildContextNode(targetDir, rel, depth)
+	if external && scope != "" && !rootShown && len(root.Children) == 0 {
+		// Nothing of that child context is readable, not even below it: it does not
+		// exist as far as this caller can tell.
+		l.emitResponseError(errorResp(in,
+			circulation.ValueCodeNotFound,
+			map[string]any{circulation.KeyReason: "scope_not_found"},
+			"scope not found",
+		))
+		return
+	}
 
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyRoot: root,
@@ -1645,7 +1630,31 @@ func (l *ReflexiveLoop) capReadState(msg circulation.Message) {
 		}
 	}
 
+	// An external caller gets the reduced state (model §9.3, Z06): no file path,
+	// no process id, no error text that may carry a path.
+	if l.externalReadScope(in) != nil {
+		reduceStateForExternal(payload)
+	}
+
 	l.emitResponseOK(in, payload)
+}
+
+// reduceStateForExternal removes host details from a read.state payload.
+func reduceStateForExternal(payload map[string]any) {
+	if ctx, ok := payload[circulation.KeyContext].(map[string]any); ok {
+		delete(ctx, circulation.KeyContextDir)
+	}
+	if wrappers, ok := payload[circulation.KeyWrappers].([]map[string]any); ok {
+		reduced := make([]map[string]any, 0, len(wrappers))
+		for _, wrapper := range wrappers {
+			reduced = append(reduced, map[string]any{
+				circulation.KeyName:      wrapper[circulation.KeyName],
+				circulation.KeyProcState: wrapper[circulation.KeyProcState],
+				circulation.KeyReady:     wrapper[circulation.KeyReady],
+			})
+		}
+		payload[circulation.KeyWrappers] = reduced
+	}
 }
 
 // ctxDirOrEmpty

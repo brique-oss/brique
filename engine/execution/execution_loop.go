@@ -43,8 +43,67 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/security/admission"
 	"brique_engine/shared"
 )
+
+// forwardQueueSize bounds the ordered queue of wrapper-bound responses.
+const forwardQueueSize = 64
+
+// pendingEntry is the rendezvous between a waiting job and the responses
+// correlated to its intention.
+//
+// Contract:
+//   - `ch` has capacity 1 and is only ever written by `deliver`.
+//   - an intermediate `running` response never displaces a message already
+//     buffered (the buffered one will refresh the waiter's silence timer).
+//   - the first terminal response always reaches the waiter: it replaces a
+//     buffered `running`, and any later response is rejected as a duplicate.
+type pendingEntry struct {
+	ch       chan circulation.Message
+	mu       sync.Mutex
+	terminal bool
+	// admission is set when the waiter is a child derived under an external
+	// admission: only a reply bound to that same admission may satisfy it.
+	admission *admission.Context
+}
+
+func newPendingEntry() *pendingEntry {
+	return &pendingEntry{ch: make(chan circulation.Message, 1)}
+}
+
+// deliver hands msg to the waiter. It returns false only when msg is a
+// response arriving after the terminal one (duplicate).
+func (p *pendingEntry) deliver(msg circulation.Message) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.terminal {
+		return false
+	}
+	if msg.Kind == circulation.ValueKindResponse && msg.Response.Status == circulation.ValueStatusRunning {
+		select {
+		case p.ch <- msg:
+		default:
+			// A message is already buffered; it will wake the waiter.
+		}
+		return true
+	}
+	p.terminal = true
+	select {
+	case p.ch <- msg:
+		return true
+	default:
+	}
+	// Buffer holds a stale running response: replace it. Only deliver writes
+	// to ch and it holds mu, so the slot freed here cannot be taken by anyone
+	// else.
+	select {
+	case <-p.ch:
+	default:
+	}
+	p.ch <- msg
+	return true
+}
 
 // -----------------------------
 // ExecutionLoop (junction.FamilyLoop)
@@ -52,12 +111,35 @@ import (
 
 type ExecutionLoop struct {
 	frame *junction.ContextRegistry
-	in    chan circulation.Message
-	cfg   ExecutionCfg
+	// deliveryIn is the protected family boundary. in is the private decoded
+	// work queue used only after Delivery validation.
+	deliveryIn chan junction.Delivery
+	cfg        ExecutionCfg
 
 	// pending maps IntentionID -> response channel for the waiting job.
 	pMu     sync.RWMutex
-	pending map[string]chan circulation.Message
+	pending map[string]*pendingEntry
+
+	// fwd carries responses bound to wrapper callers toward Comm, in order,
+	// without discarding the authority received at the family boundary.
+	// A single forwarder goroutine drains it so emission may block on Comm
+	// without ever blocking the inbox loop nor reordering responses.
+	fwd chan junction.Delivery
+
+	// jobSem bounds simultaneous user jobs; nil => unlimited.
+	jobSem chan struct{}
+
+	// externalRequests binds an executing admitted DSL root request to its
+	// authenticated response construction. Wrapper-backed external roots remain closed.
+	externalRequestMu sync.RWMutex
+	externalRequests  map[string]junction.Delivery
+
+	// hot-path caches (see execution_cache.go)
+	execCaches
+
+	// wrapper OS processes spawned by this loop (see execution_proc.go)
+	procMu sync.Mutex
+	procs  map[string]*wrapperProc
 
 	// capacity cache (disk-backed, lazy)
 	capMu    sync.RWMutex
@@ -128,16 +210,22 @@ func NewExecutionLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 	cfg := ParseExecutionCfg(engineCfg)
 
 	l := &ExecutionLoop{
-		frame:   frame,
-		cfg:     cfg,
-		in:      make(chan circulation.Message, 16),
-		pending: make(map[string]chan circulation.Message),
+		frame:            frame,
+		cfg:              cfg,
+		deliveryIn:       make(chan junction.Delivery, 16),
+		pending:          make(map[string]*pendingEntry),
+		fwd:              make(chan junction.Delivery, forwardQueueSize),
+		externalRequests: make(map[string]junction.Delivery),
 
 		capCache: make(map[string]CapEntry),
 		capRoot:  "",
 
 		state: shared.FamilyInitializing,
 		done:  make(chan struct{}),
+	}
+
+	if cfg.MaxConcurrentJobs > 0 {
+		l.jobSem = make(chan struct{}, cfg.MaxConcurrentJobs)
 	}
 
 	if frame.Wrappers == nil {
@@ -200,13 +288,13 @@ func NewExecutionLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 //
 //
 // Outputs:
-// - returns `chan circulation.Message`.
+// - returns the protected family boundary (`chan junction.Delivery`).
 //
 //
 // Contract:
 // - Returns the same inbox channel for the lifetime of the loop.
 
-func (l *ExecutionLoop) InChan() chan circulation.Message { return l.in }
+func (l *ExecutionLoop) InChan() chan junction.Delivery { return l.deliveryIn }
 
 // State
 //
@@ -339,6 +427,12 @@ func (l *ExecutionLoop) Start() {
 	if l.frame != nil && strings.TrimSpace(l.frame.ContextDir) != "" {
 		l.capRoot = filepath.Join(l.frame.ContextDir, capacityDirName)
 	}
+
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		l.forwardLoop()
+	}()
 
 	l.wg.Add(1)
 	go func() {
@@ -562,27 +656,95 @@ func (l *ExecutionLoop) loopInbox() {
 		select {
 		case <-l.done:
 			return
-		case msg, ok := <-l.in:
+		case delivery, ok := <-l.deliveryIn:
 			if !ok {
 				return
 			}
-			switch msg.Kind {
-			case circulation.ValueKindIntention:
-				parentID, rootID := executionCorrelationIDs(msg.Intention)
-				l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyEnter)
-				l.dispatchIntention(msg)
-			case circulation.ValueKindResponse:
-				// Dispatch responses off the inbox goroutine to avoid blocking
-				// intention reads while resolving pending waiters or wrapper routing.
-				l.wg.Add(1)
-				go func(m circulation.Message) {
-					defer l.wg.Done()
-					l.dispatchResponse(m)
-				}(msg)
-			default:
-				// ignore
-			}
+			l.handleInboxDelivery(delivery)
 		}
+	}
+}
+
+func (l *ExecutionLoop) handleInboxDelivery(delivery junction.Delivery) {
+	msg, valid := delivery.Message()
+	if !valid {
+		return
+	}
+	if _, external := delivery.ExternalAdmission(); external {
+		if msg.Kind == circulation.ValueKindResponse {
+			if _, _, _, wrapperReturn := delivery.ExternalWrapperReturn(); wrapperReturn {
+				l.handleInboxMessageAuthorized(msg, delivery)
+				return
+			}
+			if l.derivedReplyForWaiter(msg, delivery) {
+				l.handleInboxMessageAuthorized(msg, delivery)
+				return
+			}
+			l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, "", "", circulation.ValueTraceFamilyError)
+			return
+		}
+		parentID, rootID := "", ""
+		intentionID := ""
+		if msg.Kind == circulation.ValueKindIntention {
+			intentionID = msg.Intention.IntentionID
+			parentID, rootID = executionCorrelationIDs(msg.Intention)
+		} else if msg.Kind == circulation.ValueKindResponse {
+			intentionID = msg.Response.IntentionID
+		}
+		if err := l.authorizeExternalExecution(delivery); err != nil {
+			l.sendToTrace(msg.Kind, intentionID, parentID, rootID, circulation.ValueTraceFamilyError)
+			l.refuseExternalExecution(delivery, err)
+			return
+		}
+		// The user capacity is the authorization unit. Its server-owned DSL runs
+		// with local engine authority; the caller does not need to know or hold
+		// permissions for the capacity's transitive implementation resources.
+		l.handleInboxMessageAuthorized(msg, delivery)
+		return
+	}
+	l.handleInboxMessageAuthorized(msg, delivery)
+}
+
+// derivedReplyForWaiter reports whether an externally admitted response is the
+// answer to a child this loop derived under that very admission. Any other
+// admitted response is refused.
+func (l *ExecutionLoop) derivedReplyForWaiter(msg circulation.Message, delivery junction.Delivery) bool {
+	bound, external := delivery.ExternalAdmission()
+	if !external || bound == nil {
+		return false
+	}
+	entry, ok := l.lookupPending(strings.TrimSpace(msg.Response.IntentionID))
+	return ok && entry != nil && entry.admission == bound
+}
+
+func (l *ExecutionLoop) handleInboxMessage(msg circulation.Message) {
+	l.handleInboxMessageAuthorized(msg)
+}
+
+func (l *ExecutionLoop) handleInboxMessageAuthorized(msg circulation.Message, source ...junction.Delivery) {
+	switch msg.Kind {
+	case circulation.ValueKindIntention:
+		parentID, rootID := executionCorrelationIDs(msg.Intention)
+		l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyEnter)
+		l.dispatchIntentionAuthorized(msg, source...)
+	case circulation.ValueKindResponse:
+		// Routing is non-blocking and runs inline so responses keep
+		// their arrival order. Only emission toward Comm, which may
+		// block, is handed to the ordered forwarder.
+		if fwd, ok := l.routeResponse(msg, source...); ok {
+			if len(source) == 1 {
+				delivery, err := junction.Forward(source[0], fwd)
+				if err != nil {
+					l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, "", "", circulation.ValueTraceFamilyError)
+					return
+				}
+				l.enqueueForward(delivery)
+				return
+			}
+			l.enqueueForward(l.frame.MustDelivery(fwd))
+		}
+	default:
+		// ignore
 	}
 }
 
@@ -659,6 +821,10 @@ func (l *ExecutionLoop) loopInbox() {
 // - Invalid intention types emit exactly one error response before returning.
 
 func (l *ExecutionLoop) dispatchIntention(msg circulation.Message) {
+	l.dispatchIntentionAuthorized(msg)
+}
+
+func (l *ExecutionLoop) dispatchIntentionAuthorized(msg circulation.Message, source ...junction.Delivery) {
 	in := msg.Intention
 	parentID, rootID := executionCorrelationIDs(in)
 	// Second-level dispatch on Intention.Type
@@ -670,13 +836,26 @@ func (l *ExecutionLoop) dispatchIntention(msg circulation.Message) {
 		return
 
 	case circulation.ValueTypeUser:
+		// Bounded, non-blocking admission: a saturated loop refuses explicitly
+		// instead of queueing (a job waiting on a child it would starve of a
+		// slot must never deadlock).
+		if !l.acquireJob() {
+			l.emitResponseError(errorResp(in,
+				circulation.ValueCodeUnavailable,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonBusy},
+				"execution loop busy",
+			))
+			l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyExit)
+			return
+		}
 		// Spawn job: do not block inbox.
 		l.wg.Add(1)
-		go func(m circulation.Message) {
+		go func(m circulation.Message, delivery []junction.Delivery) {
 			defer l.wg.Done()
-			l.runUserJob(m)
+			defer l.releaseJob()
+			l.runUserJobAuthorized(m, delivery...)
 			l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyExit)
-		}(msg)
+		}(msg, source)
 		return
 
 	default:
@@ -744,18 +923,24 @@ func (l *ExecutionLoop) dispatchIntention(msg circulation.Message) {
 // - Successful registrations allocate a buffered channel with capacity 1.
 
 func (l *ExecutionLoop) registerPending(intentionID string) (ch chan circulation.Message, ok bool) {
+	return l.registerPendingEntry(intentionID, newPendingEntry())
+}
+
+func (l *ExecutionLoop) registerPendingEntry(intentionID string, entry *pendingEntry) (ch chan circulation.Message, ok bool) {
 	if intentionID == "" {
 		return nil, false
 	}
-	ch = make(chan circulation.Message, 1)
+	if entry == nil {
+		return nil, false
+	}
 
 	l.pMu.Lock()
 	defer l.pMu.Unlock()
 	if _, exists := l.pending[intentionID]; exists {
 		return nil, false
 	}
-	l.pending[intentionID] = ch
-	return ch, true
+	l.pending[intentionID] = entry
+	return entry.ch, true
 }
 
 // unregisterPending
@@ -815,10 +1000,8 @@ func (l *ExecutionLoop) unregisterPending(intentionID string) {
 		return
 	}
 	l.pMu.Lock()
-	_, ok := l.pending[intentionID]
 	delete(l.pending, intentionID)
 	l.pMu.Unlock()
-	_ = ok
 }
 
 // lookupPending
@@ -866,17 +1049,17 @@ func (l *ExecutionLoop) unregisterPending(intentionID string) {
 //
 //
 // Outputs:
-// - returns (chan circulation.Message, bool).
+// - returns (*pendingEntry, bool).
 //
 //
 // Contract:
 // - Lookup is read-only under shared lock.
 
-func (l *ExecutionLoop) lookupPending(intentionID string) (chan circulation.Message, bool) {
+func (l *ExecutionLoop) lookupPending(intentionID string) (*pendingEntry, bool) {
 	l.pMu.RLock()
 	defer l.pMu.RUnlock()
-	ch, ok := l.pending[intentionID]
-	return ch, ok
+	entry, ok := l.pending[intentionID]
+	return entry, ok
 }
 
 // abandonAllPending
@@ -1005,21 +1188,66 @@ func (l *ExecutionLoop) abandonAllPending() {
 // - Unresolvable non-pending responses are traced as orphan responses and otherwise discarded.
 
 func (l *ExecutionLoop) dispatchResponse(msg circulation.Message) {
+	if fwd, ok := l.routeResponse(msg); ok {
+		l.emitToComm(fwd)
+	}
+}
+
+// routeResponse
+//
+// Functional role (Brique DSL):
+// - resolve the destination of one response without ever blocking.
+//
+// Contract:
+// - Pending waiter delivery takes priority over wrapper transport rewriting.
+// - Returns (message, true) when the response must be emitted to Comm
+//   (wrapper-backed caller, transport already rewritten); the caller owns the
+//   emission so that blocking never happens on the inbox goroutine.
+// - Duplicate terminal responses and unresolvable responses are traced as
+//   orphans and otherwise discarded.
+
+func (l *ExecutionLoop) routeResponse(msg circulation.Message, source ...junction.Delivery) (circulation.Message, bool) {
 	id := strings.TrimSpace(msg.Response.IntentionID)
 	if id == "" {
-		return
+		return circulation.Message{}, false
+	}
+	// A response carrying this private sidecar belongs to the exact wrapper
+	// connection that created the derived call. Comm consumes the sidecar and
+	// performs the last-mile projection; Execution must not reinterpret it as
+	// a local pending response or derive a route from message-controlled data.
+	if len(source) == 1 {
+		if _, _, _, wrapperReturn := source[0].ExternalWrapperReturn(); wrapperReturn {
+			return msg, true
+		}
 	}
 
 	// 1) Pending-first: response for an awaiting user job (orchestrator, etc.)
-	if ch, ok := l.lookupPending(id); ok && ch != nil {
-		select {
-		case ch <- msg:
+	if entry, ok := l.lookupPending(id); ok && entry != nil {
+		if len(source) == 1 {
+			if bound, external := source[0].ExternalAdmission(); (external && (entry.admission == nil || entry.admission != bound)) || !source[0].Valid() {
+				l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTraceFamilyError)
+				return circulation.Message{}, false
+			}
+		} else if len(source) > 1 {
+			l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTraceFamilyError)
+			return circulation.Message{}, false
+		}
+		if entry.deliver(msg) {
 			l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTracePendingResponse)
-			return
-		default:
-			// Duplicate response for a pending waiter whose channel is already full — trace and drop.
+		} else {
+			// Response after the terminal one — trace and drop.
 			l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTracePendingOrphanId)
-			return
+		}
+		return circulation.Message{}, false
+	}
+	// An authenticated derived reply has exactly one legal consumer: the
+	// pending child call that was bound to its admission. If that waiter timed
+	// out or disappeared between ingress validation and routing, fail closed;
+	// never reinterpret the reply as wrapper-origin traffic.
+	if len(source) == 1 {
+		if _, external := source[0].ExternalAdmission(); external {
+			l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTracePendingOrphanId)
+			return circulation.Message{}, false
 		}
 	}
 
@@ -1029,7 +1257,7 @@ func (l *ExecutionLoop) dispatchResponse(msg circulation.Message) {
 	if !ok {
 		// not resolvable => orphan for execution; keep trace.
 		l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTracePendingOrphanId)
-		return
+		return circulation.Message{}, false
 	}
 
 	// Only compiled/interpreted callers are wrappers (by registry declaration).
@@ -1038,12 +1266,48 @@ func (l *ExecutionLoop) dispatchResponse(msg circulation.Message) {
 		// - Introduce @wrapper_ ONLY at this boundary hop (Execution -> Comm).
 		// - Do NOT touch resp.From.* (no interface leakage).
 		l.rewriteResponseToWrapperTransport(&msg.Response, entry.Wrapper)
-		l.emitToComm(msg)
-		return
+		return msg, true
 	}
 
 	// 3) Otherwise: orphan (no pending + not a wrapper caller).
 	l.sendToTrace(circulation.ValueKindResponse, id, "", "", circulation.ValueTracePendingOrphanId)
+	return circulation.Message{}, false
+}
+
+// enqueueForward
+//
+// Contract:
+// - Never blocks the caller. Normally queues on the ordered forwarder.
+// - If the queue is saturated, falls back to a dedicated goroutine so the
+//   response is not lost (ordering is then best effort for that response).
+
+func (l *ExecutionLoop) enqueueForward(delivery junction.Delivery) {
+	select {
+	case l.fwd <- delivery:
+	default:
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			l.emitDeliveryToComm(delivery)
+		}()
+	}
+}
+
+// forwardLoop
+//
+// Contract:
+// - Single consumer of `l.fwd`; emits wrapper-bound responses to Comm in
+//   queue order. Exits on loop shutdown.
+
+func (l *ExecutionLoop) forwardLoop() {
+	for {
+		select {
+		case <-l.done:
+			return
+		case delivery := <-l.fwd:
+			l.emitDeliveryToComm(delivery)
+		}
+	}
 }
 
 // runUserJob
@@ -1128,6 +1392,10 @@ func (l *ExecutionLoop) dispatchResponse(msg circulation.Message) {
 // - Request/response waiting is reserved for explicit local orchestration paths (for example DSL-specific bridges), not for wrapper-backed fire-and-forget dispatch.
 
 func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
+	l.runUserJobAuthorized(msg)
+}
+
+func (l *ExecutionLoop) runUserJobAuthorized(msg circulation.Message, source ...junction.Delivery) {
 	select {
 	case <-l.done:
 		return
@@ -1138,6 +1406,38 @@ func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	externalRoot := len(source) == 1
+	var externalRequest junction.Delivery
+	var dslParent *junction.Delivery
+	// actingRequest carries the authority of the capacity's own sub-calls; it is
+	// externalRequest unless the capacity runs as_owner.
+	var actingRequest junction.Delivery
+	if externalRoot {
+		if _, external := source[0].ExternalAdmission(); !external {
+			externalRoot = false
+		} else {
+			externalRequest = source[0]
+		}
+	}
+	if externalRoot {
+		cleanup, err := l.bindExternalRequest(source[0])
+		if err != nil {
+			l.emitExternalExecutionError(source[0], circulation.ValueCodeUnavailable, err.Error())
+			return
+		}
+		defer cleanup()
+		// D13: the implementation runs with the caller's rights. A DSL capacity
+		// derives its steps under the caller's admission; a wrapper does so through
+		// its delegation handle. The other paths below do not use the source.
+		acting, err := l.deriveActing(externalRequest)
+		if err != nil {
+			l.emitExternalExecutionError(externalRequest, circulation.ValueCodeUnauthorized, "capability denied")
+			return
+		}
+		actingRequest = acting
+		dslParent = &acting
+		source = nil
+	}
 
 	if in.IntentionID == "" {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid, map[string]any{circulation.KeyReason: circulation.ValueReasonMissingIntentionID}, "intention_id is required"))
@@ -1163,7 +1463,7 @@ func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
 		if abort := l.ensureWrapperReady(wrapperName, in); abort {
 			return
 		}
-		l.emitToComm(msg)
+		l.emitToComm(msg, source...)
 		return
 	}
 
@@ -1172,7 +1472,6 @@ func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
 	if rerr {
 		return
 	}
-
 	// 3) Runtime readiness enforcement (wrappers only)
 	// Readiness is enforced only for wrappers owned by this context. A wrapper
 	// reachable solely through a remote boundary is not built/started here:
@@ -1189,10 +1488,19 @@ func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
 	// 4) Dispatch / Execute
 	switch style {
 	case configuration.ValueConfigStyleDSL:
-		l.runDSLOrchestrator(msg)
+		l.runDSLOrchestratorUnder(msg, dslParent)
 		return
 
 	case configuration.ValueConfigStyleCompiled, configuration.ValueConfigStyleInterpreted:
+		if externalRoot {
+			delegated, err := junction.DispatchExternalToWrapper(actingRequest, entry.Wrapper)
+			if err != nil {
+				l.emitExternalExecutionError(externalRequest, circulation.ValueCodeUnavailable, err.Error())
+				return
+			}
+			l.emitToComm(msg, delegated)
+			return
+		}
 		// For compiled/interpreted capacities, Execution emits privileged wrapper transport:
 		// - resolve wrapper name from the capacity registry entry (entry.Wrapper)
 		// - compute relative path from original internal to.context using wrapper boundary ctx_id
@@ -1201,7 +1509,7 @@ func (l *ExecutionLoop) runUserJob(msg circulation.Message) {
 		l.rewriteToWrapperTransport(&msg, entry.Wrapper)
 
 		// Dispatch is performed exclusively via Comm with the rewritten message.
-		l.emitToComm(msg)
+		l.emitToComm(msg, source...)
 		return
 
 	default:
@@ -1365,6 +1673,9 @@ func (l *ExecutionLoop) resolveIn(in circulation.Intention) (string, CapEntry, b
 		}
 		return configuration.ValueConfigStyleInterpreted, entry, false
 	default:
+		// Fail-closed with feedback: an unsupported kind is a descriptor
+		// configuration error, never a silent drop.
+		l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration, map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidConfiguration}, "capacity has an unsupported kind"))
 		return "", CapEntry{}, true
 	}
 }
@@ -1699,19 +2010,69 @@ func (l *ExecutionLoop) awaitResponseChan(ch chan circulation.Message, timeout t
 // - Non-blocking with loop-stop cancellation path.
 // - Silent no-op when `frame`, `frame.FamIn`, or the Comm family channel is absent.
 
-func (l *ExecutionLoop) emitToComm(msg circulation.Message) {
-	if l.frame == nil || l.frame.FamIn == nil {
+func (l *ExecutionLoop) emitToComm(msg circulation.Message, source ...junction.Delivery) {
+	if msg.Kind == circulation.ValueKindIntention {
+		if _, bound := l.externalRequest(msg.Intention.IntentionID); bound {
+			delegated := false
+			if len(source) == 1 {
+				_, delegated = source[0].ExternalWrapperDispatch()
+			}
+			if !delegated {
+				parentID, rootID := executionCorrelationIDs(msg.Intention)
+				l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyError)
+				return
+			}
+		}
+	}
+	if msg.Kind == circulation.ValueKindResponse {
+		if request, bound := l.externalRequest(msg.Response.IntentionID); bound {
+			canonicalizeExternalExecutionResponse(&msg.Response)
+			if !externalExecutionResponseMatches(request, msg) {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, "response does not match its authenticated external request")
+				return
+			}
+			delivery, reservation, err := junction.BindExternalResponse(request, msg)
+			if err != nil {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, err.Error())
+				return
+			}
+			if !l.emitDeliveryToComm(delivery) && reservation.Valid() {
+				_ = reservation.Abort()
+			}
+			return
+		}
+	}
+	if l.frame == nil {
 		return
+	}
+	var delivery junction.Delivery
+	if len(source) == 0 {
+		delivery = l.frame.MustDelivery(msg)
+	} else if len(source) == 1 {
+		var err error
+		delivery, err = junction.Forward(source[0], msg)
+		if err != nil {
+			return
+		}
+	} else {
+		return
+	}
+	l.emitDeliveryToComm(delivery)
+}
+
+func (l *ExecutionLoop) emitDeliveryToComm(delivery junction.Delivery) bool {
+	if l.frame == nil || l.frame.FamIn == nil {
+		return false
 	}
 	commCh := l.frame.FamIn[shared.FamilyComm]
 	if commCh == nil {
-		return
+		return false
 	}
 	select {
-	case commCh <- msg:
-		return
+	case commCh <- delivery:
+		return true
 	case <-l.done:
-		return
+		return false
 	}
 }
 
@@ -1768,13 +2129,20 @@ func (l *ExecutionLoop) emitToComm(msg circulation.Message) {
 // - Trace helper for response resolver/dispatch errors.
 
 func (l *ExecutionLoop) traceResponseError(intentionId string, reason string, userText string) {
-	tw := circulation.TraceWire{
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+	l.emitTrace(circulation.TraceWire{
 		TraceKind:   circulation.ValueTraceFamilyError,
 		Family:      circulation.ValueOriginExecution,
 		IntentionId: intentionId,
 		ReasonCode:  reason,
 		UserText:    userText,
+	})
+}
+
+// emitTrace emits tw through junction.TraceEmit, which gates first and stamps
+// the timestamp only for admitted traces.
+func (l *ExecutionLoop) emitTrace(tw circulation.TraceWire) {
+	if l.frame == nil {
+		return
 	}
 	junction.TraceEmit(l.frame, tw)
 }
@@ -1830,8 +2198,7 @@ func (l *ExecutionLoop) traceResponseError(intentionId string, reason string, us
 // - Generic execution trace emission helper.
 
 func (l *ExecutionLoop) sendToTrace(msgKind string, intentionId string, parentIntentionId string, rootIntentionId string, traceKind string) {
-	tw := circulation.TraceWire{
-		Timestamp:         time.Now().UTC().Format(time.RFC3339Nano),
+	l.emitTrace(circulation.TraceWire{
 		TraceKind:         traceKind,
 		Family:            circulation.ValueOriginExecution,
 		IntentionId:       intentionId,
@@ -1841,8 +2208,7 @@ func (l *ExecutionLoop) sendToTrace(msgKind string, intentionId string, parentIn
 		MsgKind:    msgKind,
 		ReasonCode: "",
 		UserText:   "",
-	}
-	junction.TraceEmit(l.frame, tw)
+	})
 }
 
 // emitResponseError
@@ -2094,5 +2460,28 @@ func errorFor(msgIn circulation.Message, code string, details map[string]any, me
 				Details: details,
 			},
 		},
+	}
+}
+
+// acquireJob reserves one user-job slot without blocking.
+func (l *ExecutionLoop) acquireJob() bool {
+	if l.jobSem == nil {
+		return true
+	}
+	select {
+	case l.jobSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l *ExecutionLoop) releaseJob() {
+	if l.jobSem == nil {
+		return
+	}
+	select {
+	case <-l.jobSem:
+	default:
 	}
 }

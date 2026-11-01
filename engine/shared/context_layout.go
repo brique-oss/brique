@@ -87,11 +87,11 @@ func EnsureWithinDir(rootDir, targetPath string) (bool, error) {
 // - returns (string, error).
 //
 // Contract:
-// - selfCtxID/selfCtxDir locate the instance root ("/root" -> the directory
-//   that is selfCtxDir with selfCtxID's "/root"-relative suffix stripped).
-// - destCtxID must be an absolute path rooted at RootContextID.
-// - Reports failure via returned error; callers convert it to the
-//   appropriate circulation response semantics.
+//   - selfCtxID/selfCtxDir locate the instance root ("/root" -> the directory
+//     that is selfCtxDir with selfCtxID's "/root"-relative suffix stripped).
+//   - destCtxID must be an absolute path rooted at RootContextID.
+//   - Reports failure via returned error; callers convert it to the
+//     appropriate circulation response semantics.
 func ResolveDestinationContextDir(selfCtxID, selfCtxDir, destCtxID string) (string, error) {
 	destCtxID = strings.TrimSpace(destCtxID)
 	if !strings.HasPrefix(destCtxID, RootContextID) {

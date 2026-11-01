@@ -17,43 +17,14 @@
 package comm
 
 import (
-	"strings"
-
-	"brique_engine/circulation"
+	"time"
 )
 
-func (l *CommLoop) rememberExternalReplyTarget(msg circulation.Message, publicFrom string, senderPub string) {
-	if l == nil || publicFrom == "" || senderPub == "" || msg.Kind != circulation.ValueKindIntention {
-		return
+// externalReplyTime is the single injectable security clock used by the
+// signed-envelope ingress, egress and pending-response registries.
+func (l *CommLoop) externalReplyTime() time.Time {
+	if l != nil && l.externalReplyNow != nil {
+		return l.externalReplyNow()
 	}
-	intentionID := msg.Intention.IntentionID
-	if intentionID == "" {
-		return
-	}
-	path := publicFrom
-	if len(path) > 0 && path[0] == '/' {
-		path = strings.TrimPrefix(path, "/")
-	}
-	l.externalReplyMu.Lock()
-	l.externalReplyToPub[intentionID] = "@ext_" + senderPub + ":/" + path
-	l.externalReplyMu.Unlock()
-}
-
-func (l *CommLoop) rewriteExternalResponseToPublicTarget(msg *circulation.Message) {
-	if l == nil || msg == nil || msg.Kind != circulation.ValueKindResponse {
-		return
-	}
-	intentionID := msg.Response.IntentionID
-	if intentionID == "" {
-		return
-	}
-	l.externalReplyMu.Lock()
-	publicTo, ok := l.externalReplyToPub[intentionID]
-	if ok {
-		delete(l.externalReplyToPub, intentionID)
-	}
-	l.externalReplyMu.Unlock()
-	if ok && publicTo != "" {
-		msg.Response.To.Context = circulation.ContextID(publicTo)
-	}
+	return time.Now()
 }

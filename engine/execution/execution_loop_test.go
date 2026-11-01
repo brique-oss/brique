@@ -43,13 +43,13 @@ type mockExecCommReg struct {
 	webSocketAddr string
 }
 
-func (m *mockExecCommReg) Register(addr shared.ContextAddr, commIn chan<- circulation.Message, extName string) {
+func (m *mockExecCommReg) Register(addr shared.ContextAddr, commIn chan<- junction.Delivery, extName string) {
 	_ = addr
 	_ = commIn
 	_ = extName
 }
 func (m *mockExecCommReg) Unregister(addr shared.ContextAddr, extName string) { _ = addr; _ = extName }
-func (m *mockExecCommReg) ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool) {
+func (m *mockExecCommReg) ResolveCh(addr shared.ContextAddr) (chan<- junction.Delivery, bool) {
 	_ = addr
 	return nil, false
 }
@@ -97,6 +97,18 @@ func (m *mockExecCommReg) WebSocketListenerAddr() string {
 	return m.webSocketAddr
 }
 
+func executionDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newExecutionLoopHarness(engineCfg map[string]any) (*ExecutionLoop, chan circulation.Message, chan circulation.Message) {
 	commCh := make(chan circulation.Message, 16)
 	traceCh := make(chan circulation.Message, 16)
@@ -109,8 +121,8 @@ func newExecutionLoopHarness(engineCfg map[string]any) (*ExecutionLoop, chan cir
 			"w1": "/ctx/a/w1",
 		}},
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm:  commCh,
-			shared.FamilyTrace: traceCh,
+			shared.FamilyComm:  executionDeliveryBridge(commCh, 16),
+			shared.FamilyTrace: executionDeliveryBridge(traceCh, 16),
 		},
 	}
 	l := NewExecutionLoop(frame, engineCfg)
@@ -128,7 +140,7 @@ func TestExecutionLoop_N1_EXLOOP_01_NewExecutionLoopInitializes(t *testing.T) {
 	if l == nil || l.frame == nil {
 		t.Fatalf("expected initialized loop/frame")
 	}
-	if l.in == nil || l.pending == nil || l.capCache == nil || l.done == nil {
+	if l.deliveryIn == nil || l.pending == nil || l.capCache == nil || l.done == nil {
 		t.Fatalf("expected initialized runtime channels/maps")
 	}
 	if l.State() != shared.FamilyInitializing {
@@ -326,7 +338,7 @@ func TestExecutionLoop_N1_EXLOOP_08b_AwaitResponseChanSkipsRunningAndResetsTimeo
 	// scheduler jitter of a bare `timer.Reset`, so this only survives
 	// because "running" actually reset the budget, not by accident.
 	const timeout = 50 * time.Millisecond
-	const runningAt = 40 * time.Millisecond          // close to `timeout`, but still inside the original budget
+	const runningAt = 40 * time.Millisecond              // close to `timeout`, but still inside the original budget
 	const finalDelayAfterRunning = 40 * time.Millisecond // running(40ms) + this(40ms) = 80ms > timeout(50ms):
 	// only survives if "running" reset the deadline to 40+50=90ms; without
 	// the reset, the original timer (armed at T=0 for 50ms) would already

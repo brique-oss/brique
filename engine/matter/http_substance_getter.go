@@ -119,6 +119,10 @@ type lease struct {
 	readOffset       int64
 	readLength       int64
 	readRanged       bool
+
+	// authz is set for a lease opened for an external caller; nil otherwise. It is
+	// written once before the handle is returned and read on every use.
+	authz *leaseAuthz
 }
 
 // expired
@@ -633,8 +637,14 @@ func (g *HTTPSubstanceGetter) OpenReadRangeLease(
 	matterRoot := filepath.Join(ctxDir, matterDirName)
 	subPath := filepath.Join(matterRoot, matterID+"."+ext)
 
-	rid := randTok(18)
-	tok := randTok(24)
+	rid, err := randTok(18)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenReadLease: create resource id: %w", err)
+	}
+	tok, err := randTok(24)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenReadLease: create bearer token: %w", err)
+	}
 	lz := &lease{
 		rid:           rid,
 		tok:           tok,
@@ -756,8 +766,14 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 		return SubstanceHTTPHandle{}, fmt.Errorf("substance http not running")
 	}
 
-	rid := randTok(18)
-	tok := randTok(24)
+	rid, err := randTok(18)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: create resource id: %w", err)
+	}
+	tok, err := randTok(24)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: create bearer token: %w", err)
+	}
 	matterRoot := filepath.Join(ctxDir, matterDirName)
 	finalSub := filepath.Join(matterRoot, matterID+"."+ext)
 	tmpSub := finalSub + "." + rid + tmpSuffix
@@ -827,7 +843,14 @@ func (g *HTTPSubstanceGetter) OpenAppendLease(
 	if g.BaseURL() == "" {
 		return SubstanceHTTPHandle{}, fmt.Errorf("substance http not running")
 	}
-	rid, tok := randTok(18), randTok(24)
+	rid, err := randTok(18)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: create resource id: %w", err)
+	}
+	tok, err := randTok(24)
+	if err != nil {
+		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: create bearer token: %w", err)
+	}
 	matterRoot := filepath.Join(ctxDir, matterDirName)
 	finalSub := filepath.Join(matterRoot, matterID+"."+ext)
 	tmpSub := finalSub + "." + rid + ".append" + tmpSuffix
@@ -1128,6 +1151,15 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 	}
 	if subtleStringNe(tok, lz.tok) {
 		writeProblem(w, http.StatusUnauthorized, "invalid_tok", rid, "", map[string]any{})
+		return
+	}
+	// The right of an external caller is checked again on every use (phase 4 bis).
+	if !lz.authz.allowed(lz.matter) {
+		g.traceLease(circulation.ValueTraceLeaseFail, lz.srcIntentionID, lz, map[string]any{
+			"status": http.StatusForbidden, "reason": "revoked", "matter_id": lz.matter,
+		})
+		g.closeLease(rid, "revoked")
+		writeProblem(w, http.StatusForbidden, "forbidden", rid, "", map[string]any{})
 		return
 	}
 
@@ -1529,6 +1561,14 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// The right may have been withdrawn while the body was uploading: nothing is
+	// committed for a caller that no longer holds it.
+	if !lz.authz.allowed(lz.matter) {
+		_ = os.Remove(lz.tmpSubstancePath)
+		g.failWrite(w, lz, http.StatusForbidden, "forbidden", nil)
+		return
+	}
+
 	// TOCTOU defense (write): after upload, re-check rev *just before finalize*.
 	// finalizeWriteLeaseAfterUpload also checks, but we do it here to fail fast / cleaner HTTP.
 	if !g.revStillValid(lz.matter, lz.rev) {
@@ -1721,13 +1761,15 @@ func (g *HTTPSubstanceGetter) failWrite(w http.ResponseWriter, lz *lease, status
 // - Falls back to 18 random bytes when requested size is non-positive.
 //
 
-func randTok(nBytes int) string {
+func randTok(nBytes int) (string, error) {
 	if nBytes <= 0 {
 		nBytes = 18
 	}
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // writeJSON
@@ -2010,7 +2052,6 @@ func (g *HTTPSubstanceGetter) traceLease(traceKind string, intentionID string, l
 
 	b, _ := json.Marshal(details)
 	tw := circulation.TraceWire{
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:   traceKind,
 		Family:      circulation.ValueOriginMatter,
 		IntentionId: intentionID,

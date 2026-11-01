@@ -25,8 +25,8 @@ import (
 	"brique_engine/shared"
 )
 
-func newIngressLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan circulation.Message) {
-	traceCh := make(chan circulation.Message, 64)
+func newIngressLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan junction.Delivery) {
+	traceCh := make(chan junction.Delivery, 64)
 	l := &CommLoop{
 		frame: &junction.ContextRegistry{
 			CtxId:        ctxID,
@@ -52,10 +52,29 @@ func TestCommIngress_N1_CMIG_01_LocalMissingTypeRejects(t *testing.T) {
 	}
 }
 
+func TestCommIngress_LocalOuterContextAlwaysFailsClosed(t *testing.T) {
+	reg := newMockCommReg()
+	l, traceCh := newIngressLoop("/root/child", reg)
+	execCh := make(chan junction.Delivery, 1)
+	l.frame.FamIn[shared.FamilyExecution] = execCh
+
+	msg := mkIntentionMsg("/root/child", circulation.ValueTypeUser, "/remote/source")
+	l.routeIngressLocal(msg, EndpointOuterCtx, "remote")
+
+	select {
+	case leaked := <-execCh:
+		t.Fatalf("raw outer-context message reached Execution: %#v", leaked)
+	default:
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto) {
+		t.Fatal("expected raw outer-context ingress to be rejected")
+	}
+}
+
 func TestCommIngress_N1_CMIG_02_LocalUIDefaultToContextUserDispatch(t *testing.T) {
 	reg := newMockCommReg()
 	l, _ := newIngressLoop("/ctx/local", reg)
-	execCh := make(chan circulation.Message, 1)
+	execCh := make(chan junction.Delivery, 1)
 	l.frame.FamIn[shared.FamilyExecution] = execCh
 
 	msg := mkIntentionMsg("", circulation.ValueTypeUser, "")
@@ -69,7 +88,7 @@ func TestCommIngress_N1_CMIG_02_LocalUIDefaultToContextUserDispatch(t *testing.T
 func TestCommIngress_N1_CMIG_02b_LocalUIPreservesSourcePath(t *testing.T) {
 	reg := newMockCommReg()
 	l, _ := newIngressLoop("/ctx/local", reg)
-	execCh := make(chan circulation.Message, 1)
+	execCh := make(chan junction.Delivery, 1)
 	l.frame.FamIn[shared.FamilyExecution] = execCh
 
 	msg := mkIntentionMsg("/ctx/local", circulation.ValueTypeUser, "@ui_main:/screen/result")
@@ -80,12 +99,27 @@ func TestCommIngress_N1_CMIG_02b_LocalUIPreservesSourcePath(t *testing.T) {
 	}
 }
 
+func TestCommIngress_InternalDispatchPreservesDeliveryAuthority(t *testing.T) {
+	reg := newMockCommReg()
+	l, _ := newIngressLoop("/ctx/local", reg)
+	matterCh := make(chan junction.Delivery, 1)
+	l.frame.FamIn[shared.FamilyMatter] = matterCh
+	msg := mkIntentionMsg("/ctx/local", circulation.ValueTypeMatter, "/ctx/src")
+	source := junction.MustLocalDelivery(junction.MustLocalAuthority("family:execution"), msg)
+
+	l.routeIngressLocal(msg, EndpointInnerCtx, "", source)
+	forwarded := <-matterCh
+	if authority, ok := forwarded.LocalAuthoritySource(); !ok || authority != "family:execution" {
+		t.Fatalf("authority = %q, valid = %v", authority, ok)
+	}
+}
+
 func TestCommIngress_N1_CMIG_03_LocalInnerWrapperBoundaryOwnerRelaysIface(t *testing.T) {
 	reg := newMockCommReg()
 	reg.wrapperToID["w"] = "/ctx/local"
 	l, _ := newIngressLoop("/ctx/local", reg)
 	ifaceCh := make(chan circulation.Message, 1)
-	l.ifaces["w"] = &InterfaceRuntime{Egress: ifaceCh}
+	l.ifaces["w"] = &InterfaceRuntime{Egress: ifaceCh, status: InterfaceRunning}
 
 	msg := mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeMatter, "/ctx/src")
 	l.routeIngressLocal(msg, EndpointInnerCtx, "")
@@ -108,8 +142,8 @@ func TestCommIngress_N1_CMIG_03b_LocalInnerWrapperBoundaryOwnerUserIntentionGoes
 	reg.wrapperToID["w"] = "/ctx/local"
 	l, _ := newIngressLoop("/ctx/local", reg)
 	ifaceCh := make(chan circulation.Message, 1)
-	l.ifaces["w"] = &InterfaceRuntime{Egress: ifaceCh}
-	execCh := make(chan circulation.Message, 1)
+	l.ifaces["w"] = &InterfaceRuntime{Egress: ifaceCh, status: InterfaceRunning}
+	execCh := make(chan junction.Delivery, 1)
 	l.frame.FamIn[shared.FamilyExecution] = execCh
 
 	msg := mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeUser, "/ctx/src")
@@ -140,7 +174,7 @@ func TestCommIngress_N1_CMIG_04_LocalInnerWrapperBoundaryMismatchRejects(t *test
 
 func TestCommIngress_N1_CMIG_05_LocalUIExtForwardsRoot(t *testing.T) {
 	reg := newMockCommReg()
-	rootCh := make(chan circulation.Message, 1)
+	rootCh := make(chan junction.Delivery, 1)
 	reg.chByID[shared.ContextAddr(shared.RootContextID)] = rootCh
 	l, _ := newIngressLoop("/ctx/local", reg)
 
@@ -151,7 +185,7 @@ func TestCommIngress_N1_CMIG_05_LocalUIExtForwardsRoot(t *testing.T) {
 
 func TestCommIngress_N1_CMIG_05b_LocalWrapperUIDestinationForwardsRoot(t *testing.T) {
 	reg := newMockCommReg()
-	rootCh := make(chan circulation.Message, 1)
+	rootCh := make(chan junction.Delivery, 1)
 	reg.chByID[shared.ContextAddr(shared.RootContextID)] = rootCh
 	l, _ := newIngressLoop("/root/photographie/image", reg)
 
@@ -178,7 +212,7 @@ func TestCommIngress_N1_CMIG_05b_LocalWrapperUIDestinationForwardsRoot(t *testin
 
 func TestCommIngress_N1_CMIG_05c_LocalWrapperUIDestinationForwardsOwner(t *testing.T) {
 	reg := newMockCommReg()
-	ownerCh := make(chan circulation.Message, 1)
+	ownerCh := make(chan junction.Delivery, 1)
 	reg.uiToID["main"] = "/root/photographie"
 	reg.chByID["/root/photographie"] = ownerCh
 	l, _ := newIngressLoop("/root/photographie/image", reg)
@@ -206,11 +240,11 @@ func TestCommIngress_N1_CMIG_05c_LocalWrapperUIDestinationForwardsOwner(t *testi
 
 func TestCommIngress_N1_CMIG_05d_UnknownEndpointUIDestinationDoesNotDispatchUser(t *testing.T) {
 	reg := newMockCommReg()
-	ownerCh := make(chan circulation.Message, 1)
+	ownerCh := make(chan junction.Delivery, 1)
 	reg.uiToID["main"] = "/root/photographie"
 	reg.chByID["/root/photographie"] = ownerCh
 	l, _ := newIngressLoop("/root/photographie/image", reg)
-	execCh := make(chan circulation.Message, 1)
+	execCh := make(chan junction.Delivery, 1)
 	l.frame.FamIn[shared.FamilyExecution] = execCh
 
 	msg := circulation.Message{
@@ -241,8 +275,8 @@ func TestCommIngress_N1_CMIG_05d_UnknownEndpointUIDestinationDoesNotDispatchUser
 
 func TestCommIngress_N1_CMIG_05e_WrapperUIDestinationUsesScopedOwner(t *testing.T) {
 	reg := newMockCommReg()
-	rootCh := make(chan circulation.Message, 1)
-	photoCh := make(chan circulation.Message, 1)
+	rootCh := make(chan junction.Delivery, 1)
+	photoCh := make(chan junction.Delivery, 1)
 	reg.uiToID["main"] = "/root"
 	reg.uiToID["main@/root"] = "/root"
 	reg.uiToID["main@/root/photographie"] = "/root/photographie"
@@ -287,7 +321,7 @@ func TestCommIngress_N1_CMIG_06_LocalControlNonUIRejects(t *testing.T) {
 func TestCommIngress_N1_CMIG_07_LocalControlFromUISendsCtrl(t *testing.T) {
 	reg := newMockCommReg()
 	l, _ := newIngressLoop("/ctx/local", reg)
-	ctrlCh := make(chan circulation.Message, 1)
+	ctrlCh := make(chan junction.Delivery, 1)
 	l.frame.CtrlIn = ctrlCh
 	msg := mkIntentionMsg("/ctx/local", circulation.ValueTypeControl, "")
 
@@ -320,7 +354,7 @@ func TestCommIngress_N1_CMIG_07c_LocalUserMissingExecChannelNoOp(t *testing.T) {
 func TestCommIngress_N1_CMIG_07d_LocalFamilyDispatchesToFamilyChannel(t *testing.T) {
 	reg := newMockCommReg()
 	l, _ := newIngressLoop("/ctx/local", reg)
-	famCh := make(chan circulation.Message, 1)
+	famCh := make(chan junction.Delivery, 1)
 	l.frame.FamIn[shared.FamilyMatter] = famCh
 	msg := mkIntentionMsg("/ctx/local", circulation.ValueTypeMatter, "/ctx/src")
 
@@ -350,47 +384,73 @@ func TestCommIngress_N1_CMIG_08_RootOuterMissingPubRejects(t *testing.T) {
 	}
 }
 
-func TestCommIngress_N1_CMIG_09_RootOuterUIOwnedRelaysIface(t *testing.T) {
+func TestCommIngress_N1_CMIG_09_RootOuterUIIsRejectedWithoutSignedEnvelope(t *testing.T) {
 	reg := newMockCommReg()
 	reg.uiToID["main"] = shared.ContextAddr(shared.RootContextID)
-	l, _ := newIngressLoop(shared.RootContextID, reg)
+	l, traceCh := newIngressLoop(shared.RootContextID, reg)
 	ifaceCh := make(chan circulation.Message, 1)
-	l.ifaces["main"] = &InterfaceRuntime{Egress: ifaceCh}
+	l.ifaces["main"] = &InterfaceRuntime{Egress: ifaceCh, status: InterfaceRunning}
 
 	msg := mkIntentionMsg("@ui_main:/x", circulation.ValueTypeMatter, "")
-	msg.Intention.Identity.PubKey = "PUB"
 	l.routeIngressRoot(msg, EndpointOuterCtx, "outer")
-	got := recvMsg(t, ifaceCh, "root outer ui owned")
-	if got.Intention.From.Context != circulation.ContextID("@ext_PUB") {
-		t.Fatalf("expected from @ext_PUB, got %q", got.Intention.From.Context)
+	select {
+	case leaked := <-ifaceCh:
+		t.Fatalf("unprotected external message reached UI: %#v", leaked)
+	default:
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto) {
+		t.Fatal("expected invalid crypto reject trace")
 	}
 }
 
 func TestCommIngress_N1_CMIG_10_RootUIExtRoutesEgressRoot(t *testing.T) {
 	reg := newMockCommReg()
 	reg.idToExt["/ctx/src"] = "public-src"
-	l, _ := newIngressLoop(shared.RootContextID, reg)
+	l, traceCh := newIngressLoop(shared.RootContextID, reg)
 	outerCh := make(chan circulation.Message, 1)
-	l.ifaces["outerCtx"] = &InterfaceRuntime{Egress: outerCh}
+	l.ifaces["outerCtx"] = &InterfaceRuntime{Egress: outerCh, status: InterfaceRunning}
 
 	msg := mkIntentionMsg("@ext_peer:/x", circulation.ValueTypeMatter, "/ctx/src")
 	l.routeIngressRoot(msg, EndpointUI, "ui1")
-	got := recvMsg(t, outerCh, "root UI ext route")
-	if got.Intention.From.Context != circulation.ContextID("public-src") {
-		t.Fatalf("expected public-src stamped from.context, got %q", got.Intention.From.Context)
+	select {
+	case leaked := <-outerCh:
+		t.Fatalf("unsigned UI message escaped: %#v", leaked)
+	default:
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto) {
+		t.Fatal("expected unsigned egress rejection")
 	}
 }
 
 func TestCommIngress_N1_CMIG_11_RootInnerExtRoutesEgressRoot(t *testing.T) {
 	reg := newMockCommReg()
 	reg.idToExt["/ctx/src"] = "public-src"
-	l, _ := newIngressLoop(shared.RootContextID, reg)
+	l, traceCh := newIngressLoop(shared.RootContextID, reg)
 	outerCh := make(chan circulation.Message, 1)
-	l.ifaces["outerCtx"] = &InterfaceRuntime{Egress: outerCh}
+	l.ifaces["outerCtx"] = &InterfaceRuntime{Egress: outerCh, status: InterfaceRunning}
 
 	msg := mkIntentionMsg("@ext_peer:/x", circulation.ValueTypeMatter, "/ctx/src")
 	l.routeIngressRoot(msg, EndpointInnerCtx, "")
-	_ = recvMsg(t, outerCh, "root inner ext route")
+	select {
+	case leaked := <-outerCh:
+		t.Fatalf("unsigned inner message escaped: %#v", leaked)
+	default:
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto) {
+		t.Fatal("expected unsigned egress rejection")
+	}
+}
+
+func TestCommIngress_RootDoesNotRelayInternalContextTraffic(t *testing.T) {
+	reg := newMockCommReg()
+	targetCh := make(chan junction.Delivery, 1)
+	reg.chByID["/root/target/deep"] = targetCh
+	l, _ := newIngressLoop(shared.RootContextID, reg)
+
+	msg := mkIntentionMsg("/root/target/deep", circulation.ValueTypeMatter, "/root/source")
+	l.routeIngressRoot(msg, EndpointInnerCtx, "")
+
+	noMsg(t, targetCh, "root must not relay internal context traffic")
 }
 
 func TestCommIngress_N1_CMIG_12_RootWrapperEndpointForbidden(t *testing.T) {

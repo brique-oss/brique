@@ -30,12 +30,10 @@
   },
 
   "identity": {
-    "_comment": "Optional. Presence required only at trust boundaries (external callers, cross-instance calls). Typically empty inside an engine instance.",
+    "_comment": "Internal runtime identity only. External authentication is carried by the signed transport envelope and must never be embedded here.",
     "id": "",
     "kind": "",
-    "_kind_note": "Optional. Identity kind (e.g. 'instance', 'user', 'service').",
-    "pubkey": "",
-    "signature": ""
+    "_kind_note": "Optional internal identity kind (for example 'wrapper')."
   },
 
   "params": {

@@ -37,6 +37,11 @@ type TraceWire struct {
 	ParentIntentionId string `json:"parent_intention_id,omitempty"`
 	RootIntentionId   string `json:"root_intention_id,omitempty"`
 
+	// Provenance (D12): who the work is done for, stamped by the engine from the
+	// admission of the request's root. Never taken from a message.
+	Principal string `json:"principal,omitempty"`
+	Actor     string `json:"actor,omitempty"`
+
 	ReasonCode string `json:"reason_code,omitempty"`
 	UserText   string `json:"user_text,omitempty"`
 }

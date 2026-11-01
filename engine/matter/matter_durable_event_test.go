@@ -35,7 +35,7 @@ func TestDurableSubscriptionPersistsDeliversAndAcknowledges(t *testing.T) {
 	}
 	eventID := event.Intention.Params[circulation.KeyEventId].(string)
 
-	frame := &junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: make(chan circulation.Message, 16)}}
+	frame := &junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: make(chan junction.Delivery, 16)}}
 	reloaded := NewMatterLoop(frame)
 	if err := reloaded.loadMatterEventState(); err != nil {
 		t.Fatalf("reload: %v", err)
@@ -92,7 +92,7 @@ func TestDurableEventMarkerReconcilesCommittedMutationAfterRestart(t *testing.T)
 	}
 
 	replayComm := make(chan circulation.Message, 16)
-	reloaded := NewMatterLoop(&junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: replayComm}})
+	reloaded := NewMatterLoop(&junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: matterDeliveryBridge(replayComm, 16)}})
 	if err := reloaded.loadMatterEventState(); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestDurableSubscriptionDowngradeAndUnsubscribeClearPersistentState(t *testi
 			if len(l.outbox) != 0 {
 				t.Fatalf("outbox not cleared: %#v", l.outbox)
 			}
-			reloaded := NewMatterLoop(&junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: make(chan circulation.Message, 4)}})
+			reloaded := NewMatterLoop(&junction.ContextRegistry{CtxId: "/ctx/matter-a", ContextDir: root, FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: make(chan junction.Delivery, 4)}})
 			if err := reloaded.loadMatterEventState(); err != nil {
 				t.Fatal(err)
 			}

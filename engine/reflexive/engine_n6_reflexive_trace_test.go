@@ -170,8 +170,8 @@ func TestEngine_N6_REF_25_TraceInspectErrorsAndFacets(t *testing.T) {
 		t.Fatalf("invalid read.meaning should error: %#v", errorResp)
 	}
 	matterResp := queryN6Matter(t, h, n6WorkspaceID, matterIntentionID, map[string]any{
-		"matter_id":  "m_seed",
-		"read_mode":  circulation.ValueModeBrique,
+		"matter_id": "m_seed",
+		"read_mode": circulation.ValueModeBrique,
 	})
 	if matterResp.Status != circulation.ValueStatusOK {
 		t.Fatalf("matter.read should succeed: %#v", matterResp)
@@ -383,6 +383,8 @@ func TestEngine_N6_REF_28_TraceInspectExactFiltersOnProjectedFields(t *testing.T
 
 func TestEngine_N6_REF_29_TraceInspectOrderingAndPaginationAcrossSegments(t *testing.T) {
 	h := newEngineN6Harness(t)
+	// The engine also traces its own inspect calls (recent events): bound the
+	// queries to the seeded window so only the seeded events are ranked.
 	traceDir := filepath.Join(h.rootDir, "workspace", "trace")
 	baseA := time.Now().UTC().Add(-3 * time.Second)
 	baseB := time.Now().UTC().Add(-2 * time.Second)
@@ -429,12 +431,20 @@ func TestEngine_N6_REF_29_TraceInspectOrderingAndPaginationAcrossSegments(t *tes
 		circulation.KeyLimit:   2,
 		circulation.KeyOffset:  0,
 		circulation.KeyOrderBy: "ts_ns ASC",
+		circulation.KeyTimeRange: map[string]any{
+			circulation.KeyFromTsNs: baseA.UnixNano(),
+			circulation.KeyToTsNs:   baseB.Add(time.Second).UnixNano(),
+		},
 	}))
 	ascPage2 := traceEventsFromResp(t, callN6TraceInspect(t, h, n6WorkspaceID, "n6-trace-asc-page2", map[string]any{
 		circulation.KeyMode:    circulation.ValueModeEvents,
 		circulation.KeyLimit:   2,
 		circulation.KeyOffset:  2,
 		circulation.KeyOrderBy: "ts_ns ASC",
+		circulation.KeyTimeRange: map[string]any{
+			circulation.KeyFromTsNs: baseA.UnixNano(),
+			circulation.KeyToTsNs:   baseB.Add(time.Second).UnixNano(),
+		},
 	}))
 	if len(ascPage1) != 2 || len(ascPage2) != 2 {
 		t.Fatalf("pagination should return 2+2 events: page1=%#v page2=%#v", ascPage1, ascPage2)
@@ -451,6 +461,10 @@ func TestEngine_N6_REF_29_TraceInspectOrderingAndPaginationAcrossSegments(t *tes
 		circulation.KeyLimit:   1,
 		circulation.KeyOffset:  0,
 		circulation.KeyOrderBy: "ts_ns DESC",
+		circulation.KeyTimeRange: map[string]any{
+			circulation.KeyFromTsNs: baseA.UnixNano(),
+			circulation.KeyToTsNs:   baseB.Add(time.Second).UnixNano(),
+		},
 	}))
 	if len(descPage) != 1 || descPage[0].(map[string]any)[circulation.KeyIntentionId] != "seg-b-2" {
 		t.Fatalf("DESC ordering should start with latest event: %#v", descPage)

@@ -49,7 +49,7 @@ func TestTraceLoop_N1_TL_01_NewTraceLoopInitializes(t *testing.T) {
 	if l == nil || l.frame != frame {
 		t.Fatalf("loop/frame initialization failed")
 	}
-	if l.in == nil || l.ring == nil || l.flushReq == nil || l.done == nil {
+	if l.deliveryIn == nil || l.ring == nil || l.flushReq == nil || l.done == nil {
 		t.Fatalf("expected initialized channels/ring")
 	}
 	if l.State() != shared.FamilyInitializing {
@@ -76,25 +76,6 @@ func TestTraceLoop_N1_TL_02_03_StartStopLifecycle(t *testing.T) {
 	l.Start()
 	if l.State() != shared.FamilyStopped {
 		t.Fatalf("start after stopped should keep stopped")
-	}
-}
-
-func TestTraceLoop_N1_TL_04_05_TrySendNonBlocking(t *testing.T) {
-	tw := circulation.TraceWire{Timestamp: "2026-01-01T00:00:00Z", TraceKind: circulation.ValueTraceCommIngress}
-
-	chOK := make(chan circulation.Message, 1)
-	if !TrySend(chOK, tw) {
-		t.Fatalf("TrySend should succeed on available channel")
-	}
-	msg := <-chOK
-	if msg.Kind != circulation.ValueKindTrace || msg.Trace.TraceKind != tw.TraceKind || msg.TS != tw.Timestamp {
-		t.Fatalf("unexpected sent message: %#v", msg)
-	}
-
-	chFull := make(chan circulation.Message, 1)
-	chFull <- circulation.Message{Kind: circulation.ValueKindTrace}
-	if TrySend(chFull, tw) {
-		t.Fatalf("TrySend should fail on full channel")
 	}
 }
 
@@ -160,10 +141,10 @@ func TestTraceLoop_N1_TL_11_12_13_LoopIngressBranches(t *testing.T) {
 			FlushEveryInterval: 1000,
 			RingCapacity:       16,
 		},
-		ring:     newEventRing(16),
-		in:       make(chan circulation.Message, 8),
-		flushReq: make(chan []circulation.TraceWire, 8),
-		done:     make(chan struct{}),
+		ring:       newEventRing(16),
+		deliveryIn: make(chan junction.Delivery, 8),
+		flushReq:   make(chan []circulation.TraceWire, 8),
+		done:       make(chan struct{}),
 	}
 
 	exit := make(chan struct{})
@@ -173,11 +154,11 @@ func TestTraceLoop_N1_TL_11_12_13_LoopIngressBranches(t *testing.T) {
 	}()
 
 	// N1-TL-12: non-trace ignored
-	l.in <- circulation.Message{Kind: circulation.ValueKindIntention}
+	l.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindIntention})
 
 	// N1-TL-11: valid trace flushes batch
 	tw := circulation.TraceWire{Timestamp: "2026-03-07T10:00:00Z", TraceKind: circulation.ValueTraceCommIngress}
-	l.in <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: tw, TS: tw.Timestamp}
+	l.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: tw, TS: tw.Timestamp})
 
 	var gotBatch []circulation.TraceWire
 	waitUntil(t, time.Second, func() bool {
@@ -205,15 +186,15 @@ func TestTraceLoop_N1_TL_11_12_13_LoopIngressBranches(t *testing.T) {
 
 	// N1-TL-13: disabled mode ignores trace
 	l2 := &TraceLoop{
-		cfg:      TraceCfg{Enabled: false, FlushEveryN: 1, FlushEveryInterval: 10, RingCapacity: 4},
-		ring:     newEventRing(4),
-		in:       make(chan circulation.Message, 2),
-		flushReq: make(chan []circulation.TraceWire, 2),
-		done:     make(chan struct{}),
+		cfg:        TraceCfg{Enabled: false, FlushEveryN: 1, FlushEveryInterval: 10, RingCapacity: 4},
+		ring:       newEventRing(4),
+		deliveryIn: make(chan junction.Delivery, 2),
+		flushReq:   make(chan []circulation.TraceWire, 2),
+		done:       make(chan struct{}),
 	}
 	exit2 := make(chan struct{})
 	go func() { defer close(exit2); l2.loopIngress() }()
-	l2.in <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress}}
+	l2.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress}})
 	time.Sleep(30 * time.Millisecond)
 	if len(l2.flushReq) != 0 {
 		t.Fatalf("disabled ingress should not emit batches")

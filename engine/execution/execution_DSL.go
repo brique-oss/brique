@@ -29,6 +29,7 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
+	"brique_engine/junction"
 )
 
 type DSLDescriptor struct {
@@ -123,6 +124,17 @@ var dslRuntimeNodeKeys = map[string]struct{}{
 // - In the current phase, execution stops after successful load/validation and returns a `no_orchestration` error until node execution is wired.
 
 func (l *ExecutionLoop) runDSLOrchestrator(msg circulation.Message) {
+	l.runDSLOrchestratorAuthorized(msg)
+}
+
+func (l *ExecutionLoop) runDSLOrchestratorAuthorized(msg circulation.Message) {
+	l.runDSLOrchestratorUnder(msg, nil)
+}
+
+// runDSLOrchestratorUnder runs a DSL capacity. parent is the externally admitted
+// delivery that called it, or nil for a local call: the steps then carry the
+// caller's admission.
+func (l *ExecutionLoop) runDSLOrchestratorUnder(msg circulation.Message, parent *junction.Delivery) {
 	if msg.Kind != circulation.ValueKindIntention {
 		return
 	}
@@ -155,6 +167,7 @@ func (l *ExecutionLoop) runDSLOrchestrator(msg circulation.Message) {
 	}
 
 	st := newDSLExecState(in, desc.RootSection.Inputs)
+	st.parent = parent
 	resp, err := l.evalDSLNode(st, desc.RootSection.Resolution)
 	if err != nil {
 		l.emitResponseError(errorResp(in,
@@ -175,11 +188,18 @@ func (l *ExecutionLoop) loadDSLDescriptor(capName string) (DSLDescriptor, error)
 	if capName == "" {
 		return DSLDescriptor{}, fmt.Errorf("dsl cap_name is required")
 	}
+	if !validCapabilityName(capName) {
+		return DSLDescriptor{}, fmt.Errorf("dsl cap_name is invalid")
+	}
 	if strings.TrimSpace(l.capRoot) == "" {
 		return DSLDescriptor{}, fmt.Errorf("execution capRoot is not configured")
 	}
 
 	path := filepath.Join(l.capRoot, capName+".json")
+	if desc, _, ok := l.cachedDSLDescriptor(capName, path); ok {
+		return desc, nil
+	}
+	info, _ := os.Stat(path)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return DSLDescriptor{}, fmt.Errorf("failed to read dsl descriptor: %w", err)
@@ -212,11 +232,15 @@ func (l *ExecutionLoop) loadDSLDescriptor(capName string) (DSLDescriptor, error)
 		return DSLDescriptor{}, err
 	}
 
-	return DSLDescriptor{
+	desc := DSLDescriptor{
 		CapName:     capName,
 		RootName:    rootName,
 		RootSection: rootSection,
-	}, nil
+	}
+	// The parsed descriptor is read-only at run time, so it is shared between
+	// executions until the file changes.
+	l.storeDSLDescriptor(capName, info, desc)
+	return desc, nil
 }
 
 func extractDSLRootSection(functional map[string]any) (string, map[string]any, error) {
@@ -356,6 +380,11 @@ func validateDSLNode(nodeKey string, node map[string]any) error {
 			if parseDSLInt(m["max"]) < 0 || parseDSLInt(m["delay_ms"]) < 0 {
 				return fmt.Errorf("dsl invoke retry values must be >= 0")
 			}
+			if v, present := m["on_timeout"]; present {
+				if _, isBool := v.(bool); !isBool {
+					return fmt.Errorf("dsl invoke retry.on_timeout must be a boolean")
+				}
+			}
 		}
 	case ">parallel", ">for_each":
 		if node["limit"] != nil && parseDSLInt(node["limit"]) < 0 {
@@ -450,6 +479,7 @@ func cloneDSLExecState(in *dslExecState) *dslExecState {
 		in:      in.in,
 		input:   cloneMap(in.input),
 		aliases: cloneAliases(in.aliases),
+		parent:  in.parent,
 	}
 	if len(in.localScopes) > 0 {
 		out.localScopes = make([]dslLocalScope, 0, len(in.localScopes))
@@ -594,13 +624,14 @@ func (l *ExecutionLoop) evalDSLInvokeNode(st *dslExecState, node map[string]any)
 
 	var resp circulation.Response
 	if await {
-		resp, err = l.evalDSLInvokeWithPolicy(node, sub)
+		resp, err = l.evalDSLInvokeWithPolicy(node, sub, st.parent)
 		if err != nil {
 			return circulation.Response{}, err
 		}
 	} else {
-		if err := l.invokeNoWait(sub); err != nil {
-			return circulation.Response{}, err
+		invokeErr := l.invokeNoWaitUnder(sub, st.parent)
+		if invokeErr != nil {
+			return circulation.Response{}, invokeErr
 		}
 		resp = circulation.Response{
 			IntentionID: sub.IntentionID,
@@ -632,9 +663,10 @@ func (l *ExecutionLoop) evalDSLInvokeNode(st *dslExecState, node map[string]any)
 	return resp, nil
 }
 
-func (l *ExecutionLoop) evalDSLInvokeWithPolicy(node map[string]any, sub circulation.Intention) (circulation.Response, error) {
+func (l *ExecutionLoop) evalDSLInvokeWithPolicy(node map[string]any, sub circulation.Intention, parent *junction.Delivery) (circulation.Response, error) {
 	timeout := parseDSLTimeout(node["timeout"])
 	retryMax, retryDelay := parseDSLRetry(node["retry"])
+	retryAmbiguous := parseDSLRetryOnTimeout(node["retry"])
 	attempts := retryMax + 1
 	if attempts < 1 {
 		attempts = 1
@@ -642,13 +674,26 @@ func (l *ExecutionLoop) evalDSLInvokeWithPolicy(node map[string]any, sub circula
 
 	var last circulation.Response
 	for attempt := 0; attempt < attempts; attempt++ {
-		resp, err := l.invokeAndAwaitWithTimeout(sub, timeout)
+		if attempt > 0 {
+			// Each attempt is its own intention (same parent/root correlation):
+			// a late response to a previous attempt must never satisfy this one,
+			// and a receiver must never see one intention id twice.
+			sub.IntentionID = circulation.NewIntentionID()
+		}
+		var resp circulation.Response
+		var err error
+		resp, err = l.invokeAndAwaitUnder(sub, timeout, parent)
 		if err != nil {
 			return circulation.Response{}, err
 		}
 		last = resp
 		if resp.Status == circulation.ValueStatusOK {
 			return resp, nil
+		}
+		if outcomeIsUnknown(resp) && !retryAmbiguous {
+			// The call may have completed: repeating it could repeat its effects, with
+			// the caller's rights. Only an author who says so (retry.on_timeout) accepts that.
+			return last, nil
 		}
 		if attempt+1 < attempts && retryDelay > 0 {
 			timer := time.NewTimer(retryDelay)
@@ -760,7 +805,18 @@ func (l *ExecutionLoop) evalDSLParallelNode(st *dslExecState, node map[string]an
 		return circulation.Response{}, fmt.Errorf("dsl >parallel requires non-empty items")
 	}
 
-	limit := parseDSLLimit(node["limit"], len(rawItems))
+	// Validate every branch before launching any: an invalid item must not
+	// leave already-started branches running unattended.
+	branches := make([]map[string]any, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item == nil {
+			return circulation.Response{}, fmt.Errorf("dsl >parallel item must be an object")
+		}
+		branches = append(branches, item)
+	}
+
+	limit := dslFanoutLimit(node["limit"], len(rawItems))
 	type branchResult struct {
 		idx     int
 		resp    circulation.Response
@@ -772,11 +828,7 @@ func (l *ExecutionLoop) evalDSLParallelNode(st *dslExecState, node map[string]an
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 
-	for i, rawItem := range rawItems {
-		item, ok := rawItem.(map[string]any)
-		if !ok || item == nil {
-			return circulation.Response{}, fmt.Errorf("dsl >parallel item must be an object")
-		}
+	for i, item := range branches {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(idx int, item map[string]any) {
@@ -921,7 +973,7 @@ func (l *ExecutionLoop) evalDSLForEachNode(st *dslExecState, node map[string]any
 		return circulation.Response{}, fmt.Errorf("dsl >for_each requires >do")
 	}
 
-	limit := parseDSLLimit(node["limit"], len(items))
+	limit := dslFanoutLimit(node["limit"], len(items))
 	onError := anyString(node["on_error"])
 	if onError == "" {
 		onError = "fail"
@@ -1450,6 +1502,19 @@ func dslRootIntentionID(in circulation.Intention) string {
 	return in.IntentionID
 }
 
+// defaultDSLFanout bounds the parallelism of >parallel and >for_each when the
+// descriptor gives no explicit `limit`. An explicit limit is the author's
+// decision and is respected as written.
+const defaultDSLFanout = 128
+
+func dslFanoutLimit(raw any, n int) int {
+	fallback := n
+	if fallback > defaultDSLFanout {
+		fallback = defaultDSLFanout
+	}
+	return parseDSLLimit(raw, fallback)
+}
+
 func parseDSLLimit(raw any, fallback int) int {
 	if fallback <= 0 {
 		fallback = 1
@@ -1497,6 +1562,26 @@ func parseDSLRetry(raw any) (int, time.Duration) {
 		delay = 0
 	}
 	return max, time.Duration(delay) * time.Millisecond
+}
+
+// parseDSLRetryOnTimeout reads the explicit opt-in to retry after an answer that never came.
+func parseDSLRetryOnTimeout(raw any) bool {
+	m, ok := raw.(map[string]any)
+	if !ok || m == nil {
+		return false
+	}
+	enabled, _ := m["on_timeout"].(bool)
+	return enabled
+}
+
+// outcomeIsUnknown reports a failure that does not say whether the call ran: the
+// wait for its answer ended, or this context stopped while waiting.
+func outcomeIsUnknown(resp circulation.Response) bool {
+	if resp.Status != circulation.ValueStatusError || resp.Error == nil {
+		return false
+	}
+	reason, _ := resp.Error.Details[circulation.KeyReason].(string)
+	return reason == circulation.ValueReasonTimeoutWaitingAnswer || reason == circulation.ValueReasonContextStopped
 }
 
 func parseDSLInt(raw any) int {

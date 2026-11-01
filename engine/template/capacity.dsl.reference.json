@@ -4,7 +4,7 @@
   "_resolution_rules": {
     "one_node_per_object": "Each resolution object must contain exactly one runtime node key (invoke, output, >sequence, >parallel, >if, >switch, >for_each, >while, >race) or one sub-section key (#name). Having two runtime nodes in the same object is invalid.",
     "runtime_ref_syntax": "Values starting with '$' are resolved at execution time. Forms: '$input.<field>' (root input param), '$<alias>' (full response of a prior invoke), '$<alias>.payload.<field>' (field from a prior invoke payload), '$<alias>.payload.<field>.<nested>' (nested path). Literal values (strings, numbers, booleans) are passed as-is.",
-    "capacity_ref_forms": "The @capacity field in invoke accepts: absolute Brique path ('/root/ctx/cap.name'), external ref ('@ext_<pubkey>:/ctx/cap'), runtime ref ('$input.<field>' or '$alias'). Relative refs ('./cap') are forbidden for kind='dsl'. @capacity only supplies the (context, cap_name) pair — it never implies which family the target belongs to. It works identically for a user capacity (e.g. '/root/ctx/my_cap') and for an engine-native capacity (e.g. '/root/ctx/matter.create', '/root/ctx/context.start') as long as 'to_type' (see invoke.to_type below) is set to the matching family.",
+    "capacity_ref_forms": "The @capacity field in invoke accepts: absolute Brique path ('/root/ctx/cap.name'), external peer ref ('@ext_<principal_id>:/ctx/cap'), runtime ref ('$input.<field>' or '$alias'). Relative refs ('./cap') are forbidden for kind='dsl'. @capacity only supplies the (context, cap_name) pair — it never implies which family the target belongs to. It works identically for a user capacity (e.g. '/root/ctx/my_cap') and for an engine-native capacity (e.g. '/root/ctx/matter.create', '/root/ctx/context.start') as long as 'to_type' (see invoke.to_type below) is set to the matching family.",
     "sub_sections": "A key starting with '#' is a named sub-section. The engine evaluates its resolution. Sub-sections without resolution return empty OK."
   },
 
@@ -36,7 +36,7 @@
 
   "invoke": {
     "_comment": "Execute one Brique capacity and optionally bind the response to an alias.",
-    "@capacity": "/root/ctx/cap.name | @ext_<pubkey>:/ctx/cap | $input.<field> | $alias",
+    "@capacity": "/root/ctx/cap.name | @ext_<principal_id>:/ctx/cap | $input.<field> | $alias",
     "_capacity_note": "Required.",
     "to_type": "user",
     "_to_type_note": "Optional. The family the target capacity belongs to. Defaults to 'user' when absent — omit this field entirely when invoking a user-defined capacity (one that appears under a context's capacity/ directory). Set explicitly to 'reflexive', 'matter', 'execution', or 'control' to invoke an engine-native capacity by the same @capacity address form, e.g. @capacity: '/root/ctx/matter.create' with to_type: 'matter', or @capacity: '/root/ctx/context.start' with to_type: 'control'. The engine performs no other lookup to guess the family — an engine capacity invoked with the wrong or default to_type resolves to a nonexistent user capacity and fails with unknown_cap.",
@@ -60,7 +60,7 @@
     "timeout": { "ms": 5000 },
     "_timeout_note": "Optional. Milliseconds to wait for response. ms must be >= 0. When absent, uses default_invoke_timeout_ms from context.json execution config, or no timeout if that is also absent.",
     "retry": { "max": 2, "delay_ms": 200 },
-    "_retry_note": "Optional. Retry on error. max=number of additional attempts (>= 0). delay_ms=wait between attempts (>= 0). Forbidden when await_response=false.",
+    "_retry_note": "Optional. Retry on error. max=number of additional attempts (>= 0). delay_ms=wait between attempts (>= 0). on_timeout (boolean, default false)=also retry when the answer never came (timeout, or this context stopped): the call may have completed, so repeating it can repeat its effects with the caller's rights; leave it off unless the invoked capacity is idempotent. Forbidden when await_response=false.",
     "on_error": "fail",
     "_on_error_note": "Optional. What to do when the invoked capacity returns status='error'. Accepted values: 'fail' (default — propagates the error, stops the current branch), 'continue' (treats error as empty OK payload, continues), 'collect' (treats error as OK with payload { collected_error: <error object> }, continues)."
   },

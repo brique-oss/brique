@@ -74,7 +74,7 @@ func n8Sink(t *testing.T, h *engineN5Harness, id string, cap int) (<-chan circul
 	t.Helper()
 	ch := make(chan circulation.Message, cap)
 	sinkID := "/test/n8-" + id
-	h.regA.Register(shared.ContextAddr(sinkID), ch, "n8-"+id)
+	registerContextTestSink(h.regA, shared.ContextAddr(sinkID), ch, "n8-"+id)
 	return ch, sinkID
 }
 
@@ -174,7 +174,7 @@ func TestEngine_N8_STRESS_01_InboxSaturation(t *testing.T) {
 		sendBlocked := time.Duration(0)
 		for i := 0; i < burst; i++ {
 			id := fmt.Sprintf("n8-s01-%d-%d", burst, i)
-			starts[id] = time.Now()
+			starts[n5TestIntentionID(id)] = time.Now()
 			before := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 				id, n5AlphaChildIDA, circulation.ValueTypeUser,
@@ -347,7 +347,7 @@ func TestEngine_N8_STRESS_03_PendingMapUnderConcurrentLoad(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s03-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s03-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s03-%d", idx))
 			id := fmt.Sprintf("n8-s03-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -435,7 +435,7 @@ func TestEngine_N8_STRESS_04_WrapperSyncVsAsyncConcurrency(t *testing.T) {
 		wall := time.Now()
 		for i := 0; i < n; i++ {
 			id := fmt.Sprintf("n8-s04-%s-%d", label, i)
-			starts[id] = time.Now()
+			starts[n5TestIntentionID(id)] = time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 				id, n5AlphaChildIDA, circulation.ValueTypeUser,
 				capName, sinkID, params(i),
@@ -513,7 +513,7 @@ func TestEngine_N8_STRESS_05_RemoteCallAmplification(t *testing.T) {
 	wall := time.Now()
 	for i := 0; i < concurrent; i++ {
 		id := fmt.Sprintf("n8-s05-%d", i)
-		starts[id] = time.Now()
+		starts[n5TestIntentionID(id)] = time.Now()
 		sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 			id, n5AlphaChildIDA, circulation.ValueTypeUser,
 			"sandbox.dsl.foreach.remote.batch", sinkID,
@@ -592,7 +592,7 @@ func TestEngine_N8_STRESS_06_MatterCatalogueWriteContention(t *testing.T) {
 				defer wg.Done()
 				sink := make(chan circulation.Message, 2)
 				sinkID := fmt.Sprintf("/test/n8-s06-n%d-%d", n, idx)
-				h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s06-n%d-%d", n, idx))
+				registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s06-n%d-%d", n, idx))
 
 				matterID := fmt.Sprintf("n8-s06-n%d-id%d", n, idx)
 				intentionID := fmt.Sprintf("n8-s06-n%d-%d", n, idx)
@@ -683,7 +683,7 @@ func TestEngine_N8_STRESS_07_ConcurrentReadWriteSameMatterID(t *testing.T) {
 	matterID := "n8-s07-shared"
 	seedSink := make(chan circulation.Message, 2)
 	seedSinkID := "/test/n8-s07-seed"
-	h.regA.Register(shared.ContextAddr(seedSinkID), seedSink, "n8-s07-seed")
+	registerContextTestSink(h.regA, shared.ContextAddr(seedSinkID), seedSink, "n8-s07-seed")
 
 	sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 		"n8-s07-seed", n5AlphaChildIDA, circulation.ValueTypeMatter,
@@ -716,7 +716,7 @@ func TestEngine_N8_STRESS_07_ConcurrentReadWriteSameMatterID(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s07-r%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s07-r%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s07-r%d", idx))
 			id := fmt.Sprintf("n8-s07-r%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -736,7 +736,7 @@ func TestEngine_N8_STRESS_07_ConcurrentReadWriteSameMatterID(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s07-w%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s07-w%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s07-w%d", idx))
 			id := fmt.Sprintf("n8-s07-w%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -810,7 +810,7 @@ func TestEngine_N8_STRESS_08_ReadBatchVsIndividualReads(t *testing.T) {
 		matterIDs[i] = fmt.Sprintf("n8-s08-item%d", i)
 		seedSink := make(chan circulation.Message, 2)
 		seedSinkID := fmt.Sprintf("/test/n8-s08-seed%d", i)
-		h.regA.Register(shared.ContextAddr(seedSinkID), seedSink, fmt.Sprintf("n8-s08-seed%d", i))
+		registerContextTestSink(h.regA, shared.ContextAddr(seedSinkID), seedSink, fmt.Sprintf("n8-s08-seed%d", i))
 		sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 			fmt.Sprintf("n8-s08-seed%d", i), n5AlphaChildIDA, circulation.ValueTypeMatter,
 			"matter.create", seedSinkID,
@@ -829,7 +829,7 @@ func TestEngine_N8_STRESS_08_ReadBatchVsIndividualReads(t *testing.T) {
 	// Variant A: N individual reads (sequential sends, parallel execution).
 	indSink := make(chan circulation.Message, n*2)
 	indSinkID := "/test/n8-s08-individual"
-	h.regA.Register(shared.ContextAddr(indSinkID), indSink, "n8-s08-individual")
+	registerContextTestSink(h.regA, shared.ContextAddr(indSinkID), indSink, "n8-s08-individual")
 
 	wallIndividual := time.Now()
 	for i := 0; i < n; i++ {
@@ -851,7 +851,7 @@ func TestEngine_N8_STRESS_08_ReadBatchVsIndividualReads(t *testing.T) {
 	// Variant B: one read_batch call for all N IDs.
 	batchSink := make(chan circulation.Message, 2)
 	batchSinkID := "/test/n8-s08-batch"
-	h.regA.Register(shared.ContextAddr(batchSinkID), batchSink, "n8-s08-batch")
+	registerContextTestSink(h.regA, shared.ContextAddr(batchSinkID), batchSink, "n8-s08-batch")
 
 	matterIDsAny := make([]any, n)
 	for i, id := range matterIDs {
@@ -915,7 +915,7 @@ func TestEngine_N8_STRESS_09_ReflexiveMeaningQueryConcurrency(t *testing.T) {
 	// Ensure SQLite is built first.
 	rebuildSink := make(chan circulation.Message, 2)
 	rebuildSinkID := "/test/n8-s09-rebuild"
-	h.regA.Register(shared.ContextAddr(rebuildSinkID), rebuildSink, "n8-s09-rebuild")
+	registerContextTestSink(h.regA, shared.ContextAddr(rebuildSinkID), rebuildSink, "n8-s09-rebuild")
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n8-s09-rebuild", shared.RootContextID, circulation.ValueTypeReflexive,
 		"meaning.rebuild", rebuildSinkID,
@@ -941,7 +941,7 @@ func TestEngine_N8_STRESS_09_ReflexiveMeaningQueryConcurrency(t *testing.T) {
 				defer wg.Done()
 				sink := make(chan circulation.Message, 2)
 				sinkID := fmt.Sprintf("/test/n8-s09-n%d-%d", n, idx)
-				h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s09-n%d-%d", n, idx))
+				registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s09-n%d-%d", n, idx))
 				id := fmt.Sprintf("n8-s09-n%d-%d", n, idx)
 				start := time.Now()
 				sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
@@ -1005,7 +1005,7 @@ func TestEngine_N8_STRESS_14_ReflexiveMeaningRebuildConcurrentWithQuery(t *testi
 	// Seed a valid projection before mixing readers and writers.
 	seedSink := make(chan circulation.Message, 2)
 	seedSinkID := "/test/n8-s14-seed"
-	h.regA.Register(shared.ContextAddr(seedSinkID), seedSink, "n8-s14-seed")
+	registerContextTestSink(h.regA, shared.ContextAddr(seedSinkID), seedSink, "n8-s14-seed")
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n8-s14-seed", shared.RootContextID, circulation.ValueTypeReflexive,
 		"meaning.rebuild", seedSinkID,
@@ -1033,7 +1033,7 @@ func TestEngine_N8_STRESS_14_ReflexiveMeaningRebuildConcurrentWithQuery(t *testi
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s14-q-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s14-q-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s14-q-%d", idx))
 			id := fmt.Sprintf("n8-s14-q-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
@@ -1062,7 +1062,7 @@ func TestEngine_N8_STRESS_14_ReflexiveMeaningRebuildConcurrentWithQuery(t *testi
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s14-r-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s14-r-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s14-r-%d", idx))
 			id := fmt.Sprintf("n8-s14-r-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
@@ -1118,6 +1118,11 @@ func TestEngine_N8_STRESS_14_ReflexiveMeaningRebuildConcurrentWithQuery(t *testi
 	}
 	if rebuildOK+rebuildFailed != rebuilds {
 		t.Errorf("meaning.rebuild did not terminate for every request: got %d terminal results want %d", rebuildOK+rebuildFailed, rebuilds)
+	}
+	// Projection writers are serialized: concurrent rebuilds queue instead of
+	// clobbering each other, and readers always see a complete projection.
+	if rebuildFailed != 0 || queryFailed != 0 {
+		t.Errorf("concurrent projection rebuilds must all succeed: rebuild failed=%d query failed=%d", rebuildFailed, queryFailed)
 	}
 }
 
@@ -1175,7 +1180,7 @@ func TestEngine_N8_STRESS_15_TraceInspectConcurrency(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s15-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s15-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s15-%d", idx))
 			id := fmt.Sprintf("n8-s15-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -1247,7 +1252,7 @@ func TestEngine_N8_STRESS_16_WrapperColdStartStorm(t *testing.T) {
 		wall := time.Now()
 		for i := 0; i < n; i++ {
 			id := fmt.Sprintf("n8-s16-%s-%d", label, i)
-			starts[id] = time.Now()
+			starts[n5TestIntentionID(id)] = time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 				id, n5AlphaChildIDA, circulation.ValueTypeUser,
 				"sandbox.echo", sinkID,
@@ -1307,8 +1312,9 @@ func TestEngine_N8_STRESS_17_RemoteFanInSingleSink(t *testing.T) {
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("n8-s17-%d", i)
 		message := fmt.Sprintf("fanin-%d", i)
-		starts[id] = time.Now()
-		expected[id] = message
+		wireID := n5TestIntentionID(id)
+		starts[wireID] = time.Now()
+		expected[wireID] = message
 		sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 			id, n5AlphaChildIDA, circulation.ValueTypeUser,
 			"sandbox.remote.echo", sinkID,
@@ -1363,7 +1369,7 @@ func TestEngine_N8_STRESS_18_MixedExecutionAndReflexiveLoad(t *testing.T) {
 	// Ensure meaning projection exists before the mixed wave starts.
 	seedSink := make(chan circulation.Message, 2)
 	seedSinkID := "/test/n8-s18-seed"
-	h.regA.Register(shared.ContextAddr(seedSinkID), seedSink, "n8-s18-seed")
+	registerContextTestSink(h.regA, shared.ContextAddr(seedSinkID), seedSink, "n8-s18-seed")
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n8-s18-seed", shared.RootContextID, circulation.ValueTypeReflexive,
 		"meaning.rebuild", seedSinkID,
@@ -1390,7 +1396,7 @@ func TestEngine_N8_STRESS_18_MixedExecutionAndReflexiveLoad(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s18-exec-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-exec-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-exec-%d", idx))
 			id := fmt.Sprintf("n8-s18-exec-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -1406,7 +1412,7 @@ func TestEngine_N8_STRESS_18_MixedExecutionAndReflexiveLoad(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s18-state-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-state-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-state-%d", idx))
 			id := fmt.Sprintf("n8-s18-state-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
@@ -1422,7 +1428,7 @@ func TestEngine_N8_STRESS_18_MixedExecutionAndReflexiveLoad(t *testing.T) {
 			defer wg.Done()
 			sink := make(chan circulation.Message, 2)
 			sinkID := fmt.Sprintf("/test/n8-s18-query-%d", idx)
-			h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-query-%d", idx))
+			registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s18-query-%d", idx))
 			id := fmt.Sprintf("n8-s18-query-%d", idx)
 			start := time.Now()
 			sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
@@ -1500,7 +1506,7 @@ func TestEngine_N8_STRESS_10_ReflexiveInboxSaturationWithIO(t *testing.T) {
 		sendBlocked := time.Duration(0)
 		for i := 0; i < burst; i++ {
 			id := fmt.Sprintf("n8-s10-%d-%d", burst, i)
-			starts[id] = time.Now()
+			starts[n5TestIntentionID(id)] = time.Now()
 			before := time.Now()
 			sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 				id, shared.RootContextID, circulation.ValueTypeReflexive,
@@ -1560,7 +1566,7 @@ func TestEngine_N8_STRESS_11_CommCtxInChannelSaturation(t *testing.T) {
 		sendBlocked := time.Duration(0)
 		for i := 0; i < burst; i++ {
 			id := fmt.Sprintf("n8-s11-%d-%d", burst, i)
-			starts[id] = time.Now()
+			starts[n5TestIntentionID(id)] = time.Now()
 			before := time.Now()
 			sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
 				id, n5AlphaChildIDA, circulation.ValueTypeReflexive,
@@ -1640,7 +1646,7 @@ func TestEngine_N8_STRESS_12_ExternalReplyMapUnderHTTPSLoad(t *testing.T) {
 				defer wg.Done()
 				sink := make(chan circulation.Message, 2)
 				sinkID := fmt.Sprintf("/test/n8-s12-n%d-%d", n, idx)
-				h.regA.Register(shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s12-n%d-%d", n, idx))
+				registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, fmt.Sprintf("n8-s12-n%d-%d", n, idx))
 				id := fmt.Sprintf("n8-s12-n%d-%d", n, idx)
 				start := time.Now()
 				sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(
@@ -1792,8 +1798,8 @@ func n8newScatterHarness(t *testing.T) *engineN5Harness {
 	regB := junction.NewContextCommRegistry()
 	sinkA := make(chan circulation.Message, 64)
 	sinkB := make(chan circulation.Message, 64)
-	regA.Register(shared.ContextAddr(n5SinkAID), sinkA, n5SinkAExt)
-	regB.Register(shared.ContextAddr(n5SinkBID), sinkB, n5SinkBExt)
+	registerContextTestSink(regA, shared.ContextAddr(n5SinkAID), sinkA, n5SinkAExt)
+	registerContextTestSink(regB, shared.ContextAddr(n5SinkBID), sinkB, n5SinkBExt)
 
 	rootA, err := NewContextLoop(rootADir, shared.RootContextID, regA)
 	if err != nil {
@@ -1912,5 +1918,52 @@ func TestEngine_N8_STRESS_13_ScatteredFanOutVsInboxSaturation(t *testing.T) {
 		if len(msgs) != itemCount+1 {
 			t.Errorf("scatter items=%d: got %d total responses want %d", itemCount, len(msgs), itemCount+1)
 		}
+	}
+}
+
+// Readers never fail while the projection is rebuilt and swapped under them:
+// connections wait on locks instead of erroring, and no journal companion
+// file can outlive the generation it belongs to.
+func TestEngine_N8_STRESS_15_ProjectionReadersSurviveConcurrentRebuilds(t *testing.T) {
+	h := newEngineN7Harness(t)
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		fails = map[string]int{}
+	)
+	call := func(id, capName string, params map[string]any) {
+		sink := make(chan circulation.Message, 2)
+		sinkID := "/test/" + id
+		registerContextTestSink(h.regA, shared.ContextAddr(sinkID), sink, id)
+		sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(id, shared.RootContextID, circulation.ValueTypeReflexive, capName, sinkID, params))
+		msg := recvN5Msg(t, sink, id)
+		if msg.Response.Status != circulation.ValueStatusOK {
+			mu.Lock()
+			fails[fmt.Sprintf("%s: %v", capName, msg.Response.Error)]++
+			mu.Unlock()
+		}
+	}
+	call("s15-seed", "meaning.rebuild", map[string]any{"mode": "full"})
+	for r := 0; r < 3; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			for i := 0; i < 8; i++ {
+				call(fmt.Sprintf("s15-rb-%d-%d", r, i), "meaning.rebuild", map[string]any{"mode": "full"})
+			}
+		}(r)
+	}
+	for q := 0; q < 6; q++ {
+		wg.Add(1)
+		go func(q int) {
+			defer wg.Done()
+			for i := 0; i < 30; i++ {
+				call(fmt.Sprintf("s15-q-%d-%d", q, i), "meaning.query", map[string]any{"element_kind": "capacity"})
+			}
+		}(q)
+	}
+	wg.Wait()
+	if len(fails) != 0 {
+		t.Fatalf("operations failed during concurrent rebuilds: %v", fails)
 	}
 }

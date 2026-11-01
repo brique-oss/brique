@@ -27,9 +27,9 @@ func TestEngine_N6_MAT_70_StructureReadOptionsAndPatchRevision(t *testing.T) {
 
 	readResp := callN6StructureCap(t, h, n6MatterWorkspaceID, "n6-struct-options-read", "structure.read", map[string]any{
 		circulation.KeyStructureID: "s_playlist",
-		"want_meaning":            false,
-		"want_functional":         true,
-		"want_brique":            false,
+		"want_meaning":             false,
+		"want_functional":          true,
+		"want_brique":              false,
 	})
 	if readResp.Status != circulation.ValueStatusOK {
 		t.Fatalf("structure.read options status=%q want ok payload=%#v error=%#v", readResp.Status, readResp.Payload, readResp.Error)

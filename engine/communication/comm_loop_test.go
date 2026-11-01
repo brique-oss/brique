@@ -17,14 +17,8 @@
 package comm
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/hex"
-	"encoding/pem"
 	"errors"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +31,7 @@ import (
 type trackingCommReg struct {
 	mu sync.Mutex
 
-	chByID    map[shared.ContextAddr]chan circulation.Message
+	chByID    map[shared.ContextAddr]chan junction.Delivery
 	extByID   map[shared.ContextAddr]string
 	uiByName  map[string]shared.ContextAddr
 	wrpByName map[string]shared.ContextAddr
@@ -48,14 +42,14 @@ type trackingCommReg struct {
 
 func newTrackingCommReg() *trackingCommReg {
 	return &trackingCommReg{
-		chByID:    map[shared.ContextAddr]chan circulation.Message{},
+		chByID:    map[shared.ContextAddr]chan junction.Delivery{},
 		extByID:   map[shared.ContextAddr]string{},
 		uiByName:  map[string]shared.ContextAddr{},
 		wrpByName: map[string]shared.ContextAddr{},
 	}
 }
 
-func (m *trackingCommReg) Register(addr shared.ContextAddr, _ chan<- circulation.Message, extName string) {
+func (m *trackingCommReg) Register(addr shared.ContextAddr, _ chan<- junction.Delivery, extName string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.registerCalls++
@@ -69,7 +63,7 @@ func (m *trackingCommReg) Unregister(addr shared.ContextAddr, _ string) {
 	m.unregisterCalls++
 	delete(m.extByID, addr)
 }
-func (m *trackingCommReg) ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool) {
+func (m *trackingCommReg) ResolveCh(addr shared.ContextAddr) (chan<- junction.Delivery, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ch, ok := m.chByID[addr]
@@ -140,7 +134,13 @@ func (m *trackingCommReg) ResolveWrapperBoundary(wrapperName string) (shared.Con
 }
 
 type fakeInterfaceImpl struct {
-	startErr error
+	startErr   error
+	readErr    error
+	writeErr   error
+	readExit   bool
+	writeExit  bool
+	readReturn chan struct{}
+	dirs       InterfaceDirections
 
 	closeCh chan struct{}
 
@@ -152,8 +152,13 @@ type fakeInterfaceImpl struct {
 }
 
 func newFakeInterfaceImpl() *fakeInterfaceImpl {
-	return &fakeInterfaceImpl{closeCh: make(chan struct{})}
+	return &fakeInterfaceImpl{
+		closeCh: make(chan struct{}),
+		dirs:    InterfaceDirections{ReadLoop: true, WriteLoop: true},
+	}
 }
+
+func (f *fakeInterfaceImpl) Directions() InterfaceDirections { return f.dirs }
 
 func (f *fakeInterfaceImpl) Start() error {
 	f.mu.Lock()
@@ -165,17 +170,31 @@ func (f *fakeInterfaceImpl) Start() error {
 func (f *fakeInterfaceImpl) ReadLoop() error {
 	f.mu.Lock()
 	f.readCalls++
+	exit := f.readExit
+	err := f.readErr
 	f.mu.Unlock()
+	if exit {
+		return err
+	}
+	if f.readReturn != nil {
+		<-f.readReturn
+		return err
+	}
 	<-f.closeCh
-	return nil
+	return err
 }
 
 func (f *fakeInterfaceImpl) WriteLoop() error {
 	f.mu.Lock()
 	f.writeCalls++
+	exit := f.writeExit
+	err := f.writeErr
 	f.mu.Unlock()
+	if exit {
+		return err
+	}
 	<-f.closeCh
-	return nil
+	return err
 }
 
 func (f *fakeInterfaceImpl) Close() error {
@@ -216,8 +235,8 @@ func newCommLoopHarness(ctxID string, reg junction.ContextCommInRegistry) *CommL
 			CtxCommReg: reg,
 			FamIn:      junction.FamiliesInChanRegistry{},
 		},
-		in:      make(chan circulation.Message, 8),
-		ctxIn:   make(chan circulation.Message, 8),
+		in:      make(chan junction.Delivery, 8),
+		ctxIn:   make(chan junction.Delivery, 8),
 		ingress: make(chan IngressItem, 8),
 		ifaces:  map[string]*InterfaceRuntime{},
 		done:    make(chan struct{}),
@@ -234,7 +253,7 @@ func TestCommLoop_N1_CML_01_NewCommLoopInitializes(t *testing.T) {
 	if l == nil || l.frame != frame {
 		t.Fatalf("loop/frame init failed")
 	}
-	if l.in == nil || l.ctxIn == nil || l.ingress == nil || l.done == nil {
+	if l.in == nil || l.ctxIn == nil || l.ingress == nil || l.interfaceOutcomes == nil || l.done == nil {
 		t.Fatalf("expected initialized runtime channels")
 	}
 	if l.State() != shared.FamilyInitializing {
@@ -266,7 +285,7 @@ func TestCommLoop_N1_CML_03_StartRegistersAndRuns(t *testing.T) {
 	reg := newTrackingCommReg()
 	l := newCommLoopHarness("/ctx/a", reg)
 	impl := newFakeInterfaceImpl()
-	l.ifaces["i1"] = &InterfaceRuntime{Name: "i1", Impl: impl}
+	l.ifaces["ui-main"] = &InterfaceRuntime{Name: "ui-main", Impl: impl}
 	l.cfg.Ifaces = append(l.cfg.Ifaces, InterfaceCfg{Name: "ui-main", Type: EndpointUI})
 
 	l.Start()
@@ -349,8 +368,9 @@ func TestCommLoop_N1_CML_06_StartInterfaceFailureMarksFailed(t *testing.T) {
 	waitPred(t, time.Second, func() bool { return l.State() == shared.FamilyRunning }, "running with failed iface")
 
 	rt := l.ifaces["i1"]
-	if rt.Status != InterfaceFailed || rt.Err == nil {
-		t.Fatalf("failed interface should be marked failed with error, got status=%v err=%v", rt.Status, rt.Err)
+	state := rt.State()
+	if state.Status != InterfaceFailed || state.LastErr == nil {
+		t.Fatalf("failed interface should be marked failed with error, got status=%v err=%v", state.Status, state.LastErr)
 	}
 	_, read, write, _ := impl.stats()
 	if read != 0 || write != 0 {
@@ -360,18 +380,115 @@ func TestCommLoop_N1_CML_06_StartInterfaceFailureMarksFailed(t *testing.T) {
 	l.Stop()
 }
 
+func TestCommLoop_InterfaceDirectionsStartOnlyRequiredLoops(t *testing.T) {
+	l := newCommLoopHarness("/ctx/a", newTrackingCommReg())
+	impl := newFakeInterfaceImpl()
+	impl.dirs = InterfaceDirections{WriteLoop: true}
+	l.ifaces["egress"] = &InterfaceRuntime{Name: "egress", Impl: impl}
+
+	l.Start()
+	waitPred(t, time.Second, func() bool {
+		_, read, write, _ := impl.stats()
+		return read == 0 && write == 1
+	}, "only required interface loop started")
+	if state := l.ifaces["egress"].State(); state.Status != InterfaceRunning {
+		t.Fatalf("interface state=%v want running", state.Status)
+	}
+	l.Stop()
+}
+
+func TestCommLoop_UnexpectedInterfaceLoopExitMarksOnlyInterfaceFailed(t *testing.T) {
+	l := newCommLoopHarness("/ctx/a", newTrackingCommReg())
+	impl := newFakeInterfaceImpl()
+	impl.dirs = InterfaceDirections{ReadLoop: true}
+	impl.readExit = true
+	impl.readErr = errors.New("read transport failed")
+	l.ifaces["broken"] = &InterfaceRuntime{Name: "broken", Impl: impl}
+
+	l.Start()
+	waitPred(t, time.Second, func() bool {
+		return l.ifaces["broken"].State().Status == InterfaceFailed
+	}, "interface failure after loop exit")
+	state := l.ifaces["broken"].State()
+	if state.LastErr == nil || !strings.Contains(state.LastErr.Error(), "read transport failed") {
+		t.Fatalf("missing preserved loop error: %v", state.LastErr)
+	}
+	if l.State() != shared.FamilyRunning {
+		t.Fatalf("interface failure must not stop communication family: %v", l.State())
+	}
+	_, _, _, closeCalls := impl.stats()
+	if closeCalls != 1 {
+		t.Fatalf("failed interface close calls=%d want 1", closeCalls)
+	}
+	l.Stop()
+	if state := l.ifaces["broken"].State(); state.Status != InterfaceClosed || state.LastErr == nil {
+		t.Fatalf("stop must close while preserving failure, got %#v", state)
+	}
+}
+
+func TestCommLoop_FailedUIIsNotPublishedButContextAndBoundaryRemain(t *testing.T) {
+	reg := newTrackingCommReg()
+	l := newCommLoopHarness("/ctx/a", reg)
+	impl := newFakeInterfaceImpl()
+	impl.startErr = errors.New("ui bind failed")
+	l.ifaces["ui-main"] = &InterfaceRuntime{Name: "ui-main", Impl: impl}
+	l.cfg.Ifaces = []InterfaceCfg{{Name: "ui-main", Type: EndpointUI}}
+
+	l.Start()
+	reg.mu.Lock()
+	_, contextRegistered := reg.extByID["/ctx/a"]
+	_, uiRegistered := reg.uiByName["ui-main"]
+	boundary, boundaryRegistered := reg.wrpByName["w1"]
+	reg.mu.Unlock()
+	if !contextRegistered {
+		t.Fatal("failed external interface must not hide the context")
+	}
+	if uiRegistered {
+		t.Fatal("failed UI interface must not be published")
+	}
+	if !boundaryRegistered || boundary != "/ctx/a" {
+		t.Fatalf("wrapper ownership must remain published, got (%v,%q)", boundaryRegistered, boundary)
+	}
+	l.Stop()
+}
+
+func TestCommLoop_RunningUIIsUnpublishedWhenItsLoopFails(t *testing.T) {
+	reg := newTrackingCommReg()
+	l := newCommLoopHarness("/ctx/a", reg)
+	impl := newFakeInterfaceImpl()
+	impl.dirs = InterfaceDirections{ReadLoop: true}
+	impl.readReturn = make(chan struct{})
+	impl.readErr = errors.New("ui transport failed")
+	l.ifaces["ui-main"] = &InterfaceRuntime{Name: "ui-main", Type: EndpointUI, Impl: impl}
+	l.cfg.Ifaces = []InterfaceCfg{{Name: "ui-main", Type: EndpointUI}}
+
+	l.Start()
+	if owner, ok := reg.ResolveUI("ui-main"); !ok || owner != "/ctx/a" {
+		t.Fatalf("running UI should be published, got (%v,%q)", ok, owner)
+	}
+	close(impl.readReturn)
+	waitPred(t, time.Second, func() bool {
+		_, ok := reg.ResolveUI("ui-main")
+		return !ok
+	}, "failed UI removal")
+	if _, ok := reg.ResolveExtName("ctx-ext"); !ok {
+		t.Fatal("UI failure must not unregister its context")
+	}
+	l.Stop()
+}
+
 func TestCommLoop_N1_CML_07_LoopContextIngressRoutesEgress(t *testing.T) {
 	reg := newTrackingCommReg()
-	dstCh := make(chan circulation.Message, 1)
+	dstCh := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/dst"] = dstCh
 	l := newCommLoopHarness("/ctx/src", reg)
-	traceCh := make(chan circulation.Message, 8)
+	traceCh := make(chan junction.Delivery, 8)
 	l.frame.FamIn[shared.FamilyTrace] = traceCh
 
 	exit := make(chan struct{})
 	go func() { defer close(exit); l.loopContextIngress() }()
 
-	l.in <- mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "")
+	l.in <- l.frame.MustDelivery(mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, ""))
 	_ = recvMsg(t, dstCh, "context ingress routed")
 	close(l.done)
 	waitPred(t, time.Second, func() bool {
@@ -387,15 +504,15 @@ func TestCommLoop_N1_CML_07_LoopContextIngressRoutesEgress(t *testing.T) {
 func TestCommLoop_N1_CML_08_LoopInterContextIngressRoutesIngress(t *testing.T) {
 	reg := newTrackingCommReg()
 	l := newCommLoopHarness("/ctx/local", reg)
-	matterCh := make(chan circulation.Message, 1)
-	traceCh := make(chan circulation.Message, 8)
+	matterCh := make(chan junction.Delivery, 1)
+	traceCh := make(chan junction.Delivery, 8)
 	l.frame.FamIn[shared.FamilyMatter] = matterCh
 	l.frame.FamIn[shared.FamilyTrace] = traceCh
 
 	exit := make(chan struct{})
 	go func() { defer close(exit); l.loopInterContextIngress() }()
 
-	l.ctxIn <- mkIntentionMsg("/ctx/local", circulation.ValueTypeMatter, "/ctx/src")
+	l.ctxIn <- l.frame.MustDelivery(mkIntentionMsg("/ctx/local", circulation.ValueTypeMatter, "/ctx/src"))
 	_ = recvMsg(t, matterCh, "inter-context ingress routed")
 	close(l.done)
 	waitPred(t, time.Second, func() bool {
@@ -411,8 +528,8 @@ func TestCommLoop_N1_CML_08_LoopInterContextIngressRoutesIngress(t *testing.T) {
 func TestCommLoop_N1_CML_09_LoopInterfaceIngressRoutesIngress(t *testing.T) {
 	reg := newTrackingCommReg()
 	l := newCommLoopHarness("/ctx/local", reg)
-	ctrlCh := make(chan circulation.Message, 1)
-	traceCh := make(chan circulation.Message, 8)
+	ctrlCh := make(chan junction.Delivery, 1)
+	traceCh := make(chan junction.Delivery, 8)
 	l.frame.CtrlIn = ctrlCh
 	l.frame.FamIn[shared.FamilyTrace] = traceCh
 
@@ -434,68 +551,4 @@ func TestCommLoop_N1_CML_09_LoopInterfaceIngressRoutesIngress(t *testing.T) {
 			return false
 		}
 	}, "loopInterfaceIngress exit")
-}
-
-func TestCommLoop_N1_CML_10_CryptoHooksArePermissive(t *testing.T) {
-	l := newCommLoopHarness("/ctx/local", newTrackingCommReg())
-	msg := mkIntentionMsg("/ctx/local", circulation.ValueTypeMatter, "/ctx/src")
-	if err := l.verifyMessageSignature(msg); err != nil {
-		t.Fatalf("verifyMessageSignature should be permissive without instance key, got %v", err)
-	}
-	if err := l.updateIdentityAndSign(&msg); err != nil {
-		t.Fatalf("updateIdentityAndSign should be permissive without instance key, got %v", err)
-	}
-}
-
-func TestCommLoop_N1_CML_11_CryptoHooksSignAndVerifyWithConfiguredInstanceKey(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.Setenv("BRIQUE_CONFIG_DIR", tmp); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Unsetenv("BRIQUE_CONFIG_DIR")
-
-	priv, err := writeTestInstanceKey(tmp, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	l := newCommLoopHarness(shared.RootContextID, newTrackingCommReg())
-	l.instanceKeyName = "main"
-	l.instancePrivRaw = append([]byte(nil), priv...)
-	l.instancePubKey = hex.EncodeToString(priv.Public().(ed25519.PublicKey))
-
-	msg := mkIntentionMsg("@ext_peer:/op", circulation.ValueTypeMatter, "/ctx/src")
-	if err := l.updateIdentityAndSign(&msg); err != nil {
-		t.Fatalf("updateIdentityAndSign error: %v", err)
-	}
-	if msg.Intention.Identity.Kind != identityKindInstance {
-		t.Fatalf("identity.kind = %q, want %q", msg.Intention.Identity.Kind, identityKindInstance)
-	}
-	if msg.Intention.Identity.PubKey == "" || msg.Intention.Identity.Signature == "" {
-		t.Fatalf("expected pubkey and signature to be set, got %#v", msg.Intention.Identity)
-	}
-	if err := l.verifyMessageSignature(msg); err != nil {
-		t.Fatalf("verifyMessageSignature error: %v", err)
-	}
-}
-
-func writeTestInstanceKey(configDir string, name string) (ed25519.PrivateKey, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	_ = pub
-	keyDir := filepath.Join(configDir, "keys")
-	if err := os.MkdirAll(keyDir, 0o755); err != nil {
-		return nil, err
-	}
-	pkcs8, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	block := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}
-	if err := os.WriteFile(filepath.Join(keyDir, name+".pem"), pem.EncodeToMemory(block), 0o600); err != nil {
-		return nil, err
-	}
-	return priv, nil
 }

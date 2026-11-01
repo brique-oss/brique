@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
 // msgType
@@ -433,6 +432,10 @@ func (l *CommLoop) resolveExtContext(msg *circulation.Message) bool {
 
 	addr, ok := reg.ResolveExtName(ext)
 	if !ok {
+		// Wire destinations carry a leading slash; ext names are stored without.
+		addr, ok = reg.ResolveExtName(strings.TrimPrefix(ext, "/"))
+	}
+	if !ok {
 		return false
 	}
 
@@ -502,21 +505,6 @@ func (l *CommLoop) resolveExtContext(msg *circulation.Message) bool {
 // Contract:
 // - Nil message or unsupported kind yields empty string.
 
-func extractPublicKey(msg *circulation.Message) string {
-	if msg == nil {
-		return ""
-	}
-
-	switch msg.Kind {
-	case circulation.ValueKindIntention:
-		return msg.Intention.Identity.PubKey
-	case circulation.ValueKindResponse:
-		return msg.Response.Identity.PubKey
-	default:
-		return ""
-	}
-}
-
 // fromContext
 //
 // Functional role (Brique DSL):
@@ -569,20 +557,6 @@ func extractPublicKey(msg *circulation.Message) string {
 //
 // Contract:
 // - Nil message or unsupported kind yields empty context id.
-
-func (l *CommLoop) fromContext(msg *circulation.Message) circulation.ContextID {
-	if msg == nil {
-		return ""
-	}
-	switch msg.Kind {
-	case circulation.ValueKindIntention:
-		return msg.Intention.From.Context
-	case circulation.ValueKindResponse:
-		return msg.Response.From.Context
-	default:
-		return ""
-	}
-}
 
 // publicFromContext
 //
@@ -639,31 +613,6 @@ func (l *CommLoop) fromContext(msg *circulation.Message) circulation.ContextID {
 // Contract:
 // - Falls back to raw source context when no public-name mapping exists.
 
-func (l *CommLoop) publicFromContext(msg *circulation.Message) shared.ContextAddr {
-	if l.frame == nil {
-		return ""
-	}
-
-	// We require a public name for any external egress.
-	reg := l.frame.CtxCommReg
-	if reg == nil {
-		return ""
-	}
-
-	from := string(l.fromContext(msg))
-	if from == "" {
-		//external egress must always have an explicit emitter
-		return ""
-	}
-
-	// Forward: must be able to resolve a public name for the internal from.context.
-	if ext, ok := reg.ResolveIDToExtName(shared.ContextAddr(from)); ok && ext != "" {
-		return shared.ContextAddr(ext)
-	}
-
-	return shared.ContextAddr(from)
-}
-
 // stampFromPublicContext
 //
 // Functional role (Brique DSL):
@@ -717,18 +666,6 @@ func (l *CommLoop) publicFromContext(msg *circulation.Message) shared.ContextAdd
 //
 // Contract:
 // - Nil message is ignored.
-
-func (l *CommLoop) stampFromPublicContext(msg *circulation.Message, pub shared.ContextAddr) {
-	if msg == nil {
-		return
-	}
-	switch msg.Kind {
-	case circulation.ValueKindIntention:
-		msg.Intention.From.Context = circulation.ContextID(string(pub))
-	case circulation.ValueKindResponse:
-		msg.Response.From.Context = circulation.ContextID(string(pub))
-	}
-}
 
 // parseAtAddress
 //
@@ -825,7 +762,8 @@ func parseAtAddress(s string) (tag string, path string, ok bool) {
 // - Valid:
 //   - none directly from this function.
 // - On error:
-//   - none directly from this function.
+//   - awaited intentions receive a correlated Communication error when the
+//     destination is unavailable or invalid.
 //
 // Produced Response Payload Keys/values:
 // - Valid:
@@ -860,8 +798,8 @@ func parseAtAddress(s string) (tag string, path string, ok bool) {
 // Contract:
 // - Convenience wrapper for root forwarding.
 
-func (l *CommLoop) forwardToRoot(msg circulation.Message) {
-	l.forwardToContext(shared.ContextAddr(shared.RootContextID), msg)
+func (l *CommLoop) forwardToRoot(msg circulation.Message, source ...junction.Delivery) {
+	l.forwardToContext(shared.ContextAddr(shared.RootContextID), msg, source...)
 }
 
 // forwardToContext
@@ -897,7 +835,7 @@ func (l *CommLoop) forwardToRoot(msg circulation.Message) {
 // - Valid:
 //   - none.
 // - On error:
-//   - emits one reject trace when the target context cannot be resolved.
+//   - emits one reject trace when the target cannot accept the message.
 //
 // Produced Outbound Message:
 // - Valid:
@@ -915,48 +853,119 @@ func (l *CommLoop) forwardToRoot(msg circulation.Message) {
 //
 //
 // Outputs:
-// - no direct return value; observable outputs are channel send or reject/trace side effects.
+// - returns whether the destination queue accepted the message, was unavailable,
+//   or communication stopped before acceptance.
 //
 //
 // Contract:
-// - Unknown target context fails closed with reject trace.
-// - Nil `frame` or nil `frame.CtxCommReg` produces a silent no-op.
-// - Shutdown while waiting to send aborts forwarding without emitting an additional trace.
+// - A full destination queue applies blocking backpressure and never drops.
+// - Unknown targets fail closed with a reject trace and an explicit result.
+// - Nil `frame` or registry returns `deliveryInvalid` and is reported as a delivery failure.
+// - Shutdown while waiting returns `deliveryStopped`.
 
-func (l *CommLoop) forwardToContext(addr shared.ContextAddr, msg circulation.Message) {
+func (l *CommLoop) forwardToContext(addr shared.ContextAddr, msg circulation.Message, source ...junction.Delivery) deliveryResult {
+	target := string(addr)
 	if l.frame == nil || l.frame.CtxCommReg == nil {
-		return
+		result := newDeliveryResult(deliveryInvalid, target, fmt.Errorf("context registry unavailable"))
+		l.reportDeliveryFailure(msg, result)
+		return result
 	}
 
 	ch, ok := l.frame.CtxCommReg.ResolveCh(addr)
 	if !ok || ch == nil {
-		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("unknown context addr: %s", addr))
-		if msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
-			l.sendContextUnreachableAck(&msg, addr)
-		}
-		return
+		result := newDeliveryResult(deliveryUnavailable, target, fmt.Errorf("unknown context addr: %s", addr))
+		l.reportDeliveryFailure(msg, result)
+		return result
+	}
+	delivery, err := l.deliveryForMessage(msg, source...)
+	if err != nil {
+		result := newDeliveryResult(deliveryInvalid, target, err)
+		l.reportDeliveryFailure(msg, result)
+		return result
 	}
 	select {
-	case ch <- msg:
-		return
+	case ch <- delivery:
+		return newDeliveryResult(deliveryAccepted, target, nil)
 	case <-l.done:
-		return
+		result := newDeliveryResult(deliveryStopped, target, fmt.Errorf("communication stopped before delivery to %s", addr))
+		l.reportDeliveryFailure(msg, result)
+		return result
 	}
 }
 
-// sendContextUnreachableAck
+func (l *CommLoop) reportDeliveryFailure(msg circulation.Message, result deliveryResult) {
+	if l == nil || result.accepted() {
+		return
+	}
+	reason := circulation.ValueReasonContextUnreachable
+	if result.Status == deliveryStopped {
+		reason = circulation.ValueReasonContextStopped
+	}
+	detail := fmt.Sprintf("delivery failed: target=%s status=%s", result.Target, result.Status)
+	if result.Err != nil {
+		detail = result.Err.Error()
+	}
+	l.sendToTrace(msg, circulation.ValueTraceCommReject, reason, detail)
+	if result.Status != deliveryStopped && msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
+		l.sendDeliveryFailureAck(&msg, result.Target, reason)
+	}
+}
+
+// reportInterfaceEgressOutcome handles failures discovered after the local
+// interface queue accepted a message. An explicit non-2xx peer response is a
+// definitive rejection. A network error has an unknown delivery outcome and
+// therefore cannot safely manufacture a terminal response.
+func (l *CommLoop) reportInterfaceEgressOutcome(msg circulation.Message, outcome InterfaceEgressOutcome) {
+	if l == nil || outcome.Err == nil {
+		return
+	}
+	target := string(msgToContext(&msg))
+	if target == "" {
+		target = "@external"
+	}
+	if !outcome.Definitive {
+		l.sendToTrace(msg, circulation.ValueTraceCommDrop, "delivery_outcome_unknown", outcome.Err.Error())
+		return
+	}
+	l.reportDeliveryFailure(msg, newDeliveryResult(deliveryUnavailable, target, outcome.Err))
+}
+
+func (l *CommLoop) enqueueInterfaceEgressOutcome(msg circulation.Message, outcome InterfaceEgressOutcome) {
+	if l == nil || l.interfaceOutcomes == nil {
+		return
+	}
+	select {
+	case l.interfaceOutcomes <- interfaceEgressReport{Message: msg, Outcome: outcome}:
+	case <-l.done:
+	}
+}
+
+func (l *CommLoop) loopInterfaceEgressOutcomes() {
+	for {
+		select {
+		case <-l.done:
+			return
+		case report, ok := <-l.interfaceOutcomes:
+			if !ok {
+				return
+			}
+			l.reportInterfaceEgressOutcome(report.Message, report.Outcome)
+		}
+	}
+}
+
+// sendDeliveryFailureAck
 //
 // Functional role (Brique DSL):
-// - reply immediately to an awaited intention whose target context could not be resolved
-//   (never created, or created on disk but never started), instead of letting the caller
-//   block until its generic timeout.
+// - reply immediately to an awaited intention whose local communication target
+//   could not accept the message.
 //
 // Contract:
 // - No-op if `req` is nil or not an intention.
 // - Reuses the requester's own address as the reply's `From` context, since the failure is
 //   local to routing and does not belong to any specific resolved context.
 
-func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shared.ContextAddr) {
+func (l *CommLoop) sendDeliveryFailureAck(req *circulation.Message, target string, reason string) {
 	if req == nil || req.Kind != circulation.ValueKindIntention {
 		return
 	}
@@ -967,7 +976,7 @@ func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shar
 			Status:      "error",
 			To:          req.Intention.From,
 			From: circulation.Address{
-				Context: circulation.ContextID(addr),
+				Context: circulation.ContextID(target),
 				Type:    circulation.ValueTypeCommunication,
 				Cap:     req.Intention.To.Cap,
 			},
@@ -975,8 +984,8 @@ func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shar
 			Error: &circulation.ResponseProblem{
 				Origin:  circulation.ValueOriginCommunication,
 				Code:    circulation.ValueCodeUnavailable,
-				Message: fmt.Sprintf("target context is unreachable: %s (never created, or created but not started)", addr),
-				Details: map[string]any{circulation.KeyReason: circulation.ValueReasonContextUnreachable},
+				Message: fmt.Sprintf("delivery target is unavailable: %s", target),
+				Details: map[string]any{circulation.KeyReason: reason},
 			},
 		},
 	}
@@ -999,7 +1008,8 @@ func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shar
 // - Valid:
 //   - none.
 // - On error:
-//   - none.
+//   - awaited intentions receive a correlated Communication error when the
+//     interface is unavailable.
 //
 // Produced Response Payload Keys/values:
 // - Valid:
@@ -1011,7 +1021,7 @@ func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shar
 // - Valid:
 //   - none.
 // - On error:
-//   - none.
+//   - emits one reject trace for unavailable, invalid, or stopped delivery.
 //
 // Produced Outbound Message:
 // - Valid:
@@ -1029,23 +1039,42 @@ func (l *CommLoop) sendContextUnreachableAck(req *circulation.Message, addr shar
 //
 //
 // Outputs:
-// - returns error.
+// - returns the queue-acceptance result.
 //
 //
 // Contract:
-// - Unknown interface returns error; loop shutdown returns nil without sending.
-// - Does not emit traces on send failure paths; tracing is the caller's responsibility.
+// - A full egress queue applies blocking backpressure; it is not a delivery failure.
+// - Unknown interfaces and shutdown return explicit non-accepted results.
+// - Failure reporting is centralized through `reportDeliveryFailure`.
 
-func (l *CommLoop) sendToIface(name string, msg circulation.Message) error {
+func (l *CommLoop) sendToIface(name string, msg circulation.Message) deliveryResult {
+	target := string(msgToContext(&msg))
+	if target == "" {
+		target = "@interface_" + name
+	}
 	rt, ok := l.ifaces[name]
 	if !ok || rt == nil || rt.Egress == nil {
-		return fmt.Errorf("unknown iface: %s", name)
+		result := newDeliveryResult(deliveryUnavailable, target, fmt.Errorf("unknown iface: %s", name))
+		l.reportDeliveryFailure(msg, result)
+		return result
+	}
+	state := rt.State()
+	if state.Status != InterfaceRunning {
+		err := fmt.Errorf("interface %s unavailable (status=%s)", name, state.Status)
+		if state.LastErr != nil {
+			err = fmt.Errorf("interface %s unavailable: %w", name, state.LastErr)
+		}
+		result := newDeliveryResult(deliveryUnavailable, target, err)
+		l.reportDeliveryFailure(msg, result)
+		return result
 	}
 	select {
 	case rt.Egress <- msg:
-		return nil
+		return newDeliveryResult(deliveryAccepted, target, nil)
 	case <-l.done:
-		return nil
+		result := newDeliveryResult(deliveryStopped, target, fmt.Errorf("communication stopped before delivery to iface %s", name))
+		l.reportDeliveryFailure(msg, result)
+		return result
 	}
 }
 
@@ -1111,7 +1140,6 @@ func (l *CommLoop) sendToIface(name string, msg circulation.Message) error {
 
 func (l *CommLoop) sendToTrace(msg circulation.Message, traceKind string, reason string, userText string) {
 	tw := circulation.TraceWire{
-		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:  traceKind,
 		Family:     circulation.ValueOriginCommunication,
 		ReasonCode: reason,
@@ -1203,7 +1231,7 @@ func sortedMapKeys(values map[string]any) []string {
 // enforceControlMessageLimit keeps bulk data out of the intention plane. An
 // oversized intention is replaced by a correlated communication error; an
 // oversized response is reduced in place to that same small error envelope.
-func (l *CommLoop) enforceControlMessageLimit(msg circulation.Message) (circulation.Message, bool) {
+func (l *CommLoop) enforceControlMessageLimit(msg circulation.Message, source ...junction.Delivery) (circulation.Message, bool) {
 	b, err := json.Marshal(msg)
 	if err != nil || shared.ValidateControlMessageBytes(int64(len(b)), shared.DefaultControlMessageBytes) == nil {
 		return msg, true
@@ -1225,7 +1253,7 @@ func (l *CommLoop) enforceControlMessageLimit(msg circulation.Message) (circulat
 		msg.Response.Error = problem
 		return msg, true
 	}
-	if msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
+	if msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse && !hasExternalAuthority(source...) {
 		ctxID := ""
 		if l != nil && l.frame != nil {
 			ctxID = l.frame.CtxId

@@ -295,6 +295,11 @@ func (l *MatterLoop) capMatterAppend(msg circulation.Message) {
 				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: leaseErr.Error()}, "failed to open append lease"))
 			return
 		}
+		if !l.bindLeaseToCaller(handle.RID, in, "append") {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "lease authorization unavailable"))
+			return
+		}
 		l.emitResponseOK(in, map[string]any{circulation.KeyOK: true, circulation.KeyMatterID: matterID, circulation.KeyHTTPData: handle})
 		return
 	}

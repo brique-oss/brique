@@ -17,15 +17,17 @@
 package context
 
 import (
+	"brique_engine/circulation"
+	"brique_engine/configuration"
+	"brique_engine/junction"
+	"brique_engine/shared"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"strconv"
+	"strings"
 )
 
 const briqueContextFilename = "context.json"
@@ -104,6 +106,8 @@ type ContextDescriptor struct {
 // - The returned registry reuses descriptor field values as provided, including empty strings.
 
 func BuildContextRegistry(desc ContextDescriptor, ctxCommReg junction.ContextCommInRegistry, contextDir string) junction.ContextRegistry {
+	// NewDelivery derives the local authority from CtxId when none is set, so
+	// the literal is returned directly (the registry holds a lock).
 	return junction.ContextRegistry{
 		CtxCommReg: ctxCommReg,
 		CtxId:      desc.CtxId,
@@ -225,7 +229,11 @@ func LoadContextDescriptor(contextDir string, contextId string) (ContextDescript
 	}
 	if v, ok := getString(syn, configuration.KeyEngineVersion); ok {
 		desc.EngineVers = v
-		if desc.EngineVers > shared.EngineBinaryVersion {
+		cmp, err := compareVersions(desc.EngineVers, shared.EngineBinaryVersion)
+		if err != nil {
+			return ContextDescriptor{}, fmt.Errorf("%s brique.engine_ver: %w", briqueContextFilename, err)
+		}
+		if cmp > 0 {
 			return ContextDescriptor{}, fmt.Errorf("context requires engine >= %s, current is %s", desc.EngineVers, shared.EngineBinaryVersion)
 		}
 	} else {
@@ -250,12 +258,72 @@ func LoadContextDescriptor(contextDir string, contextId string) (ContextDescript
 
 	desc.Children = []string{}
 	if arr, ok := syn[configuration.KeyChildList].([]any); ok {
+		seen := make(map[string]struct{}, len(arr))
 		for _, it := range arr {
-			if s, ok := it.(string); ok && s != "" {
-				desc.Children = append(desc.Children, s)
+			s, ok := it.(string)
+			if !ok || s == "" {
+				continue
 			}
+			if !validChildName(s) {
+				return ContextDescriptor{}, fmt.Errorf("%s brique.%s: invalid child name %q (one directory name, no separators)", briqueContextFilename, configuration.KeyChildList, s)
+			}
+			if _, dup := seen[s]; dup {
+				return ContextDescriptor{}, fmt.Errorf("%s brique.%s: duplicate child %q", briqueContextFilename, configuration.KeyChildList, s)
+			}
+			seen[s] = struct{}{}
+			desc.Children = append(desc.Children, s)
 		}
 	}
 
 	return desc, nil
+}
+
+// compareVersions compares two dotted numeric versions ("1.10.0" > "1.9.0").
+// A leading "v" and any "-pre" / "+build" suffix are ignored; missing
+// components count as zero.
+func compareVersions(a, b string) (int, error) {
+	pa, err := parseVersion(a)
+	if err != nil {
+		return 0, err
+	}
+	pb, err := parseVersion(b)
+	if err != nil {
+		return 0, err
+	}
+	for i := 0; i < len(pa) || i < len(pb); i++ {
+		var x, y int
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		if x != y {
+			if x > y {
+				return 1, nil
+			}
+			return -1, nil
+		}
+	}
+	return 0, nil
+}
+
+func parseVersion(v string) ([]int, error) {
+	raw := strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexAny(raw, "-+"); i >= 0 {
+		raw = raw[:i]
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("invalid version %q", v)
+	}
+	parts := strings.Split(raw, ".")
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid version %q", v)
+		}
+		out[i] = n
+	}
+	return out, nil
 }

@@ -17,8 +17,10 @@
 package comm
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
@@ -26,8 +28,8 @@ import (
 	"brique_engine/shared"
 )
 
-func newUtilitiesLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan circulation.Message) {
-	traceCh := make(chan circulation.Message, 64)
+func newUtilitiesLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan junction.Delivery) {
+	traceCh := make(chan junction.Delivery, 64)
 	l := &CommLoop{
 		frame: &junction.ContextRegistry{
 			CtxId:        ctxID,
@@ -152,58 +154,6 @@ func TestCommUtilities_N1_CMUT_04_ResolveExtContext(t *testing.T) {
 	}
 }
 
-func TestCommUtilities_N1_CMUT_05_ExtractPublicKeyAndFromContext(t *testing.T) {
-	l, _ := newUtilitiesLoop("/ctx/local", newMockCommReg())
-	im := mkIntentionMsg("/ctx/a", circulation.ValueTypeMatter, "/ctx/src")
-	im.Intention.Identity.PubKey = "PUBI"
-	rm := circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{From: circulation.Address{Context: "/ctx/resp"}, Identity: circulation.Identity{PubKey: "PUBR"}}}
-
-	if got := extractPublicKey(&im); got != "PUBI" {
-		t.Fatalf("extractPublicKey intention=%q", got)
-	}
-	if got := extractPublicKey(&rm); got != "PUBR" {
-		t.Fatalf("extractPublicKey response=%q", got)
-	}
-
-	if got := l.fromContext(&im); got != "/ctx/src" {
-		t.Fatalf("fromContext intention=%q", got)
-	}
-	if got := l.fromContext(&rm); got != "/ctx/resp" {
-		t.Fatalf("fromContext response=%q", got)
-	}
-}
-
-func TestCommUtilities_N1_CMUT_06_PublicFromContext(t *testing.T) {
-	reg := newMockCommReg()
-	reg.idToExt["/ctx/src"] = "public-src"
-	l, _ := newUtilitiesLoop("/root", reg)
-	msg := mkIntentionMsg("@ext_peer:/x", circulation.ValueTypeMatter, "/ctx/src")
-
-	if got := l.publicFromContext(&msg); got != "public-src" {
-		t.Fatalf("expected mapped public context, got %q", got)
-	}
-
-	reg2 := newMockCommReg()
-	l2, _ := newUtilitiesLoop("/root", reg2)
-	if got := l2.publicFromContext(&msg); got != "/ctx/src" {
-		t.Fatalf("expected fallback to from context, got %q", got)
-	}
-
-	msgEmpty := mkIntentionMsg("@ext_peer:/x", circulation.ValueTypeMatter, "")
-	if got := l2.publicFromContext(&msgEmpty); got != "" {
-		t.Fatalf("expected empty with missing from context, got %q", got)
-	}
-}
-
-func TestCommUtilities_N1_CMUT_07_StampFromPublicContext(t *testing.T) {
-	l, _ := newUtilitiesLoop("/root", newMockCommReg())
-	im := mkIntentionMsg("@ext_peer:/x", circulation.ValueTypeMatter, "/ctx/src")
-	l.stampFromPublicContext(&im, "public-src")
-	if im.Intention.From.Context != "public-src" {
-		t.Fatalf("stamped from.context=%q", im.Intention.From.Context)
-	}
-}
-
 func TestCommUtilities_N1_CMUT_08_ParseAtAddress(t *testing.T) {
 	tag, path, ok := parseAtAddress("@ui_main:/screen")
 	if !ok || tag != "ui_main" || path != "screen" {
@@ -220,8 +170,8 @@ func TestCommUtilities_N1_CMUT_08_ParseAtAddress(t *testing.T) {
 
 func TestCommUtilities_N1_CMUT_09_ForwardHelpers(t *testing.T) {
 	reg := newMockCommReg()
-	rootCh := make(chan circulation.Message, 1)
-	dstCh := make(chan circulation.Message, 1)
+	rootCh := make(chan junction.Delivery, 1)
+	dstCh := make(chan junction.Delivery, 1)
 	reg.chByID[shared.ContextAddr(shared.RootContextID)] = rootCh
 	reg.chByID["/ctx/dst"] = dstCh
 	l, traceCh := newUtilitiesLoop("/ctx/src", reg)
@@ -234,24 +184,168 @@ func TestCommUtilities_N1_CMUT_09_ForwardHelpers(t *testing.T) {
 	_ = recvMsg(t, dstCh, "forwardToContext success")
 
 	l.forwardToContext("/ctx/missing", msg)
-	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName) {
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable) {
 		t.Fatalf("expected reject trace for unknown context")
+	}
+}
+
+func TestCommUtilities_ForwardToContextAddressesDeepBubbleDirectly(t *testing.T) {
+	reg := newMockCommReg()
+	rootCh := make(chan junction.Delivery, 1)
+	parentCh := make(chan junction.Delivery, 1)
+	targetCh := make(chan junction.Delivery, 1)
+	reg.chByID["/root"] = rootCh
+	reg.chByID["/root/target"] = parentCh
+	reg.chByID["/root/target/deep"] = targetCh
+	l, _ := newUtilitiesLoop("/root/source", reg)
+
+	msg := mkIntentionMsg("/root/target/deep", circulation.ValueTypeMatter, "/root/source")
+	l.forwardToContext("/root/target/deep", msg)
+
+	got := recvMsg(t, targetCh, "direct deep-context delivery")
+	if got.Intention.IntentionID != msg.Intention.IntentionID {
+		t.Fatalf("message identity changed: got %q want %q", got.Intention.IntentionID, msg.Intention.IntentionID)
+	}
+	noMsg(t, parentCh, "parent must not be a routing hop")
+	noMsg(t, rootCh, "root must not be an internal routing hop")
+}
+
+func TestCommUtilities_ForwardToContextPreservesDeliveryAuthority(t *testing.T) {
+	reg := newMockCommReg()
+	dst := make(chan junction.Delivery, 1)
+	reg.chByID["/root/target"] = dst
+	l, _ := newUtilitiesLoop("/root/source", reg)
+	msg := mkIntentionMsg("/root/target", circulation.ValueTypeMatter, "/root/source")
+	source := junction.MustLocalDelivery(junction.MustLocalAuthority("family:matter"), msg)
+
+	if result := l.forwardToContext("/root/target", msg, source); !result.accepted() {
+		t.Fatalf("forward result = %#v", result)
+	}
+	forwarded := <-dst
+	if authority, ok := forwarded.LocalAuthoritySource(); !ok || authority != "family:matter" {
+		t.Fatalf("authority = %q, valid = %v", authority, ok)
 	}
 }
 
 func TestCommUtilities_N1_CMUT_10_SendToIface(t *testing.T) {
 	l, _ := newUtilitiesLoop("/ctx/src", newMockCommReg())
-	if err := l.sendToIface("unknown", mkIntentionMsg("/ctx", circulation.ValueTypeMatter, "/ctx/src")); err == nil {
-		t.Fatalf("expected error on unknown iface")
+	if result := l.sendToIface("unknown", mkIntentionMsg("/ctx", circulation.ValueTypeMatter, "/ctx/src")); result.Status != deliveryUnavailable || result.Err == nil {
+		t.Fatalf("expected unavailable result on unknown iface, got %#v", result)
 	}
 
 	ifaceCh := make(chan circulation.Message, 1)
-	l.ifaces["ui1"] = &InterfaceRuntime{Egress: ifaceCh}
+	l.ifaces["ui1"] = &InterfaceRuntime{Egress: ifaceCh, status: InterfaceRunning}
 	msg := mkIntentionMsg("/ctx", circulation.ValueTypeMatter, "/ctx/src")
-	if err := l.sendToIface("ui1", msg); err != nil {
-		t.Fatalf("unexpected sendToIface error: %v", err)
+	if result := l.sendToIface("ui1", msg); !result.accepted() {
+		t.Fatalf("unexpected sendToIface result: %#v", result)
 	}
 	_ = recvMsg(t, ifaceCh, "sendToIface success")
+}
+
+func TestCommUtilities_DeliveryBackpressureWaitsWithoutDropping(t *testing.T) {
+	reg := newMockCommReg()
+	dst := make(chan junction.Delivery, 1)
+	dst <- junction.MustLocalDelivery(junction.MustLocalAuthority("test"), mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/occupied"))
+	reg.chByID["/ctx/dst"] = dst
+	l, _ := newUtilitiesLoop("/ctx/src", reg)
+	msg := mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/src")
+	resultCh := make(chan deliveryResult, 1)
+
+	go func() { resultCh <- l.forwardToContext("/ctx/dst", msg) }()
+	select {
+	case result := <-resultCh:
+		t.Fatalf("full destination must apply backpressure, got early result %#v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	<-dst
+	select {
+	case result := <-resultCh:
+		if !result.accepted() {
+			t.Fatalf("delivery after capacity release = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not resume after destination capacity was released")
+	}
+	got := recvMsg(t, dst, "backpressured message")
+	if got.Intention.IntentionID != msg.Intention.IntentionID {
+		t.Fatalf("wrong message delivered after backpressure: %q", got.Intention.IntentionID)
+	}
+}
+
+func TestCommUtilities_DeliveryStopUnblocksBackpressure(t *testing.T) {
+	reg := newMockCommReg()
+	dst := make(chan junction.Delivery, 1)
+	dst <- junction.MustLocalDelivery(junction.MustLocalAuthority("test"), mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/occupied"))
+	reg.chByID["/ctx/dst"] = dst
+	l, _ := newUtilitiesLoop("/ctx/src", reg)
+	msg := mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/src")
+	resultCh := make(chan deliveryResult, 1)
+
+	go func() { resultCh <- l.forwardToContext("/ctx/dst", msg) }()
+	time.Sleep(20 * time.Millisecond)
+	close(l.done)
+
+	select {
+	case result := <-resultCh:
+		if result.Status != deliveryStopped {
+			t.Fatalf("delivery after stop = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not unblock delivery")
+	}
+}
+
+func TestCommUtilities_InterfaceBackpressureWaitsWithoutDropping(t *testing.T) {
+	l, _ := newUtilitiesLoop("/ctx/src", newMockCommReg())
+	egress := make(chan circulation.Message, 1)
+	egress <- mkIntentionMsg("@ui_main", circulation.ValueTypeUser, "/ctx/occupied")
+	l.ifaces["main"] = &InterfaceRuntime{Egress: egress, status: InterfaceRunning}
+	msg := mkIntentionMsg("@ui_main", circulation.ValueTypeUser, "/ctx/src")
+	resultCh := make(chan deliveryResult, 1)
+
+	go func() { resultCh <- l.sendToIface("main", msg) }()
+	select {
+	case result := <-resultCh:
+		t.Fatalf("full interface must apply backpressure, got early result %#v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	<-egress
+	result := <-resultCh
+	if !result.accepted() {
+		t.Fatalf("interface delivery after capacity release = %#v", result)
+	}
+	got := recvMsg(t, egress, "backpressured interface message")
+	if got.Intention.IntentionID != msg.Intention.IntentionID {
+		t.Fatalf("wrong interface message delivered: %q", got.Intention.IntentionID)
+	}
+}
+
+func TestCommUtilities_InterfaceStopUnblocksBackpressure(t *testing.T) {
+	l, _ := newUtilitiesLoop("/ctx/src", newMockCommReg())
+	egress := make(chan circulation.Message, 1)
+	egress <- mkIntentionMsg("@ui_main", circulation.ValueTypeUser, "/ctx/occupied")
+	l.ifaces["main"] = &InterfaceRuntime{Egress: egress, status: InterfaceRunning}
+	msg := mkIntentionMsg("@ui_main", circulation.ValueTypeUser, "/ctx/src")
+	resultCh := make(chan deliveryResult, 1)
+
+	go func() { resultCh <- l.sendToIface("main", msg) }()
+	select {
+	case result := <-resultCh:
+		t.Fatalf("full interface must apply backpressure, got early result %#v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(l.done)
+
+	select {
+	case result := <-resultCh:
+		if result.Status != deliveryStopped {
+			t.Fatalf("interface delivery after stop = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not unblock interface delivery")
+	}
 }
 
 func TestCommUtilities_N1_CMUT_11_SendToTrace(t *testing.T) {
@@ -324,7 +418,7 @@ func TestCommUtilities_N1_CMUT_11b_ControlMessageLimit(t *testing.T) {
 
 func TestCommUtilities_N1_CMUT_12_ForwardToContextUnreachableRepliesInsteadOfHanging(t *testing.T) {
 	reg := newMockCommReg()
-	srcCh := make(chan circulation.Message, 1)
+	srcCh := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/src"] = srcCh
 	l, traceCh := newUtilitiesLoop("/ctx/src", reg)
 
@@ -333,7 +427,7 @@ func TestCommUtilities_N1_CMUT_12_ForwardToContextUnreachableRepliesInsteadOfHan
 
 	l.forwardToContext("/ctx/missing", msg)
 
-	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName) {
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable) {
 		t.Fatalf("expected reject trace for unknown context")
 	}
 
@@ -354,7 +448,7 @@ func TestCommUtilities_N1_CMUT_12_ForwardToContextUnreachableRepliesInsteadOfHan
 
 func TestCommUtilities_N1_CMUT_13_ForwardToContextUnreachableWithoutAwaitStaysSilent(t *testing.T) {
 	reg := newMockCommReg()
-	srcCh := make(chan circulation.Message, 1)
+	srcCh := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/src"] = srcCh
 	l, traceCh := newUtilitiesLoop("/ctx/src", reg)
 
@@ -363,8 +457,83 @@ func TestCommUtilities_N1_CMUT_13_ForwardToContextUnreachableWithoutAwaitStaysSi
 
 	l.forwardToContext("/ctx/missing", msg)
 
-	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidToContextName) {
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable) {
 		t.Fatalf("expected reject trace for unknown context")
 	}
 	noMsg(t, srcCh, "no ack expected without AwaitResponse")
+}
+
+func TestCommUtilities_UndeliverableResponseNeverCreatesAnotherResponse(t *testing.T) {
+	reg := newMockCommReg()
+	sourceCh := make(chan junction.Delivery, 1)
+	reg.chByID["/ctx/source"] = sourceCh
+	l, traceCh := newUtilitiesLoop("/ctx/source", reg)
+	msg := circulation.Message{
+		Kind: circulation.ValueKindResponse,
+		Response: circulation.Response{
+			IntentionID: "response-id",
+			Status:      circulation.ValueStatusOK,
+			To:          circulation.Address{Context: "/ctx/missing", Type: circulation.ValueTypeMatter},
+			From:        circulation.Address{Context: "/ctx/source", Type: circulation.ValueTypeMatter},
+		},
+	}
+
+	result := l.forwardToContext("/ctx/missing", msg)
+	if result.Status != deliveryUnavailable {
+		t.Fatalf("undeliverable response result = %#v", result)
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable) {
+		t.Fatal("expected delivery failure trace")
+	}
+	noMsg(t, sourceCh, "no response-to-response")
+}
+
+func TestCommUtilities_DefinitiveInterfaceRejectionRepliesOnlyToAwaitedIntention(t *testing.T) {
+	reg := newMockCommReg()
+	sourceCh := make(chan junction.Delivery, 2)
+	reg.chByID["/ctx/source"] = sourceCh
+	l, traceCh := newUtilitiesLoop("/ctx/source", reg)
+
+	awaited := mkIntentionMsg("@ext_peer:/target", circulation.ValueTypeExecution, "/ctx/source")
+	awaited.Intention.AwaitResponse = true
+	l.reportInterfaceEgressOutcome(awaited, InterfaceEgressOutcome{
+		Definitive: true,
+		StatusCode: 503,
+		Err:        errors.New("remote HTTP 503"),
+	})
+	ack := recvMsg(t, sourceCh, "definitive interface rejection ack")
+	if ack.Kind != circulation.ValueKindResponse || ack.Response.IntentionID != awaited.Intention.IntentionID {
+		t.Fatalf("unexpected correlated ack: %#v", ack)
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable) {
+		t.Fatal("expected definitive rejection trace")
+	}
+
+	fireAndForget := awaited
+	fireAndForget.Intention.IntentionID = "fire-and-forget"
+	fireAndForget.Intention.AwaitResponse = false
+	l.reportInterfaceEgressOutcome(fireAndForget, InterfaceEgressOutcome{Definitive: true, StatusCode: 503, Err: errors.New("remote HTTP 503")})
+	noMsg(t, sourceCh, "fire-and-forget rejection must not reply")
+}
+
+func TestCommUtilities_AmbiguousInterfaceFailureNeverManufacturesResponse(t *testing.T) {
+	reg := newMockCommReg()
+	sourceCh := make(chan junction.Delivery, 1)
+	reg.chByID["/ctx/source"] = sourceCh
+	l, traceCh := newUtilitiesLoop("/ctx/source", reg)
+	msg := mkIntentionMsg("@ext_peer:/target", circulation.ValueTypeExecution, "/ctx/source")
+	msg.Intention.AwaitResponse = true
+
+	l.reportInterfaceEgressOutcome(msg, InterfaceEgressOutcome{Definitive: false, Err: errors.New("connection reset")})
+	if !traceContains(traceCh, circulation.ValueTraceCommDrop, "delivery_outcome_unknown") {
+		t.Fatal("expected unknown delivery outcome trace")
+	}
+	noMsg(t, sourceCh, "ambiguous transport failure must not reply")
+
+	response := circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{
+		IntentionID: "response-id",
+		To:          circulation.Address{Context: "@ext_peer:/target"},
+	}}
+	l.reportInterfaceEgressOutcome(response, InterfaceEgressOutcome{Definitive: true, StatusCode: 503, Err: errors.New("remote HTTP 503")})
+	noMsg(t, sourceCh, "rejected response must not create response-to-response")
 }

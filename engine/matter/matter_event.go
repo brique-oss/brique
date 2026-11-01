@@ -156,6 +156,12 @@ type MatterSubscription struct {
 	Target    circulation.Address `json:"target"`
 	CreatedAt int64               `json:"created_at"`
 	Durable   bool                `json:"durable"`
+	// Owner is the durable principal id of an external subscriber; empty for a
+	// local subscription. It is what the read right is re-decided against.
+	Owner string `json:"owner,omitempty"`
+	// OwnerActor is the actor the owner subscribed as; the read right is
+	// re-decided for that actor, and only that actor manages the subscription.
+	OwnerActor string `json:"owner_actor,omitempty"`
 }
 
 // ensureSubsInit
@@ -493,6 +499,16 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 		mode = circulation.ValueModeBrique
 	}
 
+	// An external subscriber is served by the engine itself: a wrapper-mode matter
+	// would hand the subscription (and the caller's identity) to code that
+	// enforces no owner or revocation.
+	if _, externalCaller := l.callerPrincipal(in); externalCaller && mode != circulation.ValueModeBrique {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidMode, circulation.KeyMatterID: matterID},
+			"external subscription is only supported for brique-mode matters"))
+		return
+	}
+
 	// Only brique or wrapper are allowed.
 	if mode != circulation.ValueModeBrique && mode != circulation.ValueModeWrapper {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
@@ -542,8 +558,16 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 		subID = fmt.Sprintf("sub_%d", time.Now().UnixNano())
 	}
 
+	owner, ownerActor, externalCaller := l.callerIdentity(in)
 	target := in.From
-	if rawTarget, exists := in.Params[circulation.KeyTarget]; exists {
+	if rawTarget, exists := in.Params[circulation.KeyTarget]; exists && externalCaller {
+		// An external subscriber's events go to the address it signed as its own;
+		// it cannot redirect them to a third party.
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "an external subscription cannot choose its target"))
+		_ = rawTarget
+		return
+	} else if exists {
 		object, valid := rawTarget.(map[string]any)
 		if !valid {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -567,12 +591,33 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 	}
 
 	previous, hadPrevious := l.getSub(matterID, subID)
+	if externalCaller && hadPrevious && (previous.Owner != owner || previous.OwnerActor != ownerActor) {
+		// Somebody else's subscription id: indistinguishable from a refusal to
+		// create, and never overwritten.
+		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "subscription id is not available"))
+		return
+	}
+	if externalCaller {
+		if !l.externalDeliveryPathExists(owner) || !externalTargetDeliverable(owner, target) {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "no delivery path to this principal"))
+			return
+		}
+		if !hadPrevious && l.ownerSubscriptionCount(owner) >= maxSubscriptionsPerOwner {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "subscription limit reached"))
+			return
+		}
+	}
 	subscription := MatterSubscription{
-		ID:        subID,
-		MatterID:  matterID,
-		Target:    target,
-		CreatedAt: time.Now().UnixNano(),
-		Durable:   durable,
+		Owner:      owner,
+		OwnerActor: ownerActor,
+		ID:         subID,
+		MatterID:   matterID,
+		Target:     target,
+		CreatedAt:  time.Now().UnixNano(),
+		Durable:    durable,
 	}
 	l.addSub(matterID, subscription)
 	if durable || (hadPrevious && previous.Durable) {
@@ -661,8 +706,16 @@ func (l *MatterLoop) capMatterUnsubscribe(msg circulation.Message) {
 		mode = circulation.ValueModeBrique
 	}
 
-	// Wrapper mode -> delegate to wrapper.
+	// Wrapper mode -> delegate to wrapper (never for an external caller: its
+	// subscriptions are only ever held by the engine, see capMatterSubscribe).
 	if mode == circulation.ValueModeWrapper {
+		if _, externalCaller := l.callerPrincipal(in); externalCaller {
+			l.emitResponseOK(in, map[string]any{
+				circulation.KeyOK: true, circulation.KeyMatterID: matterID, circulation.KeySubID: subID,
+				circulation.KeyRemoved: false, circulation.KeySubstanceMode: mode,
+			})
+			return
+		}
 		wrapperName, ok, code, details, text := l.rewriteToWrapperTransport(&msg, entry)
 		if !ok {
 			if details == nil {
@@ -685,7 +738,15 @@ func (l *MatterLoop) capMatterUnsubscribe(msg circulation.Message) {
 	}
 
 	// Brique-mode -> remove locally.
-	previous, _ := l.getSub(matterID, subID)
+	previous, existed := l.getSub(matterID, subID)
+	if !l.mayManageSubscription(in, previous, existed) {
+		// Not the owner: the subscription does not exist as far as this caller can tell.
+		l.emitResponseOK(in, map[string]any{
+			circulation.KeyOK: true, circulation.KeyMatterID: matterID, circulation.KeySubID: subID,
+			circulation.KeyRemoved: false, circulation.KeySubstanceMode: mode,
+		})
+		return
+	}
 	removed := l.removeSub(matterID, subID)
 	if removed && previous.Durable {
 		if err := l.persistMatterSubscriptions(); err != nil {
@@ -903,6 +964,11 @@ func (l *MatterLoop) capMatterSubscriptionAck(msg circulation.Message) {
 	if subID == "" || eventID == "" {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "sub_id and event_id are required"))
+		return
+	}
+	owned, found := l.findSubscription(subID)
+	if !l.mayManageSubscription(in, owned, found) {
+		l.emitResponseOK(in, map[string]any{circulation.KeyOK: true, circulation.KeySubID: subID, circulation.KeyEventId: eventID, circulation.KeyRemoved: false})
 		return
 	}
 	removed, err := l.ackPendingMatterEvent(subID, eventID)

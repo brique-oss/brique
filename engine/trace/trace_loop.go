@@ -17,13 +17,10 @@
 package trace
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"brique_engine/circulation"
@@ -41,8 +38,10 @@ import (
 type TraceLoop struct {
 	frame *junction.ContextRegistry
 
-	// Ingress: producers try-send circulation.Message (Kind==trace) here.
-	in chan circulation.Message
+	// deliveryIn is the protected family boundary, sized by in_chan_capacity:
+	// producers never block on it, so it absorbs their bursts. in is a private
+	// queue of already decoded messages. Both are consumed by loopIngress.
+	deliveryIn chan junction.Delivery
 
 	cfg TraceCfg
 
@@ -50,7 +49,25 @@ type TraceLoop struct {
 	ring *eventRing
 
 	// writer pipeline
-	flushReq chan []circulation.TraceWire
+	flushReq    chan []circulation.TraceWire
+	freeBatches chan []circulation.TraceWire // batches returned by the writer
+
+	// respQ carries trace.user answers from the ring goroutine to the responder
+	// goroutine, so a slow Comm never freezes the ring and the flush ticker.
+	respQ       chan circulation.Message
+	respStarted atomic.Bool
+
+	// loss/throughput accounting (see Stats)
+	counters traceCounters
+
+	// Test seams; nil => real clock / real files.
+	now            func() time.Time
+	segmentOpener  func(path string) (segmentFile, error)
+	segmentRemover func(path string) error
+
+	// finalFlushWait bounds how long the shutdown flush waits for the writer
+	// to accept the last batch; 0 => defaultFinalFlushWait.
+	finalFlushWait time.Duration
 
 	// lifecycle
 	stateMu sync.RWMutex
@@ -61,6 +78,21 @@ type TraceLoop struct {
 }
 
 const traceCapUser = "trace.user"
+
+// Size bounds (bytes) of the trace.user parameters. The ring bounds the number
+// of buffered events; these bound their size.
+const (
+	maxUserTextBytes   = 8192
+	maxReasonCodeBytes = 128
+	maxTraceIDBytes    = 128
+)
+
+// responseQueueSize bounds the queue between the ring goroutine and the
+// goroutine that answers trace.user callers.
+const responseQueueSize = 64
+
+// defaultFinalFlushWait bounds the wait for the writer at shutdown.
+const defaultFinalFlushWait = 2 * time.Second
 
 // NewTraceLoop
 //
@@ -124,15 +156,25 @@ func NewTraceLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Tr
 	cfg := ParseTraceCfg(engineCfg)
 
 	l := &TraceLoop{
-		frame: frame,
-		in:    make(chan circulation.Message, 16),
-		cfg:   cfg,
+		frame:      frame,
+		deliveryIn: make(chan junction.Delivery, cfg.InChanCapacity),
+		cfg:        cfg,
 
-		ring:     newEventRing(cfg.RingCapacity),
-		flushReq: make(chan []circulation.TraceWire, 4),
+		ring:        newEventRing(cfg.RingCapacity),
+		flushReq:    make(chan []circulation.TraceWire, 4),
+		freeBatches: make(chan []circulation.TraceWire, freeBatchPool),
+		respQ:       make(chan circulation.Message, responseQueueSize),
 
 		state: shared.FamilyInitializing,
 		done:  make(chan struct{}),
+	}
+
+	// Publish the trace gate configuration now, while the context is still being
+	// built: no family has started yet, so no other goroutine can be reading
+	// these frame fields (Start() runs concurrently with the other families).
+	if frame != nil {
+		frame.TraceEnabled = cfg.Enabled
+		frame.TraceLevel = cfg.Level
 	}
 
 	return l
@@ -186,12 +228,12 @@ func NewTraceLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Tr
 // - receiver `l *TraceLoop`.
 //
 // Outputs:
-// - chan circulation.Message: internal input channel of the loop.
+// - chan junction.Delivery: protected family input channel.
 //
 // Contract:
-// - Returns exactly the current `l.in` channel instance.
+// - Returns exactly the current `l.deliveryIn` channel instance.
 // - Emits no response, trace, or outbound message.
-func (l *TraceLoop) InChan() chan circulation.Message { return l.in }
+func (l *TraceLoop) InChan() chan junction.Delivery { return l.deliveryIn }
 
 // State
 //
@@ -299,7 +341,7 @@ func (l *TraceLoop) State() shared.FamilyState {
 //   - none.
 //
 // State/Storage Effects:
-// - may set `frame.TraceEnabled` and `frame.TraceLevel` when `l.frame != nil`.
+// - does not touch `frame.TraceEnabled` / `frame.TraceLevel`: `NewTraceLoop` publishes them before any family starts.
 // - increments `l.wg` for ingress and writer workers before spawning them.
 // - may start two goroutines running `loopIngress` and `loopWriter`.
 // - may mutate `l.state` to `shared.FamilyRunning`.
@@ -328,12 +370,16 @@ func (l *TraceLoop) Start() {
 		return
 	}
 
-	if l.frame != nil {
-		l.frame.TraceEnabled = l.cfg.Enabled
-		l.frame.TraceLevel = l.cfg.Level
-	}
+	// Responder: answers trace.user callers off the ring goroutine.
+	l.respStarted.Store(true)
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		l.loopResponder()
+	}()
 
-	// Ingress
+	// Ingress (single owner of the ring; reads the protected boundary and the
+	// private decoded queue)
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
@@ -488,77 +534,6 @@ func (l *TraceLoop) Suspend() {
 // Producer helper
 // -----------------------------
 
-// TrySend
-//
-// Functional role (Brique DSL):
-// - >sequence:
-//   - build trace envelope from TraceWire payload
-//   - set message timestamp from trace timestamp
-//   - attempt non-blocking enqueue to destination channel
-//
-// Expected Message Fields:
-// - none.
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - one trace message built from `tw` and offered to the destination channel.
-//
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - none.
-//
-// Inputs:
-// - ch chan<- circulation.Message: destination channel.
-// - tw circulation.TraceWire: trace payload used as Message.Trace and Message.TS source.
-//
-// Outputs:
-// - bool: true when message is sent, false when channel cannot accept immediately.
-//
-// Contract:
-// - Performs exactly one non-blocking send attempt.
-// - On success, emits one trace message carrying `tw` to the destination channel.
-// - On channel saturation, emits nothing and returns false.
-// - Never blocks caller.
-func TrySend(ch chan<- circulation.Message, tw circulation.TraceWire) bool {
-	msg := circulation.Message{
-		Kind:  circulation.ValueKindTrace,
-		TS:    tw.Timestamp, // keep TS aligned with trace timestamp
-		Trace: tw,
-	}
-	select {
-	case ch <- msg:
-		return true
-	default:
-		return false
-	}
-}
-
 func (l *TraceLoop) emitToComm(msg circulation.Message) {
 	if l.frame == nil || l.frame.FamIn == nil {
 		return
@@ -567,9 +542,49 @@ func (l *TraceLoop) emitToComm(msg circulation.Message) {
 	if commCh == nil {
 		return
 	}
+	d := l.frame.MustDelivery(msg)
+	// Fast path first: when Comm has room the response is sent even though the
+	// loop is already stopping (a select with a closed `done` would pick
+	// randomly between both ready cases and lose the response).
 	select {
-	case commCh <- msg:
+	case commCh <- d:
+		return
+	default:
+	}
+	select {
+	case commCh <- d:
 	case <-l.done:
+	}
+}
+
+// tooLargeDetails builds the error details for an over-sized trace.user field.
+func tooLargeDetails(field string, max int) map[string]any {
+	return map[string]any{
+		circulation.KeyReason: circulation.ValueReasonPayloadTooLarge,
+		"field":               field,
+		"max":                 max,
+	}
+}
+
+// respond hands a trace.user answer to the responder goroutine.
+//
+// Contract:
+//   - never blocks on Comm: the answer is queued (responseQueueSize slots); only a
+//     full queue applies backpressure, so no answer is dropped;
+//   - before the loop is started (direct calls) it emits synchronously.
+func (l *TraceLoop) respond(msg circulation.Message) {
+	if !l.respStarted.Load() {
+		l.emitToComm(msg)
+		return
+	}
+	l.respQ <- msg
+}
+
+// loopResponder emits the queued trace.user answers to Comm until the queue is
+// closed (end of ingress), which drains it first.
+func (l *TraceLoop) loopResponder() {
+	for msg := range l.respQ {
+		l.emitToComm(msg)
 	}
 }
 
@@ -619,9 +634,20 @@ func (l *TraceLoop) userTraceFromIntention(in circulation.Intention) (circulatio
 	if userText == "" {
 		return circulation.TraceWire{}, map[string]any{circulation.KeyReason: circulation.ValueReasonMissingPayload, "field": "user_text"}, false
 	}
+	if len(userText) > maxUserTextBytes {
+		return circulation.TraceWire{}, tooLargeDetails("user_text", maxUserTextBytes), false
+	}
 	reasonCode, _ := params["reason_code"].(string)
+	reasonCode = strings.TrimSpace(reasonCode)
+	if len(reasonCode) > maxReasonCodeBytes {
+		return circulation.TraceWire{}, tooLargeDetails("reason_code", maxReasonCodeBytes), false
+	}
 	traceIntentionID, _ := params["intention_id"].(string)
-	if strings.TrimSpace(traceIntentionID) == "" {
+	traceIntentionID = strings.TrimSpace(traceIntentionID)
+	if len(traceIntentionID) > maxTraceIDBytes {
+		return circulation.TraceWire{}, tooLargeDetails("intention_id", maxTraceIDBytes), false
+	}
+	if traceIntentionID == "" {
 		traceIntentionID = in.IntentionID
 	}
 	ctxID := strings.TrimSpace(string(in.To.Context))
@@ -646,7 +672,7 @@ func (l *TraceLoop) userTraceFromIntention(in circulation.Intention) (circulatio
 		IntentionId:       traceIntentionID,
 		ParentIntentionId: parentID,
 		RootIntentionId:   rootID,
-		ReasonCode:        strings.TrimSpace(reasonCode),
+		ReasonCode:        reasonCode,
 		UserText:          userText,
 		MsgKind:           circulation.ValueKindIntention,
 	}, nil, true
@@ -654,7 +680,7 @@ func (l *TraceLoop) userTraceFromIntention(in circulation.Intention) (circulatio
 
 func (l *TraceLoop) handleUserTraceIntention(in circulation.Intention, enabled bool) {
 	if in.To.Cap != traceCapUser {
-		l.emitToComm(traceErrorResp(in, circulation.ValueCodeNotFound, map[string]any{
+		l.respond(traceErrorResp(in, circulation.ValueCodeNotFound, map[string]any{
 			circulation.KeyReason: circulation.ValueReasonUnknownCap,
 			"cap":                 in.To.Cap,
 		}, "unknown trace capability"))
@@ -662,19 +688,20 @@ func (l *TraceLoop) handleUserTraceIntention(in circulation.Intention, enabled b
 	}
 	tw, details, ok := l.userTraceFromIntention(in)
 	if !ok {
-		l.emitToComm(traceErrorResp(in, circulation.ValueCodeInvalid, details, "invalid trace.user request"))
+		l.respond(traceErrorResp(in, circulation.ValueCodeInvalid, details, "invalid trace.user request"))
 		return
 	}
 	accepted := enabled && junction.TraceGateEnabled(l.frame, tw)
 	if accepted {
 		if ok := l.ring.push(tw); !ok {
-			l.emitToComm(traceErrorResp(in, circulation.ValueCodeUnavailable, map[string]any{
+			l.counters.ringRejected.Add(1)
+			l.respond(traceErrorResp(in, circulation.ValueCodeUnavailable, map[string]any{
 				circulation.KeyReason: circulation.ValueReasonBusy,
 			}, "trace ring saturated"))
 			return
 		}
 	}
-	l.emitToComm(traceOKResp(in, map[string]any{
+	l.respond(traceOKResp(in, map[string]any{
 		"status":     circulation.ValueStatusOK,
 		"accepted":   accepted,
 		"trace_kind": configuration.ValueConfigTraceLevelUser,
@@ -876,7 +903,7 @@ func (l *TraceLoop) traceRoot() (string, bool) {
 //
 // Inputs:
 // - receiver `l *TraceLoop`.
-// - reads from `l.in`.
+// - reads from `l.deliveryIn`.
 // - reads from `l.done`.
 //
 // Outputs:
@@ -891,80 +918,81 @@ func (l *TraceLoop) traceRoot() (string, bool) {
 // - On shutdown or input close, performs one final flush attempt then closes `l.flushReq`.
 // - When tracing is disabled, the loop still drains ingress and ring state to avoid backpressure on miswired producers.
 func (l *TraceLoop) loopIngress() {
-	// If trace disabled, we still drain/ignore to avoid blocking miswired producers.
 	enabled := l.cfg.Enabled
 
 	flushInterval := time.Duration(l.cfg.FlushEveryInterval) * time.Millisecond
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
+	// pendingSinceFlush counts events admitted since the last successful hand-off
+	// to the writer.
 	pendingSinceFlush := 0
-
-	flush := func(forceFinal bool) {
-		if !enabled {
-			// drain ring (best-effort) without writing
-			l.ring.drainAll(nil)
+	flush := func(final bool) {
+		if l.flushRing(enabled, final) {
 			pendingSinceFlush = 0
-			return
 		}
+	}
 
-		// Drain ring into a batch owned by writer.
-		batch := l.ring.drainAll(make([]circulation.TraceWire, 0, l.cfg.FlushEveryN))
-		if len(batch) == 0 {
-			pendingSinceFlush = 0
-			return
-		}
-
-		// Best-effort send to writer; on final flush, do not abort just because done is closed.
-		if forceFinal {
-			select {
-			case l.flushReq <- batch:
-			default:
-				// Writer saturated -> drop flush batch (best-effort observability).
+	// handle admits one decoded message.
+	handle := func(msg circulation.Message) {
+		switch msg.Kind {
+		case circulation.ValueKindIntention:
+			before := l.ring.count
+			l.handleUserTraceIntention(msg.Intention, enabled)
+			if l.ring.count > before {
+				pendingSinceFlush++
 			}
-		} else {
-			select {
-			case l.flushReq <- batch:
-			case <-l.done:
+		case circulation.ValueKindTrace:
+			if !enabled {
 				return
-			default:
-				// Writer saturated -> drop flush batch (best-effort observability).
 			}
+			if msg.Trace.TraceKind == configuration.ValueConfigTraceLevelUser {
+				if !junction.TraceGateEnabled(l.frame, msg.Trace) {
+					return
+				}
+			}
+			if !l.ring.push(msg.Trace) {
+				l.counters.ringRejected.Add(1)
+				return
+			}
+			pendingSinceFlush++
+		default:
+			return
 		}
-		pendingSinceFlush = 0
+		if pendingSinceFlush >= l.cfg.FlushEveryN {
+			flush(false)
+		}
+	}
+
+	deliveryIn := l.deliveryIn
+	handleDelivery := func(d junction.Delivery) {
+		if msg, valid := l.messageFromDelivery(d); valid {
+			handle(msg)
+		}
+	}
+	finish := func() {
+		flush(true)
+		close(l.flushReq)
+		if l.respQ != nil {
+			close(l.respQ) // ingress is the only sender: the responder drains and exits
+		}
 	}
 
 	for {
 		select {
 		case <-l.done:
-			// Drain remaining messages from in before final flush
-			// to avoid losing events that arrived before Stop was called.
+			// Drain everything already queued on both inputs before the final
+			// flush: traces emitted just before Stop are not dropped.
 			for {
 				select {
-				case msg, ok := <-l.in:
+				case d, ok := <-deliveryIn:
 					if !ok {
-						flush(true)
-						close(l.flushReq)
-						return
-					}
-					if msg.Kind == circulation.ValueKindIntention {
-						l.handleUserTraceIntention(msg.Intention, enabled)
+						deliveryIn = nil
 						continue
 					}
-					if msg.Kind != circulation.ValueKindTrace || !enabled {
-						continue
-					}
-					if msg.Trace.TraceKind == configuration.ValueConfigTraceLevelUser {
-						if !junction.TraceGateEnabled(l.frame, msg.Trace) {
-							continue
-						}
-					}
-					if l.ring.push(msg.Trace) {
-						pendingSinceFlush++
-					}
+					handleDelivery(d)
 				default:
-					flush(true)
-					close(l.flushReq)
+					finish()
 					return
 				}
 			}
@@ -972,219 +1000,89 @@ func (l *TraceLoop) loopIngress() {
 		case <-ticker.C:
 			flush(false)
 
-		case msg, ok := <-l.in:
+		case d, ok := <-deliveryIn:
 			if !ok {
-				flush(true)
-				close(l.flushReq)
-				return
-			}
-
-			if msg.Kind == circulation.ValueKindIntention {
-				before := l.ring.count
-				l.handleUserTraceIntention(msg.Intention, enabled)
-				if l.ring.count > before {
-					pendingSinceFlush++
-					if pendingSinceFlush >= l.cfg.FlushEveryN {
-						flush(false)
-					}
-				}
+				// Boundary closed: stop selecting on it; the loop ends on done.
+				deliveryIn = nil
 				continue
 			}
-
-			// TraceLoop accepts raw trace messages and trace intentions.
-			if msg.Kind != circulation.ValueKindTrace {
-				continue
-			}
-
-			if !enabled {
-				// drain/ignore quickly
-				continue
-			}
-
-			if msg.Trace.TraceKind == configuration.ValueConfigTraceLevelUser {
-				if !junction.TraceGateEnabled(l.frame, msg.Trace) {
-					continue
-				}
-			}
-
-			ev := msg.Trace
-
-			// Ring append with drop-newest policy.
-			if ok := l.ring.push(ev); !ok {
-				// drop newest
-				continue
-			}
-			pendingSinceFlush++
-
-			if pendingSinceFlush >= l.cfg.FlushEveryN {
-				flush(false)
-			}
+			handleDelivery(d)
 		}
 	}
+}
+
+// messageFromDelivery is the Trace family authority boundary. Internal trace
+// events and local trace.user calls remain accepted. An externally admitted
+// intention is refused before it can append an event or manufacture a reply;
+// external Trace access requires its own reviewed extractor and response path.
+func (l *TraceLoop) messageFromDelivery(delivery junction.Delivery) (circulation.Message, bool) {
+	msg, valid := delivery.Message()
+	if !valid {
+		return circulation.Message{}, false
+	}
+	if _, external := delivery.ExternalAdmission(); external {
+		return circulation.Message{}, false
+	}
+	return msg, true
+}
+
+// flushRing hands the ring content to the writer.
+//
+// Contract:
+//   - returns true when nothing is left pending (empty ring, tracing disabled, or
+//     batch handed off); false when the writer queue is saturated and the events
+//     were kept in the ring for a later attempt;
+//   - a non-final flush never drains the ring unless the hand-off is guaranteed:
+//     loopIngress is the only sender on flushReq, so a free slot observed here
+//     cannot be taken before the send;
+//   - the final flush waits (bounded by finalFlushWait) for the writer instead of
+//     dropping the last batch.
+func (l *TraceLoop) flushRing(enabled bool, final bool) bool {
+	if !enabled {
+		l.ring.drainAll(nil)
+		return true
+	}
+	if l.ring.count == 0 {
+		return true
+	}
+
+	if !final {
+		if len(l.flushReq) >= cap(l.flushReq) {
+			return false
+		}
+		batch := l.ring.drainAll(l.takeBatch(l.ring.count))
+		select {
+		case l.flushReq <- batch:
+			return true
+		default:
+			// Unreachable while loopIngress is the single sender; never lose
+			// events if that ever changes: put them back in order.
+			for _, ev := range batch {
+				l.ring.push(ev)
+			}
+			return false
+		}
+	}
+
+	batch := l.ring.drainAll(l.takeBatch(l.ring.count))
+	wait := l.finalFlushWait
+	if wait <= 0 {
+		wait = defaultFinalFlushWait
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case l.flushReq <- batch:
+	case <-t.C:
+		// The writer is stuck: shutdown must not hang.
+		l.counters.flushDropped.Add(uint64(len(batch)))
+	}
+	return true
 }
 
 // -----------------------------
 // Writer: single goroutine, append JSONL + rotation
 // -----------------------------
-
-// loopWriter
-//
-// Functional role (Brique DSL):
-// - >loop:
-//   - consume flush batches from ingress
-//   - serialize events to JSONL lines
-//   - append to current segment file
-//   - rotate segment when size threshold is reached
-//   - flush buffered writer per batch
-//
-// Expected Message Fields:
-// - none (function consumes TraceWire batches, not message envelopes).
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - none.
-//
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - may create trace root directories with `os.MkdirAll`.
-// - may create and append to `trace/*.jsonl` segment files under the context trace root.
-// - may flush and close the current buffered writer and file on rotation and shutdown.
-//
-// Inputs:
-// - receiver `l *TraceLoop`.
-// - reads batches from `l.flushReq` until channel close.
-//
-// Outputs:
-// - no return value; filesystem side effects in trace root.
-//
-// Contract:
-// - When tracing disabled or trace root unavailable, drains queue and exits.
-// - Opens segment files in append mode and rotates when SegmentMaxBytes threshold is exceeded.
-// - Serializes each TraceWire as one JSON line; malformed marshal/write items are skipped.
-// - Emits no response, trace, or outbound message.
-// - Flushes buffered writer at batch boundary (best effort).
-// - If opening a segment fails, remaining queued batches are drained and dropped.
-func (l *TraceLoop) loopWriter() {
-	if !l.cfg.Enabled {
-		// Drain until closed to allow clean shutdown of ingress.
-		for range l.flushReq {
-		}
-		return
-	}
-
-	root, ok := l.traceRoot()
-	if !ok || root == "" {
-		// No storage root => best-effort: drain and exit.
-		for range l.flushReq {
-		}
-		return
-	}
-
-	_ = os.MkdirAll(root, 0o755)
-
-	var (
-		f        *os.File
-		w        *bufio.Writer
-		segBytes = 0
-
-		openNewSeg = func() error {
-			if w != nil {
-				_ = w.Flush()
-			}
-			if f != nil {
-				_ = f.Close()
-			}
-
-			// Unique name per segment
-			name := fmt.Sprintf("trace-%s.jsonl",
-				time.Now().UTC().Format("20060102T150405.000Z0700"),
-			)
-			path := filepath.Join(root, name)
-
-			nf, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-			if err != nil {
-				return err
-			}
-			f = nf
-			w = bufio.NewWriterSize(f, 256*1024)
-			segBytes = 0
-			return nil
-		}
-	)
-
-	defer func() {
-		if w != nil {
-			_ = w.Flush()
-		}
-		if f != nil {
-			_ = f.Close()
-		}
-	}()
-
-	encLine := func(ev circulation.TraceWire) ([]byte, error) {
-		b, err := json.Marshal(ev)
-		if err != nil {
-			return nil, err
-		}
-		b = append(b, '\n') // JSONL
-		return b, nil
-	}
-
-	for batch := range l.flushReq {
-		if len(batch) == 0 {
-			continue
-		}
-
-		for i := range batch {
-			line, err := encLine(batch[i])
-			if err != nil {
-				continue
-			}
-
-			// Open on first write, rotate when size threshold is reached.
-			if f == nil || (l.cfg.SegmentMaxBytes > 0 && segBytes+len(line) > l.cfg.SegmentMaxBytes) {
-				if err := openNewSeg(); err != nil {
-					for range l.flushReq {
-					}
-					return
-				}
-			}
-
-			if _, err := w.Write(line); err != nil {
-				continue
-			}
-			segBytes += len(line)
-		}
-
-		_ = w.Flush() // best-effort durability
-	}
-}
 
 // -----------------------------
 // Ring buffer (drop-newest policy)

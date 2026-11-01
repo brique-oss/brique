@@ -46,6 +46,18 @@ type engineN6Harness struct {
 	rootDir   string
 }
 
+func n6ReflexiveDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newEngineN6Harness(t *testing.T) *engineN6Harness {
 	t.Helper()
 
@@ -65,7 +77,7 @@ func newEngineN6Harness(t *testing.T) *engineN6Harness {
 	}, "n6 workspace comm registry entry")
 
 	sinkCh := make(chan circulation.Message, 32)
-	reg.Register(shared.ContextAddr(n6SinkContextID), sinkCh, "")
+	reg.Register(shared.ContextAddr(n6SinkContextID), n6ReflexiveDeliveryBridge(sinkCh, 32), "")
 
 	return &engineN6Harness{
 		root:      root,
@@ -220,7 +232,7 @@ func sendToN6Context(t *testing.T, h *engineN6Harness, ctxID string, msg circula
 		t.Fatalf("context channel not found for %s", ctxID)
 	}
 	select {
-	case ch <- msg:
+	case ch <- junction.MustLocalDelivery(junction.MustLocalAuthority("test:reflexive"), msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending message to %s", ctxID)
 	}

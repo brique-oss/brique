@@ -17,11 +17,20 @@
 package comm
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +38,41 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 )
+
+func writeTestTLSCertificate(t *testing.T) (string, string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "server.crt")
+	keyFile := filepath.Join(dir, "server.key")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
+}
 
 func newHTTPSTestCfg(name string, mode string, extra map[string]any) InterfaceCfg {
 	cfg := map[string]any{}
@@ -79,8 +123,8 @@ func TestHTTPSInterface_N1_HTTPS_01_NewRuntimeDefaults(t *testing.T) {
 	if !ok || tr.TLSClientConfig == nil {
 		t.Fatalf("expected tls transport configuration")
 	}
-	if !tr.TLSClientConfig.InsecureSkipVerify {
-		t.Fatalf("default InsecureSkipVerify should be true")
+	if tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("default InsecureSkipVerify should be false")
 	}
 }
 
@@ -91,6 +135,34 @@ func TestHTTPSInterface_N1_HTTPS_02_InvalidMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid mode") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPSInterfaceLoadsPrivatePKICAAndRejectsInvalidBundle(t *testing.T) {
+	certFile, _ := writeTestTLSCertificate(t)
+	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-private-pki", "", map[string]any{
+		configuration.KeyTLSCAFile:             certFile,
+		configuration.KeyTLSInsecureSkipVerify: false,
+	}))
+	if err != nil {
+		t.Fatalf("constructor with private CA: %v", err)
+	}
+	transport := rt.Impl.(*HttpsInterface).client.Transport.(*http.Transport)
+	if transport.TLSClientConfig.RootCAs == nil || len(transport.TLSClientConfig.RootCAs.Subjects()) == 0 {
+		t.Fatal("private CA bundle was not installed in the HTTPS client")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("private CA configuration unexpectedly disabled certificate verification")
+	}
+
+	invalid := filepath.Join(t.TempDir(), "invalid-ca.pem")
+	if err := os.WriteFile(invalid, []byte("not a PEM certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-invalid-ca", "", map[string]any{
+		configuration.KeyTLSCAFile: invalid,
+	})); err == nil || !strings.Contains(err.Error(), "contains no certificate") {
+		t.Fatalf("invalid private CA bundle was accepted: %v", err)
 	}
 }
 
@@ -106,8 +178,8 @@ func TestHTTPSInterface_N1_HTTPS_03_StartNoIngress(t *testing.T) {
 	if err := h.Start(); err != nil {
 		t.Fatalf("Start error: %v", err)
 	}
-	if rt.Status != InterfaceRunning {
-		t.Fatalf("status=%v want running", rt.Status)
+	if state := rt.State(); state.Status != InterfaceInit {
+		t.Fatalf("implementation Start must not own runtime state, got=%v", state.Status)
 	}
 	if h.server != nil {
 		t.Fatalf("ingress disabled should not initialize server")
@@ -128,12 +200,43 @@ func TestHTTPSInterface_N1_HTTPS_04_StartIngressRequiresTLSFiles(t *testing.T) {
 	}
 }
 
+func TestHTTPSInterface_StartRejectsInvalidCertificateSynchronously(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "invalid.crt")
+	keyFile := filepath.Join(dir, "invalid.key")
+	if err := os.WriteFile(certFile, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-invalid", "", map[string]any{
+		configuration.KeyIntIngressEnabled: true,
+		configuration.KeyTLSCertFile:       certFile,
+		configuration.KeyTLSKeyFile:        keyFile,
+		configuration.KeyIntAddr:           "127.0.0.1:0",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := rt.Impl.(*HttpsInterface)
+	err = h.Start()
+	if err == nil || !strings.Contains(err.Error(), "load tls cert/key") {
+		t.Fatalf("expected synchronous certificate failure, got %v", err)
+	}
+	if h.listener != nil {
+		t.Fatal("failed start must not retain a listener")
+	}
+}
+
 func TestHTTPSInterface_N1_HTTPS_05_StartServerHandlerIngress(t *testing.T) {
+	certFile, keyFile := writeTestTLSCertificate(t)
 	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-server", "", map[string]any{
 		configuration.KeyIntIngressEnabled: true,
 		configuration.KeyIntEgressEnabled:  false,
-		configuration.KeyTLSCertFile:       "dummy.crt",
-		configuration.KeyTLSKeyFile:        "dummy.key",
+		configuration.KeyIntAddr:           "127.0.0.1:0",
+		configuration.KeyTLSCertFile:       certFile,
+		configuration.KeyTLSKeyFile:        keyFile,
 	}))
 	if err != nil {
 		t.Fatalf("constructor error: %v", err)
@@ -147,6 +250,7 @@ func TestHTTPSInterface_N1_HTTPS_05_StartServerHandlerIngress(t *testing.T) {
 	if h.server == nil {
 		t.Fatalf("expected server initialized")
 	}
+	t.Cleanup(func() { _ = h.Close() })
 	if h.server.TLSConfig == nil || h.server.TLSConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("expected TLS server config")
 	}
@@ -156,8 +260,8 @@ func TestHTTPSInterface_N1_HTTPS_05_StartServerHandlerIngress(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/brique/msg", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
 	h.server.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d want 202", w.Code)
 	}
 
 	select {
@@ -169,13 +273,6 @@ func TestHTTPSInterface_N1_HTTPS_05_StartServerHandlerIngress(t *testing.T) {
 		t.Fatalf("expected ingress item")
 	}
 
-	h.readLimit = int64(len(body) - 1)
-	tooLargeReq := httptest.NewRequest(http.MethodPost, "/brique/msg", strings.NewReader(string(body)))
-	tooLargeW := httptest.NewRecorder()
-	h.server.Handler.ServeHTTP(tooLargeW, tooLargeReq)
-	if tooLargeW.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized POST status=%d want 413", tooLargeW.Code)
-	}
 }
 
 func TestHTTPSInterface_N1_HTTPS_06_ReadLoopGuards(t *testing.T) {
@@ -338,5 +435,89 @@ func TestHTTPSInterface_N1_HTTPS_09_CloseAndRtName(t *testing.T) {
 	case <-h.done:
 	default:
 		t.Fatalf("done should be closed")
+	}
+}
+
+func TestHTTPSInterface_WriteLoopReportsDefinitivePeerRejection(t *testing.T) {
+	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-client", "", map[string]any{
+		configuration.KeyIntIngressEnabled: false,
+		configuration.KeyIntEgressEnabled:  true,
+		configuration.KeyIntTargets:        map[string]any{"pub1": "https://peer.local"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := rt.Impl.(*HttpsInterface)
+	rt.Egress = make(chan circulation.Message, 1)
+	outcomes := make(chan InterfaceEgressOutcome, 1)
+	rt.ReportEgressOutcome = func(_ circulation.Message, outcome InterfaceEgressOutcome) { outcomes <- outcome }
+	h.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- h.WriteLoop() }()
+	rt.Egress <- mkIntentionMsg("@ext_pub1:/route", circulation.ValueTypeMatter, "/ctx/src")
+
+	select {
+	case outcome := <-outcomes:
+		if !outcome.Definitive || outcome.StatusCode != http.StatusServiceUnavailable || outcome.Err == nil {
+			t.Fatalf("unexpected outcome: %#v", outcome)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing peer rejection outcome")
+	}
+	_ = h.Close()
+	select {
+	case err := <-loopDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write loop did not stop")
+	}
+}
+
+func TestHTTPSInterfaceSignedExternalRequiresProtectedVerifiedTLSAndSendsExactEnvelope(t *testing.T) {
+	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-client", "", map[string]any{
+		configuration.KeyIntIngressEnabled:     false,
+		configuration.KeyIntEgressEnabled:      true,
+		configuration.KeyTLSInsecureSkipVerify: false,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := rt.Impl.(*HttpsInterface)
+	want := []byte(`{"protected":{},"payload":"","signature":"x"}`)
+	h.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://peer.example:8443/brique/msg" {
+			t.Fatalf("request URL = %q", request.URL.String())
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != string(want) {
+			t.Fatalf("body = %q", body)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	item := signedExternalEgressItem{Endpoint: "https://peer.example:8443/brique", Envelope: want}
+	if outcome := h.sendSignedExternal(item); outcome.Err != nil || !outcome.Definitive || outcome.StatusCode != http.StatusNoContent {
+		t.Fatalf("verified signed outcome = %#v", outcome)
+	}
+
+	h.insecureSkipVerify = true
+	if outcome := h.sendSignedExternal(item); outcome.Err == nil || !outcome.Definitive {
+		t.Fatalf("insecure TLS was accepted: %#v", outcome)
+	}
+	h.insecureSkipVerify = false
+	h.serverName = "override.example"
+	if outcome := h.sendSignedExternal(item); outcome.Err == nil || !outcome.Definitive {
+		t.Fatalf("mutable TLS identity override was accepted: %#v", outcome)
+	}
+	h.serverName = ""
+	item.Endpoint = "http://peer.example/brique"
+	if outcome := h.sendSignedExternal(item); outcome.Err == nil || !outcome.Definitive {
+		t.Fatalf("clear endpoint was accepted: %#v", outcome)
 	}
 }

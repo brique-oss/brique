@@ -56,35 +56,45 @@
             {
               "invoke": {
                 "@capacity": "/root/alpha_child/sandbox.echo",
-                "with": { "message": "$input.message" },
+                "with": {
+                  "message": "$input.message"
+                },
                 "as": "hop1"
               }
             },
             {
               "invoke": {
                 "@capacity": "/root/alpha_child/sandbox.echo",
-                "with": { "message": "$hop1.payload.echo" },
+                "with": {
+                  "message": "$hop1.payload.echo"
+                },
                 "as": "hop2"
               }
             },
             {
               "invoke": {
                 "@capacity": "/root/alpha_child/sandbox.echo",
-                "with": { "message": "$hop2.payload.echo" },
+                "with": {
+                  "message": "$hop2.payload.echo"
+                },
                 "as": "hop3"
               }
             },
             {
               "invoke": {
                 "@capacity": "/root/alpha_child/sandbox.echo",
-                "with": { "message": "$hop3.payload.echo" },
+                "with": {
+                  "message": "$hop3.payload.echo"
+                },
                 "as": "hop4"
               }
             },
             {
               "invoke": {
                 "@capacity": "/root/alpha_child/sandbox.echo",
-                "with": { "message": "$hop4.payload.echo" },
+                "with": {
+                  "message": "$hop4.payload.echo"
+                },
                 "as": "hop5"
               }
             }
@@ -92,5 +102,6 @@
         }
       }
     }
-  }
+  },
+  "subjective": {}
 }

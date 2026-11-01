@@ -25,8 +25,8 @@ import (
 	"brique_engine/shared"
 )
 
-func newScatteredLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan circulation.Message) {
-	traceCh := make(chan circulation.Message, 128)
+func newScatteredLoop(ctxID string, reg *mockCommReg) (*CommLoop, chan junction.Delivery) {
+	traceCh := make(chan junction.Delivery, 128)
 	l := &CommLoop{
 		frame: &junction.ContextRegistry{
 			CtxId:        ctxID,
@@ -50,7 +50,7 @@ func mkScatterReq(toCtx, typ, cap, from string, scattered any) circulation.Messa
 	return m
 }
 
-func recvResponse(t *testing.T, ch <-chan circulation.Message, label string) circulation.Response {
+func recvResponse[T testMessageValue](t *testing.T, ch <-chan T, label string) circulation.Response {
 	t.Helper()
 	m := recvMsg(t, ch, label)
 	if m.Kind != circulation.ValueKindResponse {
@@ -115,7 +115,7 @@ func TestCommScattered_N1_CMSC_04_HandleNonIntentionRejects(t *testing.T) {
 
 func TestCommScattered_N1_CMSC_05_HandleMissingTypeCapAckError(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	l, traceCh := newScatteredLoop(shared.RootContextID, reg)
 	msg := mkScatterReq(shared.RootContextID, "", "", "/ctx/rq", []any{})
@@ -132,7 +132,7 @@ func TestCommScattered_N1_CMSC_05_HandleMissingTypeCapAckError(t *testing.T) {
 
 func TestCommScattered_N1_CMSC_06_HandleNotAllowedAckRefused(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	l, traceCh := newScatteredLoop(shared.RootContextID, reg)
 	l.cfg.AllowedScatter = map[string]map[string]bool{"matter": {"allowed": true}}
@@ -150,7 +150,7 @@ func TestCommScattered_N1_CMSC_06_HandleNotAllowedAckRefused(t *testing.T) {
 
 func TestCommScattered_N1_CMSC_07_HandleInvalidScatteredTypeAckError(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	l, traceCh := newScatteredLoop(shared.RootContextID, reg)
 	l.cfg.AllowedScatter = map[string]map[string]bool{"matter": {"read": true}}
@@ -168,7 +168,7 @@ func TestCommScattered_N1_CMSC_07_HandleInvalidScatteredTypeAckError(t *testing.
 
 func TestCommScattered_N1_CMSC_08_HandleTooManyItemsAckError(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	l, traceCh := newScatteredLoop(shared.RootContextID, reg)
 	l.cfg.AllowedScatter = map[string]map[string]bool{"matter": {"read": true}}
@@ -188,8 +188,8 @@ func TestCommScattered_N1_CMSC_08_HandleTooManyItemsAckError(t *testing.T) {
 
 func TestCommScattered_N1_CMSC_09_HandleValidFanoutAndAckOk(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
-	target := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
+	target := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	reg.chByID["/ctx/target"] = target
 	l, _ := newScatteredLoop(shared.RootContextID, reg)
@@ -227,8 +227,8 @@ func TestCommScattered_N1_CMSC_09_HandleValidFanoutAndAckOk(t *testing.T) {
 
 func TestCommScattered_N1_CMSC_10_HandleScatterOfScatterSkipped(t *testing.T) {
 	reg := newMockCommReg()
-	requester := make(chan circulation.Message, 1)
-	target := make(chan circulation.Message, 1)
+	requester := make(chan junction.Delivery, 1)
+	target := make(chan junction.Delivery, 1)
 	reg.chByID["/ctx/rq"] = requester
 	reg.chByID["/ctx/target"] = target
 	l, traceCh := newScatteredLoop(shared.RootContextID, reg)
@@ -248,5 +248,37 @@ func TestCommScattered_N1_CMSC_10_HandleScatterOfScatterSkipped(t *testing.T) {
 	}
 	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidMsgType) {
 		t.Fatalf("expected reject trace for scatter-of-scatter forbidden")
+	}
+}
+
+func TestCommScattered_AckListsOnlyAcceptedDeliveries(t *testing.T) {
+	reg := newMockCommReg()
+	requester := make(chan junction.Delivery, 4)
+	target := make(chan junction.Delivery, 1)
+	reg.chByID["/ctx/rq"] = requester
+	reg.chByID["/ctx/target"] = target
+	l, _ := newScatteredLoop(shared.RootContextID, reg)
+	l.cfg.AllowedScatter = map[string]map[string]bool{"matter": {"read": true}}
+	list := []any{
+		map[string]any{circulation.KeyTo: map[string]any{circulation.KeyContext: "/ctx/missing"}},
+		map[string]any{circulation.KeyTo: map[string]any{circulation.KeyContext: "/ctx/target"}},
+	}
+	msg := mkScatterReq(shared.RootContextID, circulation.ValueTypeMatter, "read", "/ctx/rq", list)
+
+	l.handleScatteredIngress(msg, EndpointInnerCtx, "")
+
+	failed := recvResponse(t, requester, "failed scatter item response")
+	if failed.Status != circulation.ValueStatusError {
+		t.Fatalf("missing target response status=%q", failed.Status)
+	}
+	accepted := recvMsg(t, target, "accepted scatter item")
+	ack := recvResponse(t, requester, "scatter aggregate ack")
+	stream, _ := ack.Payload["stream"].(map[string]any)
+	spawned, _ := stream["spawned_intention_ids"].([]string)
+	if len(spawned) != 1 || spawned[0] != accepted.Intention.IntentionID {
+		t.Fatalf("spawned ids=%v, accepted=%q", spawned, accepted.Intention.IntentionID)
+	}
+	if total, _ := stream["total"].(int); total != 2 {
+		t.Fatalf("scatter total=%v want 2", stream["total"])
 	}
 }

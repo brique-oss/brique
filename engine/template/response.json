@@ -21,11 +21,9 @@
   },
 
   "identity": {
-    "_comment": "Optional. Present at trust boundaries. Typically empty inside an engine instance.",
+    "_comment": "Internal runtime identity only. External authentication is carried by the signed transport envelope and must never be embedded here.",
     "id": "",
-    "kind": "",
-    "pubkey": "",
-    "signature": ""
+    "kind": ""
   },
 
   "status": "ok",

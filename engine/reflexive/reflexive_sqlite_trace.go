@@ -76,6 +76,9 @@ const (
 	maxTraceInspectOffset = 100000 // arbitrary safe
 	maxTraceFilesScanned  = 4096
 	maxTraceLineBytes     = 8 * 1024 * 1024 // scanner buffer cap
+	maxTraceBytesScanned  = 256 * 1024 * 1024
+	maxTraceLinesScanned  = 1_000_000
+	maxTraceBuildDuration = 5 * time.Second
 )
 
 // capTraceInspect
@@ -201,6 +204,21 @@ func (l *ReflexiveLoop) capTraceInspect(msg circulation.Message) {
 		return
 	}
 
+	// Message content is a separate right (trace/events/payloads, model §9.2): an
+	// external caller without it neither receives the content fields nor can ask
+	// for them, whatever the request says.
+	withholdContent := false
+	if scope := l.externalReadScope(in); scope != nil && !scope.CanTracePayloads(l.frame.CtxId) {
+		if includePayloads {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized,
+				map[string]any{circulation.KeyReason: "payloads_not_authorized"},
+				"message content is not authorized",
+			))
+			return
+		}
+		withholdContent = true
+	}
+
 	// Build temp DB windowed
 	db, cleanup, diags, err := buildTraceTempDB(traceFolder, hasWindow, fromNs, toNs, includePayloads)
 	if err != nil {
@@ -260,6 +278,9 @@ func (l *ReflexiveLoop) capTraceInspect(msg circulation.Message) {
 
 	default:
 		events, err := traceQueryEvents(db, hasWindow, fromNs, toNs, filters, orderBy, limit, offset, includePayloads)
+		if withholdContent {
+			stripTraceContent(events)
+		}
 		if err != nil {
 			code := circulation.ValueCodeInternal
 			if isSQLiteBusy(err) {
@@ -365,6 +386,8 @@ func parseTraceLine(line []byte, includePayloads bool) (tw circulation.TraceWire
 	_ = json.Unmarshal(m[circulation.KeyMsgKind], &tw.MsgKind)
 	_ = json.Unmarshal(m[circulation.KeyParentIntentionId], &tw.ParentIntentionId)
 	_ = json.Unmarshal(m[circulation.KeyRootIntentionId], &tw.RootIntentionId)
+	_ = json.Unmarshal(m[circulation.KeyPrincipal], &tw.Principal)
+	_ = json.Unmarshal(m[circulation.KeyActor], &tw.Actor)
 	_ = json.Unmarshal(m[circulation.KeyReasonCode], &tw.ReasonCode)
 	_ = json.Unmarshal(m[circulation.KeyUserText], &tw.UserText)
 	_ = json.Unmarshal(m[circulation.KeyMessageTruncated], &tw.MessageTruncated)
@@ -521,9 +544,11 @@ func buildTraceTempDB(traceFolder string, hasWindow bool, fromNs, toNs int64, in
 		endIdx = len(segs)
 	}
 
-	// Clamp files scanned
-	if endIdx-startIdx > maxTraceFilesScanned {
-		endIdx = startIdx + maxTraceFilesScanned
+	// Clamp files scanned (see clampSegmentRange).
+	var truncated bool
+	startIdx, endIdx, truncated = clampSegmentRange(startIdx, endIdx, hasWindow, maxTraceFilesScanned)
+	if truncated {
+		diags["segments_truncated"] = true
 	}
 	diags["segments_selected"] = endIdx - startIdx
 
@@ -559,6 +584,9 @@ func buildTraceTempDB(traceFolder string, hasWindow bool, fromNs, toNs int64, in
 	dbErrs := 0
 	scanErrs := 0
 	filesOpened := 0
+	bytesScanned := int64(0)
+	resourceTruncated := false
+	deadline := time.Now().Add(maxTraceBuildDuration)
 
 	ins, err := db.Prepare(`
 INSERT INTO trace_events(
@@ -567,8 +595,8 @@ INSERT INTO trace_events(
   intention_id, root_intention_id, parent_intention_id,
   msg_kind, reason_code, user_text,
   message_truncated, message_bytes, message_sha256, payload_keys_json,
-  intention_json, response_json
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  intention_json, response_json, principal, actor
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `)
 	if err != nil {
 		cleanup()
@@ -576,6 +604,7 @@ INSERT INTO trace_events(
 	}
 	defer ins.Close()
 
+segmentLoop:
 	for idx := startIdx; idx < endIdx; idx++ {
 		p := segs[idx].Path
 		filesOpened++
@@ -594,6 +623,11 @@ INSERT INTO trace_events(
 		for sc.Scan() {
 			linesScanned++
 			line := sc.Bytes()
+			bytesScanned += int64(len(line)) + 1
+			if linesScanned > maxTraceLinesScanned || bytesScanned > maxTraceBytesScanned || time.Now().After(deadline) {
+				resourceTruncated = true
+				break
+			}
 			if len(line) == 0 {
 				continue
 			}
@@ -656,6 +690,8 @@ INSERT INTO trace_events(
 
 				intentionJSON,
 				responseJSON,
+				strings.TrimSpace(tw.Principal),
+				strings.TrimSpace(tw.Actor),
 			); err != nil {
 				dbErrs++
 				continue
@@ -668,6 +704,9 @@ INSERT INTO trace_events(
 		}
 
 		_ = f.Close()
+		if resourceTruncated {
+			break segmentLoop
+		}
 
 		// If hasWindow, we can also early-stop whole loop if next segment starts after to
 		// (because segment start times are monotone across files).
@@ -680,10 +719,14 @@ INSERT INTO trace_events(
 
 	diags["files_opened"] = filesOpened
 	diags["lines_scanned"] = linesScanned
+	diags["bytes_scanned"] = bytesScanned
 	diags["rows_inserted"] = rowsInserted
 	diags["parse_errors"] = parseErrs
 	diags["db_errors"] = dbErrs
 	diags["scan_errors"] = scanErrs
+	if resourceTruncated {
+		diags["resource_truncated"] = true
+	}
 
 	return db, cleanup, diags, nil
 }
@@ -1031,7 +1074,10 @@ func createTraceSchema(exec traceSQLExec) error {
 			payload_keys_json TEXT,
 
 			intention_json TEXT,
-			response_json  TEXT
+			response_json  TEXT,
+
+			principal TEXT,
+			actor     TEXT
 		);`,
 
 		`CREATE INDEX IF NOT EXISTS idx_trace_ts ON trace_events(ts_ns);`,
@@ -1133,6 +1179,8 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 		"message_bytes",
 		"message_sha256",
 		"payload_keys_json",
+		"principal",
+		"actor",
 	}
 	if includePayloads {
 		cols = append(cols, "intention_json", "response_json")
@@ -1189,6 +1237,8 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 			messageBytes     int64
 			messageSHA256    sql.NullString
 			payloadKeysJSON  sql.NullString
+			principal        sql.NullString
+			actor            sql.NullString
 
 			intJSON sql.NullString
 			respJS  sql.NullString
@@ -1201,6 +1251,7 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 				&intID, &rootID, &parentID,
 				&reason, &userTx,
 				&messageTruncated, &messageBytes, &messageSHA256, &payloadKeysJSON,
+				&principal, &actor,
 				&intJSON, &respJS,
 			); err != nil {
 				continue
@@ -1212,6 +1263,7 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 				&intID, &rootID, &parentID,
 				&reason, &userTx,
 				&messageTruncated, &messageBytes, &messageSHA256, &payloadKeysJSON,
+				&principal, &actor,
 			); err != nil {
 				continue
 			}
@@ -1238,6 +1290,12 @@ func traceQueryEvents(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 		}
 		if parentID.Valid && parentID.String != "" {
 			m[circulation.KeyParentIntentionId] = parentID.String
+		}
+		if principal.Valid && principal.String != "" {
+			m[circulation.KeyPrincipal] = principal.String
+		}
+		if actor.Valid && actor.String != "" {
+			m[circulation.KeyActor] = actor.String
 		}
 		if reason.Valid && reason.String != "" {
 			m[circulation.KeyReasonCode] = reason.String
@@ -1395,12 +1453,17 @@ func traceQueryFacets(db *sql.DB, hasWindow bool, fromNs, toNs int64, filters ma
 	if err != nil {
 		return nil, err
 	}
+	byPrincipal, err := run("principal")
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]any{
 		circulation.KeyTraceKind:  byTraceKind,
 		circulation.KeyFamily:     byFamily,
 		circulation.KeyReasonCode: byReason,
 		circulation.KeyMsgKind:    byMsgKind,
+		circulation.KeyPrincipal:  byPrincipal,
 	}, nil
 }
 
@@ -1474,6 +1537,10 @@ func appendTraceFilters(sb *strings.Builder, args *[]any, filters map[string]any
 	}
 	if s, ok := filters[circulation.KeyParentIntentionId].(string); ok && strings.TrimSpace(s) != "" {
 		sb.WriteString(" AND parent_intention_id = ?")
+		*args = append(*args, strings.TrimSpace(s))
+	}
+	if s, ok := filters[circulation.KeyPrincipal].(string); ok && strings.TrimSpace(s) != "" {
+		sb.WriteString(" AND principal = ?")
 		*args = append(*args, strings.TrimSpace(s))
 	}
 	if s, ok := filters[circulation.KeyFamily].(string); ok && strings.TrimSpace(s) != "" {
@@ -1615,4 +1682,33 @@ func isSQLiteBusy(err error) bool {
 	}
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "busy") || strings.Contains(s, "locked") || strings.Contains(s, "database is locked")
+}
+
+// clampSegmentRange bounds a scan to at most max segments. Without a window
+// it keeps the most recent ones (the oldest are the least useful); with a
+// window it keeps the earliest segments of that window.
+func clampSegmentRange(start, end int, hasWindow bool, max int) (int, int, bool) {
+	if end-start <= max {
+		return start, end, false
+	}
+	if hasWindow {
+		return start, start + max, true
+	}
+	return end - max, end, true
+}
+
+// traceContentKeys are the event fields that derive from message content. The
+// handler removes them for a caller without trace/events/payloads instead of
+// trusting that the request did not ask for them.
+var traceContentKeys = []string{
+	circulation.KeyUserText, circulation.KeyPayloadKeys, circulation.KeyMessageSHA256,
+	circulation.KeyMessageBytes, circulation.KeyMessageTruncated, circulation.KeyIntentionJSON, circulation.KeyResponseJSON,
+}
+
+func stripTraceContent(events []map[string]any) {
+	for _, event := range events {
+		for _, key := range traceContentKeys {
+			delete(event, key)
+		}
+	}
 }

@@ -134,7 +134,7 @@ func TestEngine_N6_MAT_21_MatterCloneAndDeriveThenReadExistsAndMeaning(t *testin
 		circulation.KeyTargetMatterID: deriveID,
 		circulation.KeyMatter: map[string]any{
 			circulation.KeyFunctional: map[string]any{
-				"title":        "Derived Matter",
+				"title":         "Derived Matter",
 				"derive_marker": "derived-marker",
 			},
 			circulation.KeyBrique: map[string]any{

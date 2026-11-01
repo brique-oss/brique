@@ -36,7 +36,7 @@ func newMatterLifecycleHarness(t *testing.T) (*MatterLoop, chan circulation.Mess
 		CtxId:      "/ctx/a",
 		ContextDir: ctxDir,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: matterDeliveryBridge(commCh, 32),
 		},
 	}
 	l := NewMatterLoop(frame)

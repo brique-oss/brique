@@ -31,12 +31,11 @@ package comm
 // Root egress is responsible for external policies; the HTTP driver only transports bytes.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -70,10 +69,13 @@ type HttpInterface struct {
 	targets map[string]string // key: "ext_<pubkey>" -> baseURL (e.g. "http://host:8080/brique")
 
 	// Server side
-	server *http.Server
+	server   *http.Server
+	listener net.Listener
 
-	done chan struct{}
-	once sync.Once
+	done   chan struct{}
+	once   sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewHTTPInterfaceRuntime
@@ -121,7 +123,6 @@ func NewHTTPInterfaceRuntime(ic InterfaceCfg) (*InterfaceRuntime, error) {
 		Type:   ic.Type,
 		Driver: ic.Driver,
 		Cfg:    ic,
-		Status: InterfaceInit,
 	}
 
 	impl, err := newHTTPInterfaceImpl(rt, ic)
@@ -273,6 +274,7 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 		}
 	}
 
+	transportCtx, cancel := context.WithCancel(context.Background())
 	h := &HttpInterface{
 		rt:             rt,
 		mode:           mode,
@@ -287,6 +289,8 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 		idleTimeout:    idleTimeout,
 		targets:        targets,
 		done:           make(chan struct{}),
+		ctx:            transportCtx,
+		cancel:         cancel,
 	}
 
 	h.client = &http.Client{
@@ -296,10 +300,17 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 	return h, nil
 }
 
+func (h *HttpInterface) Directions() InterfaceDirections {
+	if h == nil {
+		return InterfaceDirections{}
+	}
+	return InterfaceDirections{ReadLoop: h.ingressEnabled, WriteLoop: h.egressEnabled}
+}
+
 // Start
 //
 // Functional role (Brique DSL):
-// - initialize HTTP interface runtime, install ingress handler, and mark runtime running.
+// - initialize HTTP ingress and synchronously acquire its listener.
 //
 //
 // Expected Message Fields:
@@ -313,7 +324,7 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 //
 //
 // Outputs:
-// - no direct return value; observable outputs are server initialization and runtime status mutation.
+// - returns a setup error; on success the listener is acquired but serving has not started yet.
 //
 // Produced Response Fields:
 // - none.
@@ -335,69 +346,27 @@ func newHTTPInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpInterface
 // State/Storage Effects:
 // - when `ingressEnabled == true`, allocates and stores an `http.Server` in `h.server`.
 // - installs the POST `<path>/msg` handler on a new serve mux.
-// - sets `h.rt.Status = InterfaceRunning`.
+// - opens and stores the TCP listener before returning success.
 //
 //
 // Contract:
-// - Setup phase only; network accept loop starts later in `ReadLoop`.
-// - Nil receiver or nil runtime is treated as a successful no-op.
-// - When ingress is disabled, no server is allocated and the runtime is marked running immediately.
+// - Setup phase only; serving starts later in `ReadLoop` on the acquired listener.
+// - Nil receiver or nil runtime is an error.
+// - Runtime lifecycle state is owned by CommLoop, not by this driver.
 
 func (h *HttpInterface) Start() error {
 	if h == nil || h.rt == nil {
-		return nil
+		return errors.New("http iface: runtime is nil")
 	}
 
 	if !h.ingressEnabled {
-		h.rt.Status = InterfaceRunning
 		return nil
 	}
 
 	mux := http.NewServeMux()
 
-	// POST <path>/msg
-	// Body: JSON circulation.Message
-	// Response: 200 OK (no body) or 400
 	msgPath := h.path + "/msg"
-	mux.HandleFunc(msgPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		defer r.Body.Close()
-
-		r.Body = http.MaxBytesReader(w, r.Body, h.readLimit)
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				http.Error(w, "control message exceeds read_limit; store large payloads in Matter substance", http.StatusRequestEntityTooLarge)
-				return
-			}
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		var msg circulation.Message
-		if err := json.Unmarshal(body, &msg); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Push into CommLoop global ingress.
-		if h.rt.Ingress != nil {
-			select {
-			case h.rt.Ingress <- IngressItem{Endpoint: h.rt.Type, IfaceName: h.rt.Name, Msg: msg}:
-				// ok
-			case <-h.done:
-				// shutting down
-			default:
-				// backpressure: drop
-			}
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc(msgPath, controlIngressHandler(h.rt, h.done, h.readLimit))
 
 	h.server = &http.Server{
 		Addr:         h.addr,
@@ -406,8 +375,12 @@ func (h *HttpInterface) Start() error {
 		WriteTimeout: h.writeTimeout,
 		IdleTimeout:  h.idleTimeout,
 	}
-
-	h.rt.Status = InterfaceRunning
+	listener, err := net.Listen("tcp", h.addr)
+	if err != nil {
+		h.server = nil
+		return fmt.Errorf("http iface %q: listen on %q: %w", h.rtName(), h.addr, err)
+	}
+	h.listener = listener
 	return nil
 }
 
@@ -443,7 +416,7 @@ func (h *HttpInterface) Start() error {
 // - none.
 //
 // State/Storage Effects:
-// - when ingress is enabled and `h.server` is initialized, starts the HTTP accept loop by calling `ListenAndServe`.
+// - serves on the listener already acquired by `Start`.
 //
 //
 // Contract:
@@ -458,12 +431,12 @@ func (h *HttpInterface) ReadLoop() error {
 	if !h.ingressEnabled {
 		return nil
 	}
-	if h.server == nil {
+	if h.server == nil || h.listener == nil {
 		return fmt.Errorf("http iface %q: server not initialized", h.rtName())
 	}
 
 	// Serve blocks until Shutdown/Close.
-	err := h.server.ListenAndServe()
+	err := h.server.Serve(h.listener)
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -510,7 +483,8 @@ func (h *HttpInterface) ReadLoop() error {
 //
 //
 // Contract:
-// - Best-effort transport loop: resolution, serialization, request, and network errors drop the current message and continue.
+// - Explicit peer rejection is reported as definitive; network failure is reported as ambiguous.
+// - The loop never retries automatically and continues with the next message.
 // - Returns `nil` when egress is disabled or runtime egress is not wired.
 
 func (h *HttpInterface) WriteLoop() error {
@@ -532,10 +506,9 @@ func (h *HttpInterface) WriteLoop() error {
 			if !ok {
 				return nil
 			}
-			// Resolve destination URL and send.
 			url, err := h.resolveEgressURL(msg)
 			if err != nil {
-				//drop on resolution error
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
 			if url == "" {
@@ -546,29 +519,29 @@ func (h *HttpInterface) WriteLoop() error {
 			if h.rt.PrepareEgress != nil {
 				prepared, err := h.rt.PrepareEgress(msg)
 				if err != nil {
+					reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 					continue
 				}
 				wireMsg = prepared
 			}
 			b, err := json.Marshal(wireMsg)
 			if err != nil {
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
-			if shared.ValidateControlMessageBytes(int64(len(b)), h.readLimit) != nil {
+			if err := shared.ValidateControlMessageBytes(int64(len(b)), h.readLimit); err != nil {
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
-
-			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
-			if err != nil {
-				continue
+			outcome := sendHTTPControl(h.ctx, h.client, url, b)
+			if outcome.Err != nil {
+				select {
+				case <-h.done:
+					return nil
+				default:
+				}
+				reportInterfaceEgressOutcome(h.rt, msg, outcome)
 			}
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, err := h.client.Do(req)
-			if err != nil {
-				continue
-			}
-			_ = resp.Body.Close()
 		}
 	}
 }
@@ -618,12 +591,18 @@ func (h *HttpInterface) Close() error {
 		return nil
 	}
 	h.once.Do(func() { close(h.done) })
+	if h.cancel != nil {
+		h.cancel()
+	}
 
 	// Shutdown server if any.
 	if h.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = h.server.Shutdown(ctx)
+	}
+	if h.listener != nil {
+		_ = h.listener.Close()
 	}
 	return nil
 }

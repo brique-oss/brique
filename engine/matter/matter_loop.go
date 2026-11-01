@@ -55,6 +55,8 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/security/access"
+	"brique_engine/security/refusal"
 	"brique_engine/shared"
 )
 
@@ -373,11 +375,12 @@ func buildCapTable() map[string]capHandler {
 
 type MatterLoop struct {
 	frame          *junction.ContextRegistry
-	in             chan circulation.Message
+	deliveryIn     chan junction.Delivery
 	inlineMaxBytes int64
 
 	// static dispatch
-	caps map[string]capHandler
+	caps           map[string]capHandler
+	accessRegistry *access.Registry
 
 	// bounded handler admission (inbox never blocks)
 	handlerSlots chan struct{}
@@ -404,6 +407,13 @@ type MatterLoop struct {
 	// pending maps IntentionID -> response channel for awaiting jobs (cross-context reads, structure resolution, etc.)
 	pMu     sync.RWMutex
 	pending map[string]chan circulation.Message
+
+	// externalRequests binds an executing admitted root request to response
+	// construction. Entries exist only for the synchronous admitted handler lifetime.
+	externalRequestMu sync.RWMutex
+	// deliveryPathCheck replaces the peer-directory lookup in tests.
+	deliveryPathCheck func(principalID string) bool
+	externalRequests  map[string]junction.Delivery
 
 	// last rebuild summary (startup and refresh_catalog)
 	lastRebuildMu sync.RWMutex
@@ -494,10 +504,11 @@ func NewMatterLoop(frame *junction.ContextRegistry) *MatterLoop {
 func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any) *MatterLoop {
 	l := &MatterLoop{
 		frame:          frame,
-		in:             make(chan circulation.Message, 16),
+		deliveryIn:     make(chan junction.Delivery, 16),
 		inlineMaxBytes: defaultInlineMaxBytes,
 
-		caps: buildCapTable(),
+		caps:           buildCapTable(),
+		accessRegistry: mustBuildMatterAccessRegistry(),
 
 		handlerSlots: make(chan struct{}, defaultMaxHandlers),
 
@@ -508,6 +519,8 @@ func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any
 		subs: make(map[string]map[string]MatterSubscription),
 
 		pending: make(map[string]chan circulation.Message),
+
+		externalRequests: make(map[string]junction.Delivery),
 
 		lastRebuild: CatalogRebuildSummary{},
 
@@ -574,14 +587,14 @@ func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any
 //
 // Outputs:
 //
-// - returns chan circulation.Message.
+// - returns the protected family boundary (`chan junction.Delivery`).
 //
 //
 // Contract:
-// - Returns the same channel for the lifetime of the loop.
+// - Returns the same protected boundary channel for the lifetime of the loop.
 //
 
-func (l *MatterLoop) InChan() chan circulation.Message { return l.in }
+func (l *MatterLoop) InChan() chan junction.Delivery { return l.deliveryIn }
 
 // State
 //
@@ -981,40 +994,95 @@ func (l *MatterLoop) loopInbox() {
 		select {
 		case <-l.done:
 			return
-		case msg, ok := <-l.in:
+		case delivery, ok := <-l.deliveryIn:
 			if !ok {
 				return
 			}
-			switch msg.Kind {
-			case circulation.ValueKindIntention:
-				// Spawn job: inbox never blocks, but admission is bounded.
-				select {
-				case l.handlerSlots <- struct{}{}:
-					l.wg.Add(1)
-					go func(m circulation.Message) {
-						defer l.wg.Done()
-						defer func() { <-l.handlerSlots }()
-						l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, m.Intention.Correlation.ParentIntentionID, m.Intention.Correlation.RootIntentionID, circulation.ValueTraceFamilyEnter)
-						l.runJob(m)
-						l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, m.Intention.Correlation.ParentIntentionID, m.Intention.Correlation.RootIntentionID, circulation.ValueTraceFamilyExit)
-					}(msg)
-				default:
-					// Saturated: emit a saturation trace then fail-close with a busy error.
-					in := msg.Intention
-					l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, in.Correlation.ParentIntentionID, in.Correlation.RootIntentionID, circulation.ValueTraceFamilySaturated)
-					l.emitResponseError(errorResp(
-						in,
-						circulation.ValueCodeUnavailable,
-						map[string]any{circulation.KeyReason: circulation.ValueReasonBusy},
-						"matter loop busy",
-					))
+			l.handleInboxDelivery(delivery)
+		}
+	}
+}
+
+func matterCorrelationIDs(in circulation.Intention) (parentID, rootID string) {
+	if in.Correlation == nil {
+		return "", ""
+	}
+	return in.Correlation.ParentIntentionID, in.Correlation.RootIntentionID
+}
+
+func (l *MatterLoop) handleInboxDelivery(delivery junction.Delivery) {
+	msg, valid := delivery.Message()
+	if !valid {
+		return
+	}
+	if _, external := delivery.ExternalAdmission(); external {
+		intentionID, parentID, rootID := "", "", ""
+		if msg.Kind == circulation.ValueKindIntention {
+			intentionID = msg.Intention.IntentionID
+			parentID, rootID = matterCorrelationIDs(msg.Intention)
+		} else if msg.Kind == circulation.ValueKindResponse {
+			intentionID = msg.Response.IntentionID
+		}
+		if err := l.authorizeExternalMatter(delivery); err != nil {
+			l.sendToTrace(msg.Kind, intentionID, parentID, rootID, circulation.ValueTraceFamilyError)
+			l.refuseExternalMatter(delivery, err)
+			return
+		}
+		cleanup, err := l.bindExternalRequest(delivery)
+		if err != nil {
+			l.sendToTrace(msg.Kind, intentionID, parentID, rootID, circulation.ValueTraceFamilyError)
+			l.emitExternalMatterError(delivery, circulation.ValueCodeUnavailable, err.Error())
+			return
+		}
+		l.handleInboxMessageWithCompletion(msg, cleanup)
+		return
+	}
+	l.handleInboxMessage(msg)
+}
+
+func (l *MatterLoop) handleInboxMessage(msg circulation.Message) {
+	l.handleInboxMessageWithCompletion(msg, nil)
+}
+
+func (l *MatterLoop) handleInboxMessageWithCompletion(msg circulation.Message, completion func()) {
+	switch msg.Kind {
+	case circulation.ValueKindIntention:
+		// Spawn job: inbox never blocks, but admission is bounded.
+		select {
+		case l.handlerSlots <- struct{}{}:
+			l.wg.Add(1)
+			go func(m circulation.Message) {
+				defer l.wg.Done()
+				defer func() { <-l.handlerSlots }()
+				if completion != nil {
+					defer completion()
 				}
-			case circulation.ValueKindResponse:
-				l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, "", "", circulation.ValueTracePendingResponse)
-				l.dispatchResponse(msg)
-			default:
-				//ignore
+				parentID, rootID := matterCorrelationIDs(m.Intention)
+				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyEnter)
+				l.runJob(m)
+				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyExit)
+			}(msg)
+		default:
+			// Saturated: emit a saturation trace then fail-close with a busy error.
+			in := msg.Intention
+			parentID, rootID := matterCorrelationIDs(in)
+			l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceFamilySaturated)
+			l.emitResponseError(errorResp(
+				in,
+				circulation.ValueCodeUnavailable,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonBusy},
+				"matter loop busy",
+			))
+			if completion != nil {
+				completion()
 			}
+		}
+	case circulation.ValueKindResponse:
+		l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, "", "", circulation.ValueTracePendingResponse)
+		l.dispatchResponse(msg)
+	default:
+		if completion != nil {
+			completion()
 		}
 	}
 }
@@ -1670,6 +1738,13 @@ func (l *MatterLoop) dispatchWaitViaComm(msg circulation.Message, timeout time.D
 	in := msg.Intention
 	if in.IntentionID == "" {
 		return circulation.Message{}, false, circulation.ValueReasonMissingIntentionID
+	}
+	if _, externallyBound := l.externalRequest(in.IntentionID); externallyBound {
+		// Existing Matter delegation rewrites the root request in place and sends
+		// it through wrapper transport. An external chain requires a distinct,
+		// capability-authorized child Delivery and an authority-aware wrapper
+		// boundary; silently minting local authority here would be escalation.
+		return circulation.Message{}, false, circulation.ValueReasonInvalidCrypto
 	}
 
 	//if caller doesn't provide a timeout, use a hard default.
@@ -2480,18 +2555,54 @@ func (l *MatterLoop) structureJSONPath(structureID string) (string, bool) {
 //
 
 func (l *MatterLoop) emitToComm(msg circulation.Message) {
-	if l.frame == nil || l.frame.FamIn == nil {
+	if msg.Kind == circulation.ValueKindResponse {
+		if _, bound := l.externalRequest(msg.Response.IntentionID); bound {
+			// An external caller is told "not found", never which kind of absence.
+			refusal.Canonicalize(&msg.Response)
+		}
+	}
+	if msg.Kind == circulation.ValueKindIntention {
+		if _, bound := l.externalRequest(msg.Intention.IntentionID); bound {
+			l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, "", "", circulation.ValueTraceFamilyError)
+			return
+		}
+	}
+	if msg.Kind == circulation.ValueKindResponse {
+		if request, bound := l.externalRequest(msg.Response.IntentionID); bound {
+			if !externalMatterResponseMatches(request, msg) {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, "response does not match its authenticated external request")
+				return
+			}
+			delivery, reservation, err := junction.BindExternalResponse(request, msg)
+			if err != nil {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, err.Error())
+				return
+			}
+			if !l.emitDeliveryToComm(delivery) && reservation.Valid() {
+				_ = reservation.Abort()
+			}
+			return
+		}
+	}
+	if l.frame == nil {
 		return
+	}
+	l.emitDeliveryToComm(l.frame.MustDelivery(msg))
+}
+
+func (l *MatterLoop) emitDeliveryToComm(delivery junction.Delivery) bool {
+	if l.frame == nil || l.frame.FamIn == nil {
+		return false
 	}
 	commCh := l.frame.FamIn[shared.FamilyComm]
 	if commCh == nil {
-		return
+		return false
 	}
 	select {
-	case commCh <- msg:
-		return
+	case commCh <- delivery:
+		return true
 	case <-l.done:
-		return
+		return false
 	}
 }
 
@@ -2539,7 +2650,6 @@ func (l *MatterLoop) emitToComm(msg circulation.Message) {
 
 func (l *MatterLoop) traceResponseError(intentionId string, reason string, userText string) {
 	tw := circulation.TraceWire{
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:   circulation.ValueTraceFamilyError,
 		Family:      circulation.ValueOriginMatter,
 		IntentionId: intentionId,
@@ -2604,7 +2714,6 @@ func (l *MatterLoop) traceResponseError(intentionId string, reason string, userT
 
 func (l *MatterLoop) sendToTrace(msgKind string, intentionId string, parentIntentionId string, rootIntentionId string, traceKind string) {
 	tw := circulation.TraceWire{
-		Timestamp:         time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:         traceKind,
 		Family:            circulation.ValueOriginMatter,
 		IntentionId:       intentionId,
@@ -2778,6 +2887,7 @@ func (l *MatterLoop) emitResponseError(msg circulation.Message) {
 
 func (l *MatterLoop) emitResponseOK(in circulation.Intention, payload map[string]any) {
 	l.emitToComm(okResp(in, payload))
+	l.notifyProjection(in, payload)
 }
 
 // okResp

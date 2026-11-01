@@ -18,6 +18,7 @@ package comm
 
 import (
 	"brique_engine/circulation"
+	"brique_engine/junction"
 	"brique_engine/shared"
 	"fmt"
 	"strings"
@@ -87,19 +88,40 @@ import (
 // - Entry point for outbound routing.
 // - Does not mutate payload semantics; only selects routing path.
 
-func (l *CommLoop) routeEgress(msg circulation.Message) {
+func (l *CommLoop) routeEgress(msg circulation.Message, source ...junction.Delivery) {
 	var allowed bool
-	msg, allowed = l.enforceControlMessageLimit(msg)
+	msg, allowed = l.enforceControlMessageLimit(msg, source...)
 	if !allowed {
 		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonPayloadTooLarge, "control message too large; use Matter substance")
 		return
 	}
-	l.sendToTrace(msg, circulation.ValueTraceCommEgress, "", "")
-	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
-		l.routeEgressRoot(msg)
+	delivery, err := l.deliveryForMessage(msg, source...)
+	if err != nil {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, err.Error())
 		return
 	}
-	l.routeEgressLocal(msg)
+	l.sendToTrace(msg, circulation.ValueTraceCommEgress, "", "")
+	if _, signedResponse := delivery.ExternalResponse(); signedResponse {
+		if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
+			l.routeSignedExternalResponse(delivery)
+		} else {
+			l.forwardToRoot(msg, delivery)
+		}
+		return
+	}
+	if wrapperName, connection, handle, delegated := delivery.ExternalWrapperReturn(); delegated && msg.Kind == circulation.ValueKindResponse {
+		l.routeExternalWrapperReturn(delivery, wrapperName, connection, handle)
+		return
+	}
+	if wrapperName, delegated := delivery.ExternalWrapperDispatch(); delegated {
+		l.routeExternalWrapperDispatch(delivery, wrapperName)
+		return
+	}
+	if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
+		l.routeEgressRoot(msg, delivery)
+		return
+	}
+	l.routeEgressLocal(msg, delivery)
 }
 
 // routeEgressLocal
@@ -182,7 +204,7 @@ func (l *CommLoop) routeEgress(msg circulation.Message) {
 // - Nil `frame` is a silent no-op.
 // - Missing ownership/registry data on `@ui_*` and `@wrapper_*` paths fails closed by drop or silent abort according to the concrete branch.
 
-func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
+func (l *CommLoop) routeEgressLocal(msg circulation.Message, source ...junction.Delivery) {
 	if l.frame == nil {
 		return
 	}
@@ -191,6 +213,11 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 	toCtx := string(toCtxID)
 	if toCtx == "" {
 		l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName, "empty to context address")
+		return
+	}
+	if strings.HasPrefix(toCtx, "@") && hasExternalAuthority(source...) {
+		l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto,
+			"externally authorized delivery requires a dedicated signed boundary adapter")
 		return
 	}
 
@@ -225,7 +252,7 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 		// 1) External destination: always handled by root.
 		// External addresses are of the form: @ext_<pubkey>:/...
 		if strings.HasPrefix(tag, "ext_") {
-			l.forwardToRoot(msg)
+			l.forwardToRoot(msg, source...)
 			return
 		}
 
@@ -247,7 +274,7 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 			}
 			// If we are not the boundary, forward physically to boundary (keep "@wrapper_*" as destination).
 			if shared.ContextAddr(l.frame.CtxId) != boundaryID {
-				l.forwardToContext(boundaryID, msg)
+				l.forwardToContext(boundaryID, msg, source...)
 				return
 			}
 			l.sendToIface(wrapperName, msg)
@@ -272,7 +299,7 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 				return
 			}
 			if shared.ContextAddr(l.frame.CtxId) != ownerID {
-				l.forwardToContext(ownerID, msg)
+				l.forwardToContext(ownerID, msg, source...)
 				return
 			}
 			// We own it: RELAY directly to iface (do not stamp).
@@ -293,7 +320,7 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 	}
 
 	// Intra-instance context routing (ctx_id)
-	l.forwardToContext(shared.ContextAddr(toCtx), msg)
+	l.forwardToContext(shared.ContextAddr(toCtx), msg, source...)
 }
 
 // routeEgressRoot
@@ -310,10 +337,8 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 //       - >else: forward to UI owner context
 //     - >if "@wrapper_*": drop (forbidden from root egress)
 //     - >if "@ext_*":
-//       - compute public from.context
-//       - stamp public from.context
-//       - update identity + sign
-//       - send via external interface ("outerCtx")
+//       - send intentions through the protected signed-envelope adapter
+//       - reject every raw external response or unprotected fallback
 //     - >else: drop (unknown @tag)
 //   - >else:
 //     - forward to internal context channel
@@ -322,7 +347,7 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 // Expected Message Fields:
 // - message fields consumed directly or indirectly:
 //   - `to.context` (via `msgToContext(&msg)`)
-//   - `from.context` (via `publicFromContext(&msg)` on external `@ext_*` branch)
+//   - `from.context` (captured as the local pending-response origin)
 //
 // Expected Params Keys/values:
 // - none (no `msg.Intention.Params[...]` key consumed directly in this function).
@@ -369,11 +394,11 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message) {
 //
 // Contract:
 // - Root-only outbound membrane.
-// - Sole branch that prepares external egress identity/signature in Comm egress routing.
+// - Sole application branch that hands external intentions to protected signed egress.
 // - Nil `frame` is a silent no-op.
 // - External egress without a resolvable public sender identity fails closed with a drop trace.
 
-func (l *CommLoop) routeEgressRoot(msg circulation.Message) {
+func (l *CommLoop) routeEgressRoot(msg circulation.Message, source ...junction.Delivery) {
 	if l.frame == nil {
 		return
 	}
@@ -382,6 +407,11 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message) {
 	toCtx := string(toCtxID)
 	if toCtx == "" {
 		l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName, "empty to context address")
+		return
+	}
+	if strings.HasPrefix(toCtx, "@") && hasExternalAuthority(source...) {
+		l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto,
+			"externally authorized delivery requires a dedicated signed boundary adapter")
 		return
 	}
 
@@ -408,7 +438,7 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message) {
 				return
 			}
 			if shared.ContextAddr(l.frame.CtxId) != ownerID {
-				l.forwardToContext(ownerID, msg)
+				l.forwardToContext(ownerID, msg, source...)
 				return
 			}
 
@@ -423,21 +453,14 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message) {
 			return
 		}
 
-		// 3) External egress: must be @ext_<pubkey>:/...
+		// 3) External egress is signed exclusively by the protected adapter.
 		if strings.HasPrefix(tag, "ext_") {
-			if msg.Kind == circulation.ValueKindResponse {
-				l.rewriteExternalResponseToPublicTarget(&msg)
-			}
-			// Determine and stamp public from.context.
-			pubFrom := l.publicFromContext(&msg)
-			if pubFrom == "" {
-				l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto, "public key empty")
+			if msg.Kind == circulation.ValueKindIntention && l.securityRuntime() != nil {
+				l.routeSignedExternalIntention(msg, tag)
 				return
 			}
-			l.stampFromPublicContext(&msg, pubFrom)
-
-			// Convention: external interface name is "outerCtx"
-			l.sendToIface("outerCtx", msg)
+			l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto,
+				"unprotected external egress is disabled")
 			return
 		}
 
@@ -450,5 +473,5 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message) {
 	// Non-@ destination: internal ctx routing (ctx_id)
 	// Root must forward directly, with wrapper-boundary check.
 	// -------------------------------------------------
-	l.forwardToContext(shared.ContextAddr(toCtx), msg)
+	l.forwardToContext(shared.ContextAddr(toCtx), msg, source...)
 }

@@ -19,9 +19,10 @@ package comm
 import (
 	"fmt"
 	"strings"
+	"time"
+
 	"brique_engine/circulation"
 	"brique_engine/shared"
-	"time"
 )
 
 // isScatteredIntention
@@ -187,7 +188,7 @@ func (l *CommLoop) scatterAllowed(familyType string, capName string) bool {
 //   - `to.context`
 //   - `to.type`
 //   - `from.context`
-//   - `identity.pubkey`
+//   - authenticated Delivery authority
 //   - `intention.params`
 //
 // Expected Params Keys/values:
@@ -410,8 +411,10 @@ func (l *CommLoop) handleScatteredIngress(msg circulation.Message, endpoint stri
 		}
 
 		// Forward to target context
-		l.forwardToContext(shared.ContextAddr(string(toAddr.Context)), sub)
-		spawned = append(spawned, sub.Intention.IntentionID)
+		result := l.forwardToContext(shared.ContextAddr(string(toAddr.Context)), sub)
+		if result.accepted() {
+			spawned = append(spawned, sub.Intention.IntentionID)
+		}
 	}
 
 	// Ack response (one response)

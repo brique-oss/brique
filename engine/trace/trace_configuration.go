@@ -39,6 +39,12 @@ type TraceCfg struct {
 
 	// Segment thresholds
 	SegmentMaxBytes int
+
+	// Retention (0 => unlimited). Applied by the writer when it opens a new
+	// segment: the oldest segments are removed until both limits hold. The
+	// segment being written is never removed.
+	MaxSegments   int
+	MaxTotalBytes int
 }
 
 // -----------------------------
@@ -150,6 +156,13 @@ func ParseTraceCfg(engineCfg map[string]any) TraceCfg {
 	}
 
 	// Safety clamps (still best-effort, no hardening).
+	if v, ok := shared.AnyToInt(engineCfg[configuration.KeyTraceMaxSegs]); ok && v > 0 {
+		cfg.MaxSegments = v
+	}
+	if v, ok := shared.AnyToInt(engineCfg[configuration.KeyTraceMaxTotal]); ok && v > 0 {
+		cfg.MaxTotalBytes = v
+	}
+
 	if cfg.FlushEveryN <= 0 {
 		cfg.FlushEveryN = 256
 	}

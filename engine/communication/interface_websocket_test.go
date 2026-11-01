@@ -17,6 +17,7 @@
 package comm
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -54,6 +55,9 @@ func TestWebSocket_N1_WS_01_NewRuntimeDefaults(t *testing.T) {
 	}
 	if !w.allowAnyOrigin {
 		t.Fatalf("allowAnyOrigin should default true")
+	}
+	if directions := w.Directions(); directions.ReadLoop || !directions.WriteLoop {
+		t.Fatalf("websocket logical route directions=%#v", directions)
 	}
 }
 
@@ -191,6 +195,44 @@ func TestWebSocket_N1_WS_08_CodecRoundTrip(t *testing.T) {
 	}
 	if _, ok := decodeRawWebSocketMessage([]byte("{")); ok {
 		t.Fatalf("invalid json should fail")
+	}
+}
+
+func TestWebSocketWrapperFrameCodecIsStrictAndKeepsMetadataOutsideMessage(t *testing.T) {
+	msg := circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
+		IntentionID: "wrapper-child", To: circulation.Address{Context: "/root/child", Type: circulation.ValueTypeMatter, Cap: "matter.read"},
+	}}
+	rawHandle := base64.RawURLEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
+	handle, err := junction.ParseWrapperDelegationHandle(rawHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, ok := encodeWrapperWebSocketFrame(junction.WrapperFrame{Message: msg, Delegation: handle})
+	if !ok {
+		t.Fatal("wrapper frame encode failed")
+	}
+	decoded, ok := decodeWrapperWebSocketFrame(encoded)
+	if !ok || decoded.Message.Intention.IntentionID != msg.Intention.IntentionID || decoded.Delegation.String() != rawHandle {
+		t.Fatalf("wrapper frame round trip = %#v, valid=%v", decoded, ok)
+	}
+	if decoded.Message.Intention.Params != nil {
+		t.Fatal("transport delegation leaked into intention params")
+	}
+
+	duplicate := []byte(`{"brique_wrapper_frame":"brique.wrapper/1","brique_wrapper_frame":"brique.wrapper/1","message":{"kind":"intention","intention":{"intention_id":"x"}},"delegation":"` + rawHandle + `"}`)
+	if _, ok := decodeWrapperWebSocketFrame(duplicate); ok {
+		t.Fatal("duplicate wrapper metadata key was accepted")
+	}
+	unknown := []byte(`{"brique_wrapper_frame":"brique.wrapper/1","message":{"kind":"intention","intention":{"intention_id":"x"}},"delegation":"` + rawHandle + `","extra":true}`)
+	if _, ok := decodeWrapperWebSocketFrame(unknown); ok {
+		t.Fatal("unknown wrapper metadata key was accepted")
+	}
+	badHandle := []byte(`{"brique_wrapper_frame":"brique.wrapper/1","message":{"kind":"intention","intention":{"intention_id":"x"}},"delegation":"short"}`)
+	if _, ok := decodeWrapperWebSocketFrame(badHandle); ok {
+		t.Fatal("non-canonical wrapper delegation handle was accepted")
+	}
+	if _, ok := encodeWrapperWebSocketFrame(junction.WrapperFrame{Message: msg}); ok {
+		t.Fatal("wrapper metadata frame without a handle was encoded")
 	}
 }
 

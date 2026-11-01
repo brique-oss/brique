@@ -30,7 +30,7 @@ import (
 )
 
 type spyFamilyLoop struct {
-	ch         chan circulation.Message
+	ch         chan junction.Delivery
 	state      shared.FamilyState
 	startCalls int
 	stopCalls  int
@@ -38,26 +38,53 @@ type spyFamilyLoop struct {
 
 func newSpyFamily(state shared.FamilyState) *spyFamilyLoop {
 	return &spyFamilyLoop{
-		ch:    make(chan circulation.Message, 1),
+		ch:    make(chan junction.Delivery, 1),
 		state: state,
 	}
 }
 
-func (f *spyFamilyLoop) InChan() chan circulation.Message { return f.ch }
-func (f *spyFamilyLoop) Start()                           { f.startCalls++ }
-func (f *spyFamilyLoop) Stop()                            { f.stopCalls++ }
-func (f *spyFamilyLoop) State() shared.FamilyState        { return f.state }
+func (f *spyFamilyLoop) InChan() chan junction.Delivery { return f.ch }
+func (f *spyFamilyLoop) Start()                         { f.startCalls++ }
+func (f *spyFamilyLoop) Stop()                          { f.stopCalls++ }
+func (f *spyFamilyLoop) State() shared.FamilyState      { return f.state }
 
 func newContextLoopHarness(state shared.ContextState) *ContextLoop {
 	return &ContextLoop{
 		frame:      junction.ContextRegistry{},
 		state:      state,
-		ctrl:       make(chan circulation.Message, 8),
+		ctrl:       make(chan junction.Delivery, 8),
 		families:   make(map[shared.FamilyName]junction.FamilyLoop),
 		Children:   []string{},
 		childLoops: make(map[string]*ContextLoop),
 		done:       make(chan struct{}),
 	}
+}
+
+var contextTestAuthority = junction.MustLocalAuthority("test:context")
+
+func contextTestDelivery(msg circulation.Message) junction.Delivery {
+	return junction.MustLocalDelivery(contextTestAuthority, msg)
+}
+
+func contextTestMessage(t *testing.T, delivery junction.Delivery) circulation.Message {
+	t.Helper()
+	msg, ok := delivery.Message()
+	if !ok {
+		t.Fatal("received invalid delivery")
+	}
+	return msg
+}
+
+func contextDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
 }
 
 func waitFor(t *testing.T, timeout time.Duration, pred func() bool, msg string) {
@@ -190,8 +217,8 @@ func TestContextLoop_N1_CL_07_RunIgnoresNonControlMessages(t *testing.T) {
 		c.run()
 	}()
 
-	c.ctrl <- circulation.Message{Kind: circulation.ValueKindResponse}
-	c.ctrl <- circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{To: circulation.Address{Type: "not-control", Cap: "stop"}}}
+	c.ctrl <- contextTestDelivery(circulation.Message{Kind: circulation.ValueKindResponse})
+	c.ctrl <- contextTestDelivery(circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{To: circulation.Address{Type: "not-control", Cap: "stop"}}})
 
 	select {
 	case <-exited:
@@ -218,12 +245,12 @@ func TestContextLoop_N1_CL_08_RunStopControlStopsContext(t *testing.T) {
 		c.run()
 	}()
 
-	c.ctrl <- circulation.Message{
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			To: circulation.Address{Type: circulation.ValueTypeControl, Cap: "stop"},
 		},
-	}
+	})
 
 	waitFor(t, time.Second, func() bool {
 		select {
@@ -244,19 +271,19 @@ func TestContextLoop_N1_CL_09_RunRestartGuardNoChildParam(t *testing.T) {
 		c.run()
 	}()
 
-	c.ctrl <- circulation.Message{
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			To: circulation.Address{Type: circulation.ValueTypeControl, Cap: "context.restart"},
 		},
-	}
-	c.ctrl <- circulation.Message{
+	})
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			To:     circulation.Address{Type: circulation.ValueTypeControl, Cap: "context.restart"},
 			Params: map[string]any{circulation.KeyChild: ""},
 		},
-	}
+	})
 
 	select {
 	case <-exited:
@@ -280,7 +307,7 @@ func TestContextLoop_N1_CL_10_RestartChildGuardBranches(t *testing.T) {
 	c.childLoops["existing"] = newContextLoopHarness(shared.ContextRunning)
 
 	beforeLen := len(c.childLoops)
-	if ok, reason := c.restartOneChild(""); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpRestart, ""); ok || reason == "" {
 		t.Fatalf("empty child name should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -290,7 +317,7 @@ func TestContextLoop_N1_CL_10_RestartChildGuardBranches(t *testing.T) {
 	c.stateMu.Lock()
 	c.state = shared.ContextStopping
 	c.stateMu.Unlock()
-	if ok, reason := c.restartOneChild("existing"); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpRestart, "existing"); ok || reason == "" {
 		t.Fatalf("non-running parent should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -300,7 +327,7 @@ func TestContextLoop_N1_CL_10_RestartChildGuardBranches(t *testing.T) {
 	c.stateMu.Lock()
 	c.state = shared.ContextRunning
 	c.stateMu.Unlock()
-	if ok, reason := c.restartOneChild("missing"); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpRestart, "missing"); ok || reason == "" {
 		t.Fatalf("missing child should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -345,7 +372,7 @@ func TestContextLoop_N1_CL_12_RestartChildValidReplacesChild(t *testing.T) {
 	old := newContextLoopHarness(shared.ContextRunning)
 	parent.childLoops[childName] = old
 
-	if ok, reason := parent.restartOneChild(childName); !ok {
+	if ok, reason := parent.controlOneChild(childOpRestart, childName); !ok {
 		t.Fatalf("restartOneChild should succeed, got reason=%q", reason)
 	}
 
@@ -397,7 +424,7 @@ func TestContextLoop_N1_CL_13_RestartChildrenEmitsPerChildResponse(t *testing.T)
 	c.frame.CtxId = "/parent"
 	c.childLoops["present"] = newContextLoopHarness(shared.ContextRunning)
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	in := circulation.Intention{
 		IntentionID: "req-1",
@@ -446,7 +473,7 @@ func TestContextLoop_N1_CL_14_RunEmitsInvalidParamsErrorForMissingChild(t *testi
 	c := newContextLoopHarness(shared.ContextRunning)
 	c.frame.CtxId = "/parent"
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	exited := make(chan struct{})
 	go func() {
@@ -455,14 +482,14 @@ func TestContextLoop_N1_CL_14_RunEmitsInvalidParamsErrorForMissingChild(t *testi
 	}()
 	t.Cleanup(func() { close(c.done) })
 
-	c.ctrl <- circulation.Message{
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "req-2",
 			To:          circulation.Address{Context: "/parent", Cap: "context.start", Type: circulation.ValueTypeControl},
 			From:        circulation.Address{Context: "/parent/mcp", Cap: "mcp.response", Type: circulation.ValueTypeExecution},
 		},
-	}
+	})
 
 	select {
 	case msg := <-commCh:
@@ -485,7 +512,7 @@ func TestContextLoop_N1_CL_15_RestartChildrenAllOKReturnsOKStatus(t *testing.T) 
 	c.childLoops["childA"] = newContextLoopHarness(shared.ContextRunning)
 	c.childLoops["childB"] = newContextLoopHarness(shared.ContextRunning)
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	in := circulation.Intention{
 		IntentionID: "req-all-ok",
@@ -531,7 +558,7 @@ func TestContextLoop_N1_CL_16_StartChildrenMixedSuccessAndFailure(t *testing.T) 
 	c.frame.CtxId = "/parent"
 	c.childLoops["already"] = newContextLoopHarness(shared.ContextRunning) // already loaded
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	in := circulation.Intention{
 		IntentionID: "req-start-mixed",
@@ -586,7 +613,7 @@ func TestContextLoop_N1_CL_17_RunStartControlEmitsOKResponse(t *testing.T) {
 	c.dir = parentDir
 	c.frame.CtxId = "/parent"
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	exited := make(chan struct{})
 	go func() {
@@ -595,7 +622,7 @@ func TestContextLoop_N1_CL_17_RunStartControlEmitsOKResponse(t *testing.T) {
 	}()
 	t.Cleanup(func() { close(c.done) })
 
-	c.ctrl <- circulation.Message{
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "req-start-ok",
@@ -603,7 +630,7 @@ func TestContextLoop_N1_CL_17_RunStartControlEmitsOKResponse(t *testing.T) {
 			From:        circulation.Address{Context: "/parent/mcp", Cap: "mcp.response", Type: circulation.ValueTypeExecution},
 			Params:      map[string]any{circulation.KeyChild: "childC"},
 		},
-	}
+	})
 
 	select {
 	case msg := <-commCh:
@@ -631,7 +658,7 @@ func TestContextLoop_N1_CL_19_StopChildGuardBranches(t *testing.T) {
 	c.childLoops["existing"] = newContextLoopHarness(shared.ContextRunning)
 
 	beforeLen := len(c.childLoops)
-	if ok, reason := c.stopOneChild(""); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpStop, ""); ok || reason == "" {
 		t.Fatalf("empty child name should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -641,7 +668,7 @@ func TestContextLoop_N1_CL_19_StopChildGuardBranches(t *testing.T) {
 	c.stateMu.Lock()
 	c.state = shared.ContextStopping
 	c.stateMu.Unlock()
-	if ok, reason := c.stopOneChild("existing"); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpStop, "existing"); ok || reason == "" {
 		t.Fatalf("non-running parent should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -651,7 +678,7 @@ func TestContextLoop_N1_CL_19_StopChildGuardBranches(t *testing.T) {
 	c.stateMu.Lock()
 	c.state = shared.ContextRunning
 	c.stateMu.Unlock()
-	if ok, reason := c.stopOneChild("missing"); ok || reason == "" {
+	if ok, reason := c.controlOneChild(childOpStop, "missing"); ok || reason == "" {
 		t.Fatalf("missing child should fail with a reason, got ok=%v reason=%q", ok, reason)
 	}
 	if len(c.childLoops) != beforeLen {
@@ -665,7 +692,7 @@ func TestContextLoop_N1_CL_20_StopOneChildValidRemovesChild(t *testing.T) {
 	child := newContextLoopHarness(shared.ContextRunning)
 	parent.childLoops["childA"] = child
 
-	if ok, reason := parent.stopOneChild("childA"); !ok {
+	if ok, reason := parent.controlOneChild(childOpStop, "childA"); !ok {
 		t.Fatalf("stopOneChild should succeed, got reason=%q", reason)
 	}
 
@@ -684,7 +711,7 @@ func TestContextLoop_N1_CL_21_StopChildrenMixedSuccessAndFailure(t *testing.T) {
 	c.frame.CtxId = "/parent"
 	c.childLoops["present"] = newContextLoopHarness(shared.ContextRunning)
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	in := circulation.Intention{
 		IntentionID: "req-stop-mixed",
@@ -732,7 +759,7 @@ func TestContextLoop_N1_CL_22_RunContextStopControlEmitsOKResponse(t *testing.T)
 	c.frame.CtxId = "/parent"
 	c.childLoops["childD"] = newContextLoopHarness(shared.ContextRunning)
 	commCh := make(chan circulation.Message, 4)
-	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: commCh}
+	c.frame.FamIn = junction.FamiliesInChanRegistry{shared.FamilyComm: contextDeliveryBridge(commCh, 4)}
 
 	exited := make(chan struct{})
 	go func() {
@@ -741,7 +768,7 @@ func TestContextLoop_N1_CL_22_RunContextStopControlEmitsOKResponse(t *testing.T)
 	}()
 	t.Cleanup(func() { close(c.done) })
 
-	c.ctrl <- circulation.Message{
+	c.ctrl <- contextTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "req-stop-ok",
@@ -749,7 +776,7 @@ func TestContextLoop_N1_CL_22_RunContextStopControlEmitsOKResponse(t *testing.T)
 			From:        circulation.Address{Context: "/parent/mcp", Cap: "mcp.response", Type: circulation.ValueTypeExecution},
 			Params:      map[string]any{circulation.KeyChild: "childD"},
 		},
-	}
+	})
 
 	select {
 	case msg := <-commCh:

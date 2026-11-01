@@ -126,7 +126,7 @@
               "artifact": "sandbox_cpp",
               "artifact_kind": "file",
               "cmd": [
-                "c++ -std=c++17 -O2 -I. main.cpp -o \"$BRIQUE_WRAPPER_BUILD_DIR/sandbox_cpp\""
+                "c++ -std=c++17 -O2 -pthread -I. main.cpp -lcurl -o \"$BRIQUE_WRAPPER_BUILD_DIR/sandbox_cpp\""
               ]
             },
             "run": {

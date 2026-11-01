@@ -33,8 +33,8 @@ func newWrapperControlHarness(t *testing.T, wrapperName string) (*ExecutionLoop,
 	engineCfg := map[string]any{
 		configuration.KeyWrappers: []any{
 			map[string]any{
-				configuration.KeyWrpName: wrapperName,
-				configuration.KeyWrpMode: configuration.ValueConfigStyleInterpreted,
+				configuration.KeyWrpName:   wrapperName,
+				configuration.KeyWrpMode:   configuration.ValueConfigStyleInterpreted,
 				configuration.KeyWrpStopTO: 100,
 			},
 		},

@@ -25,7 +25,7 @@ import (
 	"brique_engine/shared"
 )
 
-func frameForTraceTest(enabled bool, level string, ch chan circulation.Message) *junction.ContextRegistry {
+func frameForTraceTest(enabled bool, level string, ch chan junction.Delivery) *junction.ContextRegistry {
 	fam := junction.FamiliesInChanRegistry{}
 	if ch != nil {
 		fam[shared.FamilyTrace] = ch
@@ -121,7 +121,7 @@ func TestTraceGateEnabled_N1_TG_10_UnknownLevelDefaultsToNormal(t *testing.T) {
 }
 
 func TestTraceEmit_N1_TG_11_GateDenied(t *testing.T) {
-	ch := make(chan circulation.Message, 1)
+	ch := make(chan junction.Delivery, 1)
 	f := frameForTraceTest(false, configuration.ValueConfigTraceLevelNormal, ch)
 
 	ok := junction.TraceEmit(f, circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress})
@@ -142,7 +142,7 @@ func TestTraceEmit_N1_TG_12_MissingTraceChannel(t *testing.T) {
 }
 
 func TestTraceEmit_N1_TG_13_SendSuccess(t *testing.T) {
-	ch := make(chan circulation.Message, 1)
+	ch := make(chan junction.Delivery, 1)
 	f := frameForTraceTest(true, configuration.ValueConfigTraceLevelNormal, ch)
 
 	tw := circulation.TraceWire{
@@ -156,7 +156,11 @@ func TestTraceEmit_N1_TG_13_SendSuccess(t *testing.T) {
 	}
 
 	select {
-	case msg := <-ch:
+	case delivery := <-ch:
+		msg, valid := delivery.Message()
+		if !valid {
+			t.Fatalf("expected valid delivery")
+		}
 		if msg.Kind != circulation.ValueKindTrace {
 			t.Fatalf("message kind = %q, want %q", msg.Kind, circulation.ValueKindTrace)
 		}
@@ -175,8 +179,9 @@ func TestTraceEmit_N1_TG_13_SendSuccess(t *testing.T) {
 }
 
 func TestTraceEmit_N1_TG_14_ChannelFullNonBlockingDrop(t *testing.T) {
-	ch := make(chan circulation.Message, 1)
-	ch <- circulation.Message{Kind: circulation.ValueKindTrace}
+	ch := make(chan junction.Delivery, 1)
+	authority := junction.MustLocalAuthority("test")
+	ch <- junction.MustLocalDelivery(authority, circulation.Message{Kind: circulation.ValueKindTrace})
 	f := frameForTraceTest(true, configuration.ValueConfigTraceLevelNormal, ch)
 
 	ok := junction.TraceEmit(f, circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress})

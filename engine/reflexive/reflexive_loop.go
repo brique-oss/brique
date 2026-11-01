@@ -37,10 +37,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
+	"brique_engine/security/access"
 	"brique_engine/shared"
 )
 
@@ -306,11 +308,12 @@ func buildCapTable() map[string]capHandler {
 // -----------------------------
 
 type ReflexiveLoop struct {
-	frame *junction.ContextRegistry
-	in    chan circulation.Message
+	frame      *junction.ContextRegistry
+	deliveryIn chan junction.Delivery
 
 	// static dispatch
-	caps map[string]capHandler
+	caps           map[string]capHandler
+	accessRegistry *access.Registry
 
 	cfg ReflexiveCfg
 
@@ -319,8 +322,37 @@ type ReflexiveLoop struct {
 
 	// Descriptor edits are serialized per resolved file so read-modify-write
 	// operations cannot overwrite another successful concurrent patch.
+	// projectionMu serializes every writer of the meaning/vocabulary
+	// projection (rebuild, update, vocabulary patch/delete), including their
+	// read-modify-write cycles. Readers (queries) never take it: they see the
+	// previous or the next published projection.
+	projectionMu sync.Mutex
+	// projectionGen changes whenever the projection file is replaced (rebuild
+	// swap), so a long incremental sync working on an open handle can tell its
+	// handle now points at an orphaned file.
+	projectionGen atomic.Uint64
+	// syncKick carries "descriptors changed" hints to the projection sync loop.
+	syncKick chan struct{}
+	hintMu   sync.Mutex
+	hints    map[junction.ProjectionHint]struct{}
+	hintFull bool
+
+	// structMu orders structural edits (create, delete, duplicate: exclusive)
+	// against content edits (patch: shared, then serialized per file), so a
+	// patch can never resurrect a deleted element and two creations of the
+	// same name cannot both pass the existence check.
+	structMu sync.RWMutex
+
 	editLocksMu sync.Mutex
-	editLocks   map[string]*sync.Mutex
+	editLocks   map[string]*editLock
+
+	// externalRequests binds a future executing admitted root request to its
+	// authenticated response construction. Dispatch remains closed for now.
+	externalRequestMu sync.RWMutex
+	// denied holds, per external list-shaped request, the elements refused by the door.
+	denied           map[string][]deniedItem
+	deniedMu         sync.Mutex
+	externalRequests map[string]junction.Delivery
 
 	// lifecycle
 	stateMu sync.RWMutex
@@ -391,14 +423,18 @@ func NewReflexiveLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 	cfg := ParseReflexiveCfg(engineCfg)
 
 	return &ReflexiveLoop{
-		frame: frame,
-		in:    make(chan circulation.Message, 16),
-		cfg:   cfg,
+		frame:      frame,
+		deliveryIn: make(chan junction.Delivery, 16),
+		cfg:        cfg,
 
-		caps: buildCapTable(),
+		caps:           buildCapTable(),
+		accessRegistry: mustBuildReflexiveAccessRegistry(),
 
 		handlerSlots: make(chan struct{}, defaultMaxHandlers),
-		editLocks:    make(map[string]*sync.Mutex),
+		editLocks:    make(map[string]*editLock),
+		syncKick:     make(chan struct{}, 1),
+
+		externalRequests: make(map[string]junction.Delivery),
 
 		state: shared.FamilyInitializing,
 		done:  make(chan struct{}),
@@ -451,14 +487,14 @@ func NewReflexiveLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 //
 //
 // Outputs:
-// - returns chan circulation.Message.
+// - returns the protected family boundary (`chan junction.Delivery`).
 //
 //
 // Contract:
-// - Returns exactly the current `l.in` channel instance.
+// - Returns exactly the current `l.deliveryIn` channel instance.
 // - Emits no response, trace, or outbound message.
 
-func (l *ReflexiveLoop) InChan() chan circulation.Message { return l.in }
+func (l *ReflexiveLoop) InChan() chan junction.Delivery { return l.deliveryIn }
 
 // State
 //
@@ -597,6 +633,19 @@ func (l *ReflexiveLoop) Start() {
 		l.loopInbox()
 	}()
 
+	if (l.cfg.ProjectionSyncInterval > 0 || l.cfg.ProjectionSyncOnEdit) && l.frame != nil && l.frame.CtxId == shared.RootContextID {
+		if l.cfg.ProjectionSyncOnEdit {
+			if reg, ok := l.frame.CtxCommReg.(junction.ProjectionNotifierRegistrar); ok {
+				reg.SetProjectionNotifier(l.kickProjectionSync)
+			}
+		}
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			l.projectionSyncLoop()
+		}()
+	}
+
 	l.state = shared.FamilyRunning
 	l.stateMu.Unlock()
 }
@@ -661,7 +710,14 @@ func (l *ReflexiveLoop) Start() {
 // - Repeated calls after the first shutdown may still wait on `l.wg`, but they do not re-close `l.done`.
 
 func (l *ReflexiveLoop) Stop() {
-	l.once.Do(func() { close(l.done) })
+	l.once.Do(func() {
+		close(l.done)
+		if l.cfg.ProjectionSyncOnEdit && l.frame != nil && l.frame.CtxId == shared.RootContextID {
+			if reg, ok := l.frame.CtxCommReg.(junction.ProjectionNotifierRegistrar); ok {
+				reg.SetProjectionNotifier(nil)
+			}
+		}
+	})
 
 	done := make(chan struct{})
 	go func() { l.wg.Wait(); close(done) }()
@@ -798,7 +854,7 @@ func (l *ReflexiveLoop) Suspend() {
 // Inputs:
 // - receiver `l *ReflexiveLoop`.
 // - reads from `l.done`.
-// - reads from `l.in`.
+// - reads from `l.deliveryIn`.
 //
 //
 // Outputs:
@@ -818,44 +874,97 @@ func (l *ReflexiveLoop) loopInbox() {
 		select {
 		case <-l.done:
 			return
-		case msg, ok := <-l.in:
+		case delivery, ok := <-l.deliveryIn:
 			if !ok {
 				return
 			}
+			l.handleInboxDelivery(delivery)
+		}
+	}
+}
 
-			switch msg.Kind {
-			case circulation.ValueKindIntention:
-				// Spawn job: inbox never blocks, but admission is bounded.
-				select {
-				case l.handlerSlots <- struct{}{}:
-					l.wg.Add(1)
-					go func(m circulation.Message) {
-						defer l.wg.Done()
-						defer func() { <-l.handlerSlots }()
-						l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyEnter)
-						l.runJob(m)
-						l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyExit)
-					}(msg)
-				default:
-					// Saturated: emit a saturation trace then fail-close with a busy error.
-					in := msg.Intention
-					l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, circulation.ValueTraceFamilySaturated)
-					l.emitResponseError(errorResp(
-						in,
-						circulation.ValueCodeUnavailable,
-						map[string]any{circulation.KeyReason: circulation.ValueReasonBusy},
-						"reflexive loop busy",
-					))
+func (l *ReflexiveLoop) handleInboxDelivery(delivery junction.Delivery) {
+	msg, valid := delivery.Message()
+	if !valid {
+		return
+	}
+	if _, external := delivery.ExternalAdmission(); external {
+		intentionID := ""
+		if msg.Kind == circulation.ValueKindIntention {
+			intentionID = msg.Intention.IntentionID
+		} else if msg.Kind == circulation.ValueKindResponse {
+			intentionID = msg.Response.IntentionID
+		}
+		admittedMsg, denied, err := l.admitExternalReflexive(delivery)
+		if err != nil {
+			l.sendToTrace(msg.Kind, intentionID, circulation.ValueTraceFamilyError)
+			l.refuseExternalReflexive(delivery, err)
+			return
+		}
+		if allRefused(admittedMsg, denied) {
+			l.answerAllRefused(delivery, denied)
+			return
+		}
+		cleanup, err := l.bindExternalRequest(delivery)
+		if err != nil {
+			l.sendToTrace(msg.Kind, intentionID, circulation.ValueTraceFamilyError)
+			l.emitExternalReflexiveError(delivery, circulation.ValueCodeUnavailable, err.Error())
+			return
+		}
+		l.rememberDenied(intentionID, denied)
+		l.handleInboxMessageWithCompletion(admittedMsg, func() {
+			l.forgetDenied(intentionID)
+			cleanup()
+		})
+		return
+	}
+	l.handleInboxMessage(msg)
+}
+
+func (l *ReflexiveLoop) handleInboxMessage(msg circulation.Message) {
+	l.handleInboxMessageWithCompletion(msg, nil)
+}
+
+func (l *ReflexiveLoop) handleInboxMessageWithCompletion(msg circulation.Message, completion func()) {
+	switch msg.Kind {
+	case circulation.ValueKindIntention:
+		// Spawn job: inbox never blocks, but admission is bounded.
+		select {
+		case l.handlerSlots <- struct{}{}:
+			l.wg.Add(1)
+			go func(m circulation.Message) {
+				defer l.wg.Done()
+				defer func() { <-l.handlerSlots }()
+				if completion != nil {
+					defer completion()
 				}
-
-			case circulation.ValueKindResponse:
-				// Design: ReflexiveLoop inbox is intentions-only.
-				// We ignore responses by default, but keep a trace marker to ease debugging.
-				l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, circulation.ValueTracePendingOrphanId)
-
-			default:
-				// ignore
+				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyEnter)
+				l.runJob(m)
+				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyExit)
+			}(msg)
+		default:
+			// Saturated: emit a saturation trace then fail-close with a busy error.
+			in := msg.Intention
+			l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, circulation.ValueTraceFamilySaturated)
+			l.emitResponseError(errorResp(
+				in,
+				circulation.ValueCodeUnavailable,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonBusy},
+				"reflexive loop busy",
+			))
+			if completion != nil {
+				completion()
 			}
+		}
+
+	case circulation.ValueKindResponse:
+		// Design: ReflexiveLoop inbox is intentions-only.
+		// We ignore responses by default, but keep a trace marker to ease debugging.
+		l.sendToTrace(circulation.ValueKindResponse, msg.Response.IntentionID, circulation.ValueTracePendingOrphanId)
+
+	default:
+		if completion != nil {
+			completion()
 		}
 	}
 }
@@ -866,7 +975,6 @@ func (l *ReflexiveLoop) loopInbox() {
 // - >sequence:
 //   - reject shutdown or non-intention inputs
 //   - validate intention id
-//   - authorize intention
 //   - resolve capability name to handler
 //   - require context directory
 //   - execute capability handler
@@ -958,11 +1066,6 @@ func (l *ReflexiveLoop) runJob(msg circulation.Message) {
 	}
 
 	// placeholder auth (policy from frame later)
-	if ok := l.authorize(in); !ok {
-		l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized, map[string]any{}, "authorization denied"))
-		return
-	}
-
 	cap := strings.TrimSpace(in.To.Cap)
 	if cap == "" {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid, map[string]any{circulation.KeyReason: circulation.ValueReasonMissingCapName}, "capacity name is required"))
@@ -982,64 +1085,6 @@ func (l *ReflexiveLoop) runJob(msg circulation.Message) {
 
 	// execute handler (currently placeholder)
 	h(l, msg)
-}
-
-// authorize
-//
-// Functional role (Brique DSL):
-// - evaluate authorization guard before capability execution.
-//
-//
-// Expected Message Fields:
-// - none (operates on typed intention input, not message envelope).
-//
-// Expected Params Keys/values:
-// - none.
-//
-// Produced Response Fields:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Response Payload Keys/values:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Trace:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// Produced Outbound Message:
-// - Valid:
-//   - none.
-// - On error:
-//   - none.
-//
-// State/Storage Effects:
-// - none.
-//
-// Inputs:
-// - receiver `l *ReflexiveLoop`.
-// - _ circulation.Intention.
-//
-//
-// Outputs:
-// - returns bool.
-//
-//
-// Contract:
-// - Returns exactly one boolean.
-// - Emits no response, trace, or outbound message.
-// - Current implementation always returns true.
-
-func (l *ReflexiveLoop) authorize(_ circulation.Intention) bool {
-	// TODO: policy from frame (identity, scope, cap rules)
-	return true
 }
 
 // contextDir
@@ -1234,18 +1279,57 @@ func (l *ReflexiveLoop) mustContextDirOrErr(in circulation.Intention) (string, b
 // - Does not emit fallback traces when forwarding to Comm is unavailable.
 
 func (l *ReflexiveLoop) emitToComm(msg circulation.Message) {
-	if l.frame == nil || l.frame.FamIn == nil {
+	if msg.Kind == circulation.ValueKindIntention {
+		if _, bound := l.externalRequest(msg.Intention.IntentionID); bound {
+			l.sendToTrace(circulation.ValueKindIntention, msg.Intention.IntentionID, circulation.ValueTraceFamilyError)
+			return
+		}
+	}
+	if msg.Kind == circulation.ValueKindResponse {
+		if request, bound := l.externalRequest(msg.Response.IntentionID); bound {
+			l.finalizeExternalResponse(&msg)
+			if !externalReflexiveResponseMatches(request, msg) {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, "response does not match its authenticated external request")
+				return
+			}
+			delivery, reservation, err := junction.BindExternalResponse(request, msg)
+			if err != nil {
+				l.traceResponseError(msg.Response.IntentionID, circulation.ValueReasonInvalidCrypto, err.Error())
+				return
+			}
+			if !l.emitDeliveryToComm(delivery) && reservation.Valid() {
+				_ = reservation.Abort()
+			}
+			return
+		}
+	}
+	if l.frame == nil {
 		return
+	}
+	l.emitDeliveryToComm(l.frame.MustDelivery(msg))
+}
+
+func (l *ReflexiveLoop) emitDeliveryToComm(delivery junction.Delivery) bool {
+	if l.frame == nil || l.frame.FamIn == nil {
+		return false
 	}
 	commCh := l.frame.FamIn[shared.FamilyComm]
 	if commCh == nil {
-		return
+		return false
+	}
+	// Deliver first when the queue has room: select picks randomly when both
+	// cases are ready, which would drop the answer of a handler that finishes
+	// while the loop is stopping.
+	select {
+	case commCh <- delivery:
+		return true
+	default:
 	}
 	select {
-	case commCh <- msg:
-		return
+	case commCh <- delivery:
+		return true
 	case <-l.done:
-		return
+		return false
 	}
 }
 
@@ -1303,7 +1387,6 @@ func (l *ReflexiveLoop) emitToComm(msg circulation.Message) {
 
 func (l *ReflexiveLoop) traceResponseError(intentionId string, reason string, userText string) {
 	tw := circulation.TraceWire{
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:   circulation.ValueTraceFamilyError,
 		Family:      circulation.ValueOriginReflexive,
 		IntentionId: intentionId,
@@ -1367,7 +1450,6 @@ func (l *ReflexiveLoop) traceResponseError(intentionId string, reason string, us
 
 func (l *ReflexiveLoop) sendToTrace(msgKind string, intentionId string, traceKind string) {
 	tw := circulation.TraceWire{
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		TraceKind:   traceKind,
 		Family:      circulation.ValueOriginReflexive,
 		IntentionId: intentionId,
@@ -1742,4 +1824,20 @@ func errorFor(msgIn circulation.Message, code string, details map[string]any, me
 			},
 		},
 	}
+}
+
+// lockProjection serializes projection writers; call as `defer l.lockProjection()()`.
+func (l *ReflexiveLoop) lockProjection() func() {
+	l.projectionMu.Lock()
+	return l.projectionMu.Unlock
+}
+
+func (l *ReflexiveLoop) lockStructuralEdit() func() {
+	l.structMu.Lock()
+	return l.structMu.Unlock
+}
+
+func (l *ReflexiveLoop) lockContentEdit() func() {
+	l.structMu.RLock()
+	return l.structMu.RUnlock
 }

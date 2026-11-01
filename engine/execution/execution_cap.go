@@ -17,10 +17,10 @@
 package execution
 
 import (
-	"fmt"
 	"brique_engine/circulation"
 	"brique_engine/junction"
 	"brique_engine/shared"
+	"fmt"
 	"time"
 )
 
@@ -40,7 +40,6 @@ const (
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperReady(in circulation.Intention) {
 	fromCtx := string(in.From.Context)
 	wrapper := shared.WrapperNameFrom(fromCtx)
@@ -78,7 +77,6 @@ func (l *ExecutionLoop) execWrapperReady(in circulation.Intention) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperFailed(in circulation.Intention) {
 	fromCtx := string(in.From.Context)
 	wrapper := shared.WrapperNameFrom(fromCtx)
@@ -122,7 +120,6 @@ func (l *ExecutionLoop) execWrapperFailed(in circulation.Intention) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperStopAck(in circulation.Intention) {
 	// This internal intention is used *by Execution* to request stop.
 	// If a wrapper emits it, we ignore (runtime signals are defined by engine).
@@ -137,7 +134,6 @@ func (l *ExecutionLoop) execWrapperStopAck(in circulation.Intention) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperStart(in circulation.Intention) {
 	name := wrapperNameFromParams(in)
 	if name == "" {
@@ -173,7 +169,6 @@ func (l *ExecutionLoop) execWrapperStart(in circulation.Intention) {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperStopCmd(in circulation.Intention) {
 	if abort := l.signalWrapperStop(in); abort {
 		return
@@ -223,57 +218,16 @@ func (l *ExecutionLoop) signalWrapperStop(in circulation.Intention) bool {
 	pid := st.PID
 	st.Unlock()
 
-	l.emitToComm(circulation.Message{
-		Kind: circulation.ValueKindIntention,
-		Intention: circulation.Intention{
-			IntentionID: circulation.NewIntentionID(),
-			From: circulation.Address{
-				Context: circulation.ContextID(l.frame.CtxId),
-				Type:    circulation.ValueTypeExecution,
-				Cap:     execCapWrapperStop,
-			},
-			To: circulation.Address{
-				Context: circulation.ContextID("@wrapper_" + name + ":/"),
-				Type:    circulation.ValueTypeExecution,
-				Cap:     execCapWrapperStop,
-			},
-			Params: map[string]any{},
-		},
-	})
+	l.emitToComm(l.wrapperStopIntention(name))
 
 	if cfg.StopTimeoutMs > 0 && pid > 0 {
 		timeout := time.Duration(cfg.StopTimeoutMs) * time.Millisecond
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
-			t := time.NewTimer(timeout)
-			defer t.Stop()
-			select {
-			case <-l.done:
-				return
-			case <-t.C:
-			}
-			st, ok := l.frame.Wrappers[name]
-			if !ok {
-				return
-			}
-			st.Lock()
-			shouldKill := st.ProcState == junction.ProcStopping || st.ProcState == junction.ProcRunning || st.ProcState == junction.ProcStarting
-			st.Unlock()
-			if shouldKill {
-				killWrapperPIDBestEffort(pid)
-				st.Lock()
-				if st.ProcState == junction.ProcStopping || st.ProcState == junction.ProcRunning || st.ProcState == junction.ProcStarting {
-					st.ProcState = junction.ProcExited
-					st.LastExitAt = time.Now()
-					st.PID = 0
-					st.Ready = false
-					st.ReadyAt = time.Time{}
-					st.SetStarting(false)
-					st.SetBuilding(false)
-				}
-				st.Unlock()
-			}
+			// Gives up when the loop stops: shutdown terminates every wrapper
+			// itself (stopAllWrappersBestEffort).
+			l.terminateWrapper(name, pid, timeout, true)
 		}()
 	}
 
@@ -287,7 +241,6 @@ func (l *ExecutionLoop) signalWrapperStop(in circulation.Intention) bool {
 //
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
-//
 func (l *ExecutionLoop) execWrapperRestart(in circulation.Intention) {
 	name := wrapperNameFromParams(in)
 	if name == "" {

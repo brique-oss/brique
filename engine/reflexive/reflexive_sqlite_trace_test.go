@@ -67,15 +67,15 @@ func payloadJSONMap(t *testing.T, in map[string]any) map[string]any {
 func TestReflexiveSQLiteTrace_N1_RST_01_Helpers(t *testing.T) {
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	line, _ := json.Marshal(map[string]any{
-		circulation.KeyTS:               ts,
-		circulation.KeyContextId:        "/ctx/a",
-		circulation.KeyTraceKind:        circulation.ValueTraceFamilyEnter,
-		circulation.KeyFamily:           circulation.ValueOriginReflexive,
-		circulation.KeyIntentionId:      "i1",
-		circulation.KeyRootIntentionId:  "r1",
+		circulation.KeyTS:                ts,
+		circulation.KeyContextId:         "/ctx/a",
+		circulation.KeyTraceKind:         circulation.ValueTraceFamilyEnter,
+		circulation.KeyFamily:            circulation.ValueOriginReflexive,
+		circulation.KeyIntentionId:       "i1",
+		circulation.KeyRootIntentionId:   "r1",
 		circulation.KeyParentIntentionId: "p1",
-		circulation.KeyMsgKind:          circulation.ValueKindIntention,
-		circulation.KeyIntention:        map[string]any{circulation.KeyIntentionID: "i1"},
+		circulation.KeyMsgKind:           circulation.ValueKindIntention,
+		circulation.KeyIntention:         map[string]any{circulation.KeyIntentionID: "i1"},
 	})
 	_, tsNs, inJSON, _, ok := parseTraceLine(line, true)
 	if !ok || tsNs <= 0 || !strings.Contains(inJSON, `"intention_id":"i1"`) {
@@ -164,18 +164,18 @@ func TestReflexiveSQLiteTrace_N1_RST_03_CapTraceInspectEvents(t *testing.T) {
 	line2Ts := base.Add(200 * time.Millisecond)
 	writeTraceSegment(t, traceDir, base, []map[string]any{
 		{
-			circulation.KeyTS:         line1Ts.Format(time.RFC3339Nano),
-			circulation.KeyContextId:  "/ctx/read-a",
-			circulation.KeyTraceKind:  circulation.ValueTraceFamilyEnter,
-			circulation.KeyFamily:     circulation.ValueOriginReflexive,
+			circulation.KeyTS:          line1Ts.Format(time.RFC3339Nano),
+			circulation.KeyContextId:   "/ctx/read-a",
+			circulation.KeyTraceKind:   circulation.ValueTraceFamilyEnter,
+			circulation.KeyFamily:      circulation.ValueOriginReflexive,
 			circulation.KeyIntentionId: "i1",
-			circulation.KeyIntention:  map[string]any{circulation.KeyIntentionID: "i1"},
+			circulation.KeyIntention:   map[string]any{circulation.KeyIntentionID: "i1"},
 		},
 		{
-			circulation.KeyTS:         line2Ts.Format(time.RFC3339Nano),
-			circulation.KeyContextId:  "/ctx/read-a",
-			circulation.KeyTraceKind:  circulation.ValueTraceFamilyExit,
-			circulation.KeyFamily:     circulation.ValueOriginMatter,
+			circulation.KeyTS:          line2Ts.Format(time.RFC3339Nano),
+			circulation.KeyContextId:   "/ctx/read-a",
+			circulation.KeyTraceKind:   circulation.ValueTraceFamilyExit,
+			circulation.KeyFamily:      circulation.ValueOriginMatter,
 			circulation.KeyIntentionId: "i2",
 		},
 	})
@@ -243,7 +243,7 @@ func TestReflexiveSQLiteTrace_N1_RST_04_CapTraceInspectFacets(t *testing.T) {
 		Intention: circulation.Intention{
 			IntentionID: "i-facets",
 			Params: map[string]any{
-				circulation.KeyMode: circulation.ValueModeFacets,
+				circulation.KeyMode:  circulation.ValueModeFacets,
 				circulation.KeyLimit: 10,
 			},
 		},

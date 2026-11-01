@@ -53,7 +53,7 @@ func TestMatterWrite_N1_MWR_01_Helpers(t *testing.T) {
 	}
 
 	src := map[string]any{"a": map[string]any{"b": 1}, "arr": []any{map[string]any{"x": 1}}}
-	cl := deepCloneMap(src)
+	cl := shared.DeepCloneMap(src)
 	clA := cl["a"].(map[string]any)
 	clA["b"] = 2
 	if src["a"].(map[string]any)["b"] != 1 {

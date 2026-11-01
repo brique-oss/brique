@@ -188,7 +188,7 @@ func patchN4ContextForRuntime(t *testing.T, rootDir, ctxPath string, sharedWSAdd
 	}
 	if ctxID == shared.RootContextID {
 		commCfg["websocket_listener"] = map[string]any{
-			"addr": sharedWSAddr,
+			"addr": sharedWSAddr, "wrapper_auth": "optional",
 		}
 	}
 
@@ -282,7 +282,7 @@ func sendToN4Context(t *testing.T, h *engineN4Harness, ctxID string, msg circula
 		t.Fatalf("context channel not found for %s", ctxID)
 	}
 	select {
-	case ch <- msg:
+	case ch <- contextTestEnvelope(msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending message to %s", ctxID)
 	}
@@ -309,7 +309,7 @@ func sendLocalFromN4Context(t *testing.T, h *engineN4Harness, ctxID string, msg 
 	t.Helper()
 	ch := n4CommLoop(t, h, ctxID).InChan()
 	select {
-	case ch <- msg:
+	case ch <- contextTestEnvelope(msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending local comm message to %s", ctxID)
 	}
@@ -715,26 +715,13 @@ func TestEngine_N4_ENG_09_RemoteUIOwnerRelay(t *testing.T) {
 	noN4WSMsg(t, conn, "single remote ui emission")
 }
 
-func TestEngine_N4_ENG_10_ExtRouteDelegatesToRoot(t *testing.T) {
+func TestEngine_N4_ENG_10_UnsignedExtRouteFailsClosedAtRoot(t *testing.T) {
 	h := newEngineN4Harness(t)
 	conn := dialN4WS(t, mustN4WSURL(h, shared.RootContextID, "outerCtx"))
 
 	sendLocalFromN4Context(t, h, n4AlphaParentID, mkN4LocalResponse("n4-ext-route", "@ext_peer:/notify"))
 
-	msg := readN4WrapperMsg(t, conn, "root outerCtx relay")
-	if msg.Kind != circulation.ValueKindResponse {
-		t.Fatalf("kind=%q want response", msg.Kind)
-	}
-	if msg.Response.IntentionID != "n4-ext-route" {
-		t.Fatalf("intention_id=%q want n4-ext-route", msg.Response.IntentionID)
-	}
-	if string(msg.Response.To.Context) != "@ext_peer:/notify" {
-		t.Fatalf("to.context=%q want @ext_peer:/notify", msg.Response.To.Context)
-	}
-	if string(msg.Response.From.Context) != "sandbox-n4-alpha-parent" {
-		t.Fatalf("from.context=%q want sandbox-n4-alpha-parent", msg.Response.From.Context)
-	}
-	noN4WSMsg(t, conn, "single outerCtx emission")
+	noN4WSMsg(t, conn, "unsigned external response must not reach outerCtx")
 }
 
 func TestEngine_N4_ENG_16_RootScatterFanoutAckAndResponses(t *testing.T) {
@@ -947,7 +934,17 @@ func TestEngine_N4_ENG_11_MissingInternalTargetFailsClosed(t *testing.T) {
 		Cap:  "read.state",
 	})
 
-	noN4WSMsg(t, conn, "missing internal target")
+	// Fail closed: the awaited intention is answered once with an explicit
+	// "unreachable" error instead of being silently dropped.
+	got := collectN4WSMsgs(t, conn, 1, "missing internal target")[0]
+	if got.Kind != circulation.ValueKindResponse || got.Response.IntentionID != "n4-missing-internal" ||
+		got.Response.Status != circulation.ValueStatusError || got.Response.Error == nil {
+		t.Fatalf("unexpected reply for missing internal target: %#v", got)
+	}
+	if reason, _ := got.Response.Error.Details[circulation.KeyReason].(string); reason != circulation.ValueReasonContextUnreachable {
+		t.Fatalf("reason = %q, want %q", reason, circulation.ValueReasonContextUnreachable)
+	}
+	noN4WSMsg(t, conn, "missing internal target (second message)")
 }
 
 func TestEngine_N4_ENG_12_MissingWrapperBoundaryFailsClosed(t *testing.T) {
@@ -1000,7 +997,7 @@ func TestEngine_N4_ENG_15_MixedConcurrentInterContextRoutesRemainIsolated(t *tes
 	alphaResp := readN4WrapperMsg(t, alphaConn, "mixed internal response")
 	uiResp := readN4WrapperMsg(t, uiConn, "mixed ui relay")
 	wrapperResp := readN4WrapperMsg(t, wrapperConn, "mixed wrapper relay")
-	outerResp := readN4WrapperMsg(t, outerConn, "mixed ext relay")
+	noN4WSMsg(t, outerConn, "mixed unsigned external route")
 
 	alphaCtx, _ := alphaResp.Response.Payload[circulation.KeyContext].(map[string]any)
 	if alphaCtx[circulation.KeyContextId] != n4BetaChildID {
@@ -1011,9 +1008,6 @@ func TestEngine_N4_ENG_15_MixedConcurrentInterContextRoutesRemainIsolated(t *tes
 	}
 	if wrapperResp.Response.IntentionID != "n4-mixed-wrapper" {
 		t.Fatalf("wrapper response id=%q want n4-mixed-wrapper", wrapperResp.Response.IntentionID)
-	}
-	if outerResp.Response.IntentionID != "n4-mixed-ext" {
-		t.Fatalf("outer response id=%q want n4-mixed-ext", outerResp.Response.IntentionID)
 	}
 }
 

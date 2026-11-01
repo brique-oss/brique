@@ -22,8 +22,10 @@ package comm
 // Mirrors interface_http.go but serves HTTPS (TLS) and uses an HTTPS client.
 //
 // Doctrine:
-// - Transport security via TLS (no CA / no pinning for now).
-// - Identity/Signature verification stays OUT of this driver (handled at root/outerCtx policy level).
+// - Legacy message egress keeps its configured TLS behavior.
+// - Signed external egress requires normal certificate verification and binds
+//   TLS identity to the protected endpoint hostname (no mutable SNI override).
+// - Message identity/signature verification stays outside this driver.
 // - Server side: receives HTTPS POST, decodes JSON circulation.Message, pushes into CommLoop ingress.
 // - Client side: consumes rt.Egress, resolves destination URL from to.context (only @ext_...),
 //   and sends HTTPS POST with JSON body.
@@ -40,20 +42,24 @@ package comm
 // TLS config keys (suggested; add to configuration package as constants if you want):
 // - tls_cert_file: string (server)  (PEM)
 // - tls_key_file:  string (server)  (PEM)
+// - tls_ca_file: string (client) optional PEM bundle for private PKI
 // - tls_insecure_skip_verify: bool (client) default true for simplicity
 // - tls_server_name: string (client) optional SNI override
 //
-// NOTE: if you don't want InsecureSkipVerify, set it false and use proper certs.
+// Certificate verification is enabled by default. Disabling it is an explicit
+// development-only choice and is never accepted by the signed external adapter.
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +90,7 @@ type HttpsInterface struct {
 	// TLS
 	certFile string
 	keyFile  string
+	caFile   string
 
 	insecureSkipVerify bool
 	serverName         string
@@ -93,10 +100,13 @@ type HttpsInterface struct {
 	targets map[string]string // key: "ext_<pubkey>" -> baseURL (e.g. "https://host:8443/brique")
 
 	// Server side
-	server *http.Server
+	server   *http.Server
+	listener net.Listener
 
-	done chan struct{}
-	once sync.Once
+	done   chan struct{}
+	once   sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewHTTPSInterfaceRuntime
@@ -144,7 +154,6 @@ func NewHTTPSInterfaceRuntime(ic InterfaceCfg) (*InterfaceRuntime, error) {
 		Type:   ic.Type,
 		Driver: ic.Driver,
 		Cfg:    ic,
-		Status: InterfaceInit,
 	}
 
 	impl, err := newHTTPSInterfaceImpl(rt, ic)
@@ -297,13 +306,15 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 
 	certFile, _ := cfg[configuration.KeyTLSCertFile].(string)
 	keyFile, _ := cfg[configuration.KeyTLSKeyFile].(string)
+	caFile, _ := cfg[configuration.KeyTLSCAFile].(string)
 
-	insecure := true // default: simplest
+	insecure := false
 	if v, ok := cfg[configuration.KeyTLSInsecureSkipVerify].(bool); ok {
 		insecure = v
 	}
 	serverName, _ := cfg[configuration.KeyTLSServerName].(string)
 
+	transportCtx, cancel := context.WithCancel(context.Background())
 	h := &HttpsInterface{
 		rt:             rt,
 		mode:           mode,
@@ -320,17 +331,35 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 
 		certFile:           certFile,
 		keyFile:            keyFile,
+		caFile:             caFile,
 		insecureSkipVerify: insecure,
 		serverName:         serverName,
 
-		done: make(chan struct{}),
+		done:   make(chan struct{}),
+		ctx:    transportCtx,
+		cancel: cancel,
+	}
+
+	var rootCAs *x509.CertPool
+	if caFile != "" {
+		pemBytes, err := os.ReadFile(caFile)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("https iface %q: read tls_ca_file: %w", rt.Name, err)
+		}
+		rootCAs = x509.NewCertPool()
+		if !rootCAs.AppendCertsFromPEM(pemBytes) {
+			cancel()
+			return nil, fmt.Errorf("https iface %q: tls_ca_file contains no certificate", rt.Name)
+		}
 	}
 
 	// HTTPS client (TLS)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: h.insecureSkipVerify, // default
+			InsecureSkipVerify: h.insecureSkipVerify,
 			ServerName:         h.serverName,
+			RootCAs:            rootCAs,
 			MinVersion:         tls.VersionTLS12,
 		},
 	}
@@ -342,10 +371,17 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 	return h, nil
 }
 
+func (h *HttpsInterface) Directions() InterfaceDirections {
+	if h == nil {
+		return InterfaceDirections{}
+	}
+	return InterfaceDirections{ReadLoop: h.ingressEnabled, WriteLoop: h.egressEnabled}
+}
+
 // Start
 //
 // Functional role (Brique DSL):
-// - initialize HTTPS interface runtime, install ingress handler, require TLS cert/key for server modes, and mark runtime running.
+// - initialize HTTPS ingress, validate its certificate, and synchronously acquire its listener.
 //
 //
 // Expected Message Fields:
@@ -359,7 +395,7 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 //
 //
 // Outputs:
-// - no direct return value; observable outputs are server initialization and runtime status mutation.
+// - returns a setup error; on success TLS material and listener are ready but serving has not started yet.
 //
 // Produced Response Fields:
 // - none.
@@ -379,25 +415,24 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 //   - `ifacename`
 //
 // State/Storage Effects:
-// - validates presence of TLS cert/key for ingress mode.
+// - loads and validates the TLS cert/key for ingress mode.
 // - when ingress is enabled, allocates and stores an `http.Server` in `h.server`.
 // - installs the POST `<path>/msg` handler on a new serve mux.
-// - sets `h.rt.Status = InterfaceRunning`.
+// - opens and stores the TLS listener before returning success.
 //
 //
 // Contract:
-// - Setup phase only; network accept loop starts later in `ReadLoop`.
-// - Nil receiver or nil runtime is treated as a successful no-op.
-// - When ingress is disabled, no server is allocated and the runtime is marked running immediately.
-// - When ingress is enabled, missing TLS cert/key aborts startup with an error and leaves the runtime non-running.
+// - Setup phase only; serving starts later in `ReadLoop` on the acquired TLS listener.
+// - Nil receiver or nil runtime is an error.
+// - Runtime lifecycle state is owned by CommLoop, not by this driver.
+// - Missing or invalid TLS material aborts startup before readiness is published.
 
 func (h *HttpsInterface) Start() error {
 	if h == nil || h.rt == nil {
-		return nil
+		return errors.New("https iface: runtime is nil")
 	}
 
 	if !h.ingressEnabled {
-		h.rt.Status = InterfaceRunning
 		return nil
 	}
 
@@ -406,47 +441,19 @@ func (h *HttpsInterface) Start() error {
 		return fmt.Errorf("https iface %q: missing tls cert/key (cfg %q and %q)", h.rtName(), configuration.KeyTLSCertFile, configuration.KeyTLSKeyFile)
 	}
 
+	certificate, err := tls.LoadX509KeyPair(h.certFile, h.keyFile)
+	if err != nil {
+		return fmt.Errorf("https iface %q: load tls cert/key: %w", h.rtName(), err)
+	}
+
 	mux := http.NewServeMux()
 
-	// POST <path>/msg
 	msgPath := h.path + "/msg"
-	mux.HandleFunc(msgPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		defer r.Body.Close()
-
-		r.Body = http.MaxBytesReader(w, r.Body, h.readLimit)
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				http.Error(w, "control message exceeds read_limit; store large payloads in Matter substance", http.StatusRequestEntityTooLarge)
-				return
-			}
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		var msg circulation.Message
-		if err := json.Unmarshal(body, &msg); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Push into CommLoop global ingress.
-		if h.rt.Ingress != nil {
-			select {
-			case h.rt.Ingress <- IngressItem{Endpoint: h.rt.Type, IfaceName: h.rt.Name, Msg: msg}:
-			case <-h.done:
-			default:
-				// backpressure: drop
-			}
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
+	if h.rt.SignedExternalIngress != nil {
+		mux.HandleFunc(msgPath, signedExternalIngressHandler(h.rt, h.done, h.readLimit))
+	} else {
+		mux.HandleFunc(msgPath, controlIngressHandler(h.rt, h.done, h.readLimit))
+	}
 
 	h.server = &http.Server{
 		Addr:         h.addr,
@@ -457,11 +464,16 @@ func (h *HttpsInterface) Start() error {
 
 		// Server-side TLS config (minimal)
 		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
 		},
 	}
-
-	h.rt.Status = InterfaceRunning
+	listener, err := net.Listen("tcp", h.addr)
+	if err != nil {
+		h.server = nil
+		return fmt.Errorf("https iface %q: listen on %q: %w", h.rtName(), h.addr, err)
+	}
+	h.listener = tls.NewListener(listener, h.server.TLSConfig)
 	return nil
 }
 
@@ -497,7 +509,7 @@ func (h *HttpsInterface) Start() error {
 // - none.
 //
 // State/Storage Effects:
-// - when ingress is enabled and `h.server` is initialized, starts the HTTPS accept loop by calling `ListenAndServeTLS`.
+// - serves on the TLS listener already acquired by `Start`.
 //
 //
 // Contract:
@@ -512,12 +524,12 @@ func (h *HttpsInterface) ReadLoop() error {
 	if !h.ingressEnabled {
 		return nil
 	}
-	if h.server == nil {
+	if h.server == nil || h.listener == nil {
 		return fmt.Errorf("https iface %q: server not initialized", h.rtName())
 	}
 
-	// ServeTLS blocks until Shutdown/Close.
-	err := h.server.ListenAndServeTLS(h.certFile, h.keyFile)
+	// The certificate and listener were validated synchronously by Start.
+	err := h.server.Serve(h.listener)
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -564,7 +576,8 @@ func (h *HttpsInterface) ReadLoop() error {
 //
 //
 // Contract:
-// - Best-effort transport loop: resolution, serialization, request, and network errors drop the current message and continue.
+// - Explicit peer rejection is reported as definitive; network failure is reported as ambiguous.
+// - The loop never retries automatically and continues with the next message.
 // - Returns `nil` when egress is disabled or runtime egress is not wired.
 
 func (h *HttpsInterface) WriteLoop() error {
@@ -574,7 +587,7 @@ func (h *HttpsInterface) WriteLoop() error {
 	if !h.egressEnabled {
 		return nil
 	}
-	if h.rt == nil || h.rt.Egress == nil {
+	if h.rt == nil || (h.rt.Egress == nil && h.rt.SignedExternalEgress == nil) {
 		return nil
 	}
 
@@ -582,13 +595,25 @@ func (h *HttpsInterface) WriteLoop() error {
 		select {
 		case <-h.done:
 			return nil
+		case item, ok := <-h.rt.SignedExternalEgress:
+			if !ok {
+				return nil
+			}
+			outcome := h.sendSignedExternal(item)
+			if h.rt.ReportSignedExternalOutcome != nil {
+				h.rt.ReportSignedExternalOutcome(item, outcome)
+			}
 		case msg, ok := <-h.rt.Egress:
 			if !ok {
 				return nil
 			}
 
 			url, err := h.resolveEgressURL(msg)
-			if err != nil || url == "" {
+			if err != nil {
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
+				continue
+			}
+			if url == "" {
 				continue
 			}
 
@@ -596,31 +621,48 @@ func (h *HttpsInterface) WriteLoop() error {
 			if h.rt.PrepareEgress != nil {
 				prepared, err := h.rt.PrepareEgress(msg)
 				if err != nil {
+					reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 					continue
 				}
 				wireMsg = prepared
 			}
 			b, err := json.Marshal(wireMsg)
 			if err != nil {
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
-			if shared.ValidateControlMessageBytes(int64(len(b)), h.readLimit) != nil {
+			if err := shared.ValidateControlMessageBytes(int64(len(b)), h.readLimit); err != nil {
+				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
-
-			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
-			if err != nil {
-				continue
+			outcome := sendHTTPControl(h.ctx, h.client, url, b)
+			if outcome.Err != nil {
+				select {
+				case <-h.done:
+					return nil
+				default:
+				}
+				reportInterfaceEgressOutcome(h.rt, msg, outcome)
 			}
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, err := h.client.Do(req)
-			if err != nil {
-				continue
-			}
-			_ = resp.Body.Close()
 		}
 	}
+}
+
+func (h *HttpsInterface) sendSignedExternal(item signedExternalEgressItem) InterfaceEgressOutcome {
+	if h == nil || h.insecureSkipVerify || strings.TrimSpace(h.serverName) != "" {
+		return InterfaceEgressOutcome{Definitive: true, Err: fmt.Errorf("signed external egress requires verified TLS")}
+	}
+	endpoint, err := url.Parse(item.Endpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return InterfaceEgressOutcome{Definitive: true, Err: fmt.Errorf("invalid protected external endpoint")}
+	}
+	if len(item.Envelope) == 0 {
+		return InterfaceEgressOutcome{Definitive: true, Err: fmt.Errorf("empty signed external envelope")}
+	}
+	if err := shared.ValidateControlMessageBytes(int64(len(item.Envelope)), h.readLimit); err != nil {
+		return InterfaceEgressOutcome{Definitive: true, Err: err}
+	}
+	return sendHTTPControl(h.ctx, h.client, strings.TrimRight(item.Endpoint, "/")+"/msg", item.Envelope)
 }
 
 // Close
@@ -668,11 +710,17 @@ func (h *HttpsInterface) Close() error {
 		return nil
 	}
 	h.once.Do(func() { close(h.done) })
+	if h.cancel != nil {
+		h.cancel()
+	}
 
 	if h.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = h.server.Shutdown(ctx)
+	}
+	if h.listener != nil {
+		_ = h.listener.Close()
 	}
 	return nil
 }

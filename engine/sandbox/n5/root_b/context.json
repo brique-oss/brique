@@ -9,7 +9,6 @@
     ],
     "engine_config": {
       "communication": {
-        "instance_key_name": "instance-b",
         "wrapper_boundary": [],
         "websocket_listener": {
           "addr": ":19182"

@@ -19,15 +19,5 @@ package comm
 import "brique_engine/circulation"
 
 func (l *CommLoop) prepareInterfaceEgress(msg circulation.Message) (circulation.Message, error) {
-	wireMsg := rewriteExternalWireDestination(msg)
-	toStr := string(msgToContext(&msg))
-	if len(toStr) > 0 && toStr[0] == '@' {
-		tag, _, ok := parseAtAddress(toStr)
-		if ok && len(tag) > 4 && tag[:4] == "ext_" {
-			if err := l.updateIdentityAndSign(&wireMsg); err != nil {
-				return circulation.Message{}, err
-			}
-		}
-	}
-	return wireMsg, nil
+	return rewriteExternalWireDestination(msg), nil
 }

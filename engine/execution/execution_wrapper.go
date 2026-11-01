@@ -17,6 +17,10 @@
 package execution
 
 import (
+	"brique_engine/circulation"
+	"brique_engine/configuration"
+	"brique_engine/junction"
+	"brique_engine/shared"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,10 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"sync"
 	"time"
 )
 
@@ -127,6 +128,16 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperNotConfigured}, "wrapper not configured"))
 		return true
 	}
+
+	// Source-change detection reads the file system: do it before taking the
+	// wrapper state lock, and at most once per sourceCheckInterval.
+	var srcLatest time.Time
+	var srcErr error
+	if l.sourceCheckEnabled(cfg) &&
+		((cfg.Mode == configuration.ValueConfigStyleCompiled && cfg.Build != nil) || cfg.Mode == configuration.ValueConfigStyleInterpreted) {
+		srcLatest, srcErr = l.latestSourceModTime(cfg.Name)
+	}
+
 	st.Lock()
 
 	// Decide what must be done (explicit build/start split)
@@ -144,7 +155,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 
 	sourceChanged := false
 	if isCompiled && cfg.Build != nil {
-		changed, err := l.wrapperSourceNewerThanBuild(cfg.Name, st.BuiltAt)
+		changed, err := sourceChangedSince(st.BuiltAt, srcLatest, srcErr)
 		if err != nil && st.BuiltAt.IsZero() {
 			st.Unlock()
 			l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration,
@@ -156,9 +167,13 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 	}
 
 	runningStale := isCompiled && wrapperRuntimeStaleLocked(st)
+	// An interpreted process keeps running the code it was started with: it is
+	// stale when a source newer than that moment exists. A scan error means
+	// "unknown", never "stale".
+	interpretedStale := isInterpreted && srcErr == nil && interpretedRuntimeStaleLocked(st, srcLatest)
 
 	// Fast path: already ready (current running process) and not stale.
-	if st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil && !sourceChanged && !runningStale && !st.GetBuilding() && !st.GetStarting() {
+	if st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil && !sourceChanged && !runningStale && !interpretedStale && !st.GetBuilding() && !st.GetStarting() {
 		st.Unlock()
 		return false
 	}
@@ -213,6 +228,15 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		st.Lock()
 	}
 
+	// Interpreted runtime is stale when its sources changed since it started:
+	// restart it so the next call runs the current code.
+	if interpretedStale && st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil {
+		pid := markWrapperRestartingLocked(st)
+		st.Unlock()
+		killWrapperPIDBestEffort(pid)
+		st.Lock()
+	}
+
 	// startToDo:
 	// - interpreted: start whenever not running
 	// - compiled: start whenever not running AND already built
@@ -236,6 +260,12 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 	// - compiled already built: start is allowed even if buildToDo is false.
 	if needStart {
 		l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceWrpStartRequested)
+		// A previous process may still be alive (stop requested but not
+		// exited, or readiness failed). Never run two processes for one
+		// wrapper: the old one is killed, and forgetting its pid makes its
+		// exit watcher and kill timers inert for the new process.
+		oldPID := st.PID
+		st.PID = 0
 		st.SetStarting(true)
 		st.Ready = false
 		st.ReadyAt = time.Time{}
@@ -244,6 +274,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		st.StartedAt = time.Now()
 
 		st.Unlock()
+		l.killWrapperProc(wrapper, oldPID)
 		pid, err := l.startWrapperProcess(cfg)
 		if err != nil {
 			st.Lock()
@@ -256,8 +287,8 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 				close(ch)
 				st.ResetReadyCh()
 			}
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperRunFailed}, err.Error()))
 			st.Unlock()
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperRunFailed}, err.Error()))
 			return true
 		}
 
@@ -265,33 +296,45 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		st.Lock()
 		st.PID = pid
 		st.ProcState = junction.ProcRunning
+		l.watchWrapperProc(wrapper, pid)
 		ch := st.GetReadyCh()
+		// wrapper_ready may already have been processed between the process
+		// start and this point: it closes and clears the channel.
+		alreadySettled := st.Ready || st.ReadyErr != nil
 		st.Unlock()
 
-		if ch == nil {
+		if ch == nil && !alreadySettled {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure},
 				"internal error: wrapper started without ready channel"))
 			return true
 		}
-		if err := l.waitWrapperReady(ch, cfg.ReadyTimeoutMs); err != nil {
-			st.Lock()
-			st.SetStarting(false)
-			st.ProcState = junction.ProcUnknown
-			ch := st.GetReadyCh()
-			if ch != nil {
-				close(ch)
-				st.ResetReadyCh()
+		if ch != nil {
+			if err := l.waitWrapperReady(ch, cfg.ReadyTimeoutMs); err != nil {
+				// The process never became ready: do not leave it running.
+				l.killWrapperProc(wrapper, pid)
+				st.Lock()
+				st.SetStarting(false)
+				st.ProcState = junction.ProcUnknown
+				ch := st.GetReadyCh()
+				if ch != nil {
+					close(ch)
+					st.ResetReadyCh()
+				}
+				stopped := err.Error() == "stopped"
+				if stopped {
+					st.ReadyErr = fmt.Errorf("wrapper context stopped")
+				} else {
+					st.ReadyErr = fmt.Errorf("wrapper readiness timeout")
+				}
+				st.Unlock()
+				if stopped {
+					l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonContextStopped}, "Context has been stopped"))
+				} else {
+					l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperTimeout}, "wrapper readiness timeout"))
+				}
+				return true
 			}
-			if err.Error() == "stopped" {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonContextStopped}, "Context has been stopped"))
-				st.ReadyErr = fmt.Errorf("wrapper context stopped")
-			} else {
-				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperTimeout}, "wrapper readiness timeout"))
-				st.ReadyErr = fmt.Errorf("wrapper readiness timeout")
-			}
-			st.Unlock()
-			return true
 		}
 
 		l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceWrpStartDone)
@@ -300,10 +343,13 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		if isCompiled {
 			st.RunningBuiltAt = st.BuiltAt
 		}
+		if isInterpreted {
+			st.RunningSourceAt = srcLatest
+		}
 
-		if st.ReadyErr != nil {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, st.ReadyErr.Error()))
+		if readyErr := st.ReadyErr; readyErr != nil {
 			st.Unlock()
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, readyErr.Error()))
 			return true
 		}
 		st.Unlock()
@@ -332,17 +378,14 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 			return true
 		}
 		st.Lock()
-		if st.ReadyErr != nil {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, st.ReadyErr.Error()))
-			st.Unlock()
+		readyErr := st.ReadyErr
+		ready := st.ProcState == junction.ProcRunning && st.Ready
+		st.Unlock()
+		if readyErr != nil {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, readyErr.Error()))
 			return true
 		}
-		if st.ProcState == junction.ProcRunning && st.Ready {
-			st.Unlock()
-			return false
-		}
-		st.Unlock()
-		return true
+		return !ready
 	}
 }
 
@@ -350,18 +393,8 @@ func (l *ExecutionLoop) wrapperSourceNewerThanBuild(wrapper string, builtAt time
 	if builtAt.IsZero() {
 		return true, nil
 	}
-	sourceDir, ok := l.wrapperSourceDir(wrapper)
-	if !ok {
-		return false, fmt.Errorf("wrapper %s: missing context dir", wrapper)
-	}
-	latest, err := latestModTimeInTree(sourceDir)
-	if err != nil {
-		return false, err
-	}
-	if latest.IsZero() {
-		return false, nil
-	}
-	return latest.After(builtAt), nil
+	latest, err := l.latestSourceModTime(wrapper)
+	return sourceChangedSince(builtAt, latest, err)
 }
 
 func latestModTimeInTree(root string) (time.Time, error) {
@@ -370,7 +403,18 @@ func latestModTimeInTree(root string) (time.Time, error) {
 		if err != nil {
 			return err
 		}
-		if d == nil || d.IsDir() {
+		if d == nil {
+			return nil
+		}
+		if d.IsDir() {
+			// Interpreters write bytecode caches into the source tree while
+			// running; counting them would see every start as an edit.
+			if d.Name() == "__pycache__" || d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".pyc") {
 			return nil
 		}
 		info, err := d.Info()
@@ -405,6 +449,19 @@ func wrapperRuntimeStaleLocked(st *junction.WrapperState) bool {
 	return st.RunningBuiltAt.Before(st.BuiltAt)
 }
 
+// interpretedRuntimeStaleLocked reports whether the running interpreted process
+// predates the newest source. Without a recorded start reference there is
+// nothing to compare against, so it is never reported stale.
+func interpretedRuntimeStaleLocked(st *junction.WrapperState, latest time.Time) bool {
+	if st == nil || latest.IsZero() || st.RunningSourceAt.IsZero() {
+		return false
+	}
+	if st.ProcState != junction.ProcRunning || !st.Ready || st.ReadyErr != nil {
+		return false
+	}
+	return latest.After(st.RunningSourceAt)
+}
+
 func markWrapperRestartingLocked(st *junction.WrapperState) int {
 	if st == nil {
 		return 0
@@ -417,6 +474,7 @@ func markWrapperRestartingLocked(st *junction.WrapperState) int {
 	st.ReadyAt = time.Time{}
 	st.ReadyErr = nil
 	st.RunningBuiltAt = time.Time{}
+	st.RunningSourceAt = time.Time{}
 	st.SetStarting(false)
 	ch := st.GetReadyCh()
 	if ch != nil {
@@ -527,6 +585,14 @@ func (l *ExecutionLoop) buildWrapper(cfg WrapperRuntimeCfg) error {
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	defer cancel()
+	// A context stop must not leave a build running behind it.
+	go func() {
+		select {
+		case <-l.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	buildCmd := b.Cmd
 	if cfg.Mode == configuration.ValueConfigStyleCompiled {
@@ -653,6 +719,11 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 		run.Cmd = rewriteCmdForVenv(run.Cmd, venvBin)
 	}
 	cmd := buildRunCommand(run)
+	if run.Shell {
+		// A shell sits between the engine and the wrapper: put the whole tree
+		// in one process group so termination does not leave children behind.
+		setWrapperProcGroup(cmd)
+	}
 
 	// Runtime cwd is derived from context ownership, never from config.
 	switch cfg.Mode {
@@ -663,7 +734,7 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	}
 
 	// environment: inherit current process env + engine/runtime overrides
-	cmd.Env = mergeEnv(os.Environ(), l.wrapperRuntimeEnv(cfg.Name, cfg.Run.Env))
+	cmd.Env = mergeEnv(os.Environ(), l.wrapperLaunchEnv(cfg.Name, cfg.Run.Env))
 
 	// Wrapper runtimes are long-lived child processes. Do not inherit the test
 	// process stdout/stderr directly, otherwise lingering wrapper shutdown can
@@ -678,12 +749,10 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 		return 0, fmt.Errorf("wrapper %s: started but no process handle", cfg.Name)
 	}
 	pid = cmd.Process.Pid
-	// Execution supervises wrappers by pid only. Releasing the started process
-	// handle avoids leaking unreaped os/exec bookkeeping across long-lived test
-	// suites while preserving later best-effort stop/kill by pid.
-	if err := cmd.Process.Release(); err != nil {
-		return 0, fmt.Errorf("wrapper %s: release process handle: %w", cfg.Name, err)
-	}
+	// The handle is kept (no Release): the process must be reaped once it exits
+	// and killed as a group when it runs under a shell. The caller records the
+	// pid in the wrapper state and then calls watchWrapperProc.
+	l.registerProc(cfg.Name, &wrapperProc{pid: pid, cmd: cmd, group: run.Shell, exited: make(chan struct{})})
 	return pid, nil
 }
 
@@ -841,10 +910,10 @@ func venvBinDirName() string {
 // Each venv is created and maintained by hand (pip install -r requirements.txt);
 // this helper only locates an already-existing bin dir, never creates one.
 //
-// - envName == ""  => <instance_parent>/venv/<bin-dir> (single shared default env).
-// - envName != ""  => <instance_parent>/envs/<envName>/venv/<bin-dir> (named env, for
-//   wrappers whose dependencies are incompatible with the default env).
-// - <bin-dir> is "Scripts" on Windows, "bin" on macOS/Linux.
+//   - envName == ""  => <instance_parent>/venv/<bin-dir> (single shared default env).
+//   - envName != ""  => <instance_parent>/envs/<envName>/venv/<bin-dir> (named env, for
+//     wrappers whose dependencies are incompatible with the default env).
+//   - <bin-dir> is "Scripts" on Windows, "bin" on macOS/Linux.
 func (l *ExecutionLoop) instancePythonVenvBin(envName string) (string, bool) {
 	if l == nil || l.frame == nil || strings.TrimSpace(l.frame.ContextDir) == "" {
 		return "", false
@@ -933,7 +1002,29 @@ func rewriteCmdForVenv(cmd []string, venvBin string) []string {
 	}
 }
 
+// wrapperSecretIssuer is implemented by the registry that owns the websocket
+// listener. A registry without one (a routing-only stub) launches wrappers with
+// the plain base URL, as before the secret existed.
+type wrapperSecretIssuer interface {
+	IssueWrapperSecret(owner shared.ContextAddr, wrapper string) (string, error)
+	RevokeWrapperSecret(owner shared.ContextAddr, wrapper string)
+}
+
+// wrapperRuntimeEnv is the environment of a wrapper that is only built, not run:
+// it never carries a secret.
 func (l *ExecutionLoop) wrapperRuntimeEnv(wrapper string, override map[string]string) map[string]string {
+	return l.wrapperEnv(wrapper, override, false)
+}
+
+// wrapperLaunchEnv is the environment of a wrapper process about to run. It
+// carries a fresh per-launch secret in BRIQUE_WS_URL (model §8.3): the previous
+// launch's secret stops working, and the three wrapper libraries need no change
+// because they already append their path to the base URL.
+func (l *ExecutionLoop) wrapperLaunchEnv(wrapper string, override map[string]string) map[string]string {
+	return l.wrapperEnv(wrapper, override, true)
+}
+
+func (l *ExecutionLoop) wrapperEnv(wrapper string, override map[string]string, launch bool) map[string]string {
 	out := map[string]string{}
 	if l != nil && l.frame != nil && strings.TrimSpace(l.frame.ContextDir) != "" {
 		out["BRIQUE_CTX_DIR"] = l.frame.ContextDir
@@ -942,6 +1033,11 @@ func (l *ExecutionLoop) wrapperRuntimeEnv(wrapper string, override map[string]st
 	if addr := l.webSocketListenerAddr(); addr != "" {
 		out["BRIQUE_WS_ADDR"] = addr
 		if baseURL := webSocketBaseURL(addr); baseURL != "" {
+			if launch {
+				if secret, ok := l.issueWrapperSecret(wrapper); ok {
+					baseURL += "/k/" + secret
+				}
+			}
 			out["BRIQUE_WS_URL"] = baseURL
 		}
 	}
@@ -965,6 +1061,28 @@ func (l *ExecutionLoop) wrapperRuntimeEnv(wrapper string, override map[string]st
 
 type webSocketListenerAddrProvider interface {
 	WebSocketListenerAddr() string
+}
+
+func (l *ExecutionLoop) issueWrapperSecret(wrapper string) (string, bool) {
+	if l == nil || l.frame == nil || l.frame.CtxCommReg == nil || strings.TrimSpace(wrapper) == "" {
+		return "", false
+	}
+	issuer, ok := l.frame.CtxCommReg.(wrapperSecretIssuer)
+	if !ok {
+		return "", false
+	}
+	secret, err := issuer.IssueWrapperSecret(shared.ContextAddr(l.frame.CtxId), wrapper)
+	return secret, err == nil
+}
+
+// revokeWrapperSecret invalidates the secret of a wrapper that stopped.
+func (l *ExecutionLoop) revokeWrapperSecret(wrapper string) {
+	if l == nil || l.frame == nil || l.frame.CtxCommReg == nil {
+		return
+	}
+	if issuer, ok := l.frame.CtxCommReg.(wrapperSecretIssuer); ok {
+		issuer.RevokeWrapperSecret(shared.ContextAddr(l.frame.CtxId), wrapper)
+	}
 }
 
 func (l *ExecutionLoop) webSocketListenerAddr() string {
@@ -1287,6 +1405,13 @@ func (l *ExecutionLoop) getWrapperCfg(name string) (WrapperRuntimeCfg, bool) {
 // - Watchdog force-kill is best effort and only runs when `StopTimeoutMs > 0` and a PID is known.
 
 func (l *ExecutionLoop) stopAllWrappersBestEffort() {
+	type target struct {
+		name  string
+		pid   int
+		grace time.Duration
+	}
+	var targets []target
+
 	for i := range l.cfg.Wrappers {
 		w := l.cfg.Wrappers[i]
 		if w.Name == "" {
@@ -1303,79 +1428,24 @@ func (l *ExecutionLoop) stopAllWrappersBestEffort() {
 		pid := st.PID
 		st.Unlock()
 
-		// Emit stop intention via Comm
-		l.emitToComm(circulation.Message{
-			Kind: circulation.ValueKindIntention,
-			Intention: circulation.Intention{
-				IntentionID: circulation.NewIntentionID(),
-				From: circulation.Address{
-					Context: circulation.ContextID(l.frame.CtxId),
-					Type:    circulation.ValueTypeExecution,
-					Cap:     execCapWrapperStop,
-				},
-				To: circulation.Address{
-					Context: circulation.ContextID("@wrapper_" + w.Name + ":/"),
-					Type:    circulation.ValueTypeExecution,
-					Cap:     execCapWrapperStop,
-				},
-				Params: map[string]any{},
-			},
-		})
+		// Emit stop intention via Comm. Shutdown runs after `done` is closed,
+		// so the emission must not observe it (see emitToCommShutdown).
+		l.emitToCommShutdown(l.wrapperStopIntention(w.Name))
 
-		// If wrapper does not stop within StopTimeoutMs, force-kill the process.
 		if w.StopTimeoutMs > 0 && pid > 0 {
-			timeout := time.Duration(w.StopTimeoutMs) * time.Millisecond
-			l.wg.Add(1)
-			go func(wrapperName string, pid int, timeout time.Duration) {
-				defer l.wg.Done()
-				t := time.NewTimer(timeout)
-				defer t.Stop()
-				select {
-				case <-l.done:
-					return
-				case <-t.C:
-				}
-
-				st, ok := l.frame.Wrappers[wrapperName]
-				if !ok {
-					return
-				}
-				st.Lock()
-				// Still stopping? then force kill.
-				shouldKill := (st.ProcState == junction.ProcStopping || st.ProcState == junction.ProcRunning || st.ProcState == junction.ProcStarting)
-				st.Unlock()
-				if !shouldKill {
-					return
-				}
-
-				p, err := os.FindProcess(pid)
-				if err == nil && p != nil {
-					_ = p.Kill()
-				}
-
-				// Best-effort state transition: we don't have a wrapper_exited signal yet.
-				st.Lock()
-				// If still in a "live" state, mark as exited after forced kill.
-				if st.ProcState == junction.ProcStopping || st.ProcState == junction.ProcRunning || st.ProcState == junction.ProcStarting {
-					st.ProcState = junction.ProcExited
-					st.LastExitAt = time.Now()
-					st.LastError = fmt.Errorf("wrapper %s: killed after stop timeout", wrapperName)
-					st.PID = 0
-					st.Ready = false
-					st.SetStarting(false)
-					st.SetBuilding(false)
-					st.ReadyAt = time.Time{}
-					if st.ReadyErr == nil {
-						st.ReadyErr = st.LastError
-					}
-					ch := st.GetReadyCh()
-					if ch != nil {
-						close(ch)
-						st.ResetReadyCh()
-					}
-				}
-				st.Unlock()
-			}(w.Name, pid, timeout)
+			targets = append(targets, target{w.Name, pid, time.Duration(w.StopTimeoutMs) * time.Millisecond})
 		}
 	}
+
+	// If a wrapper does not stop within StopTimeoutMs, force-kill it. Wrappers
+	// are awaited together so shutdown is bounded by the largest timeout.
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t target) {
+			defer wg.Done()
+			l.terminateWrapper(t.name, t.pid, t.grace, false)
+		}(t)
+	}
+	wg.Wait()
 }

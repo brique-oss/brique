@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,29 +30,84 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
+	"brique_engine/security/policysrc"
+	"brique_engine/security/trust"
 	"brique_engine/shared"
 )
 
 const n7RemotePubPlaceholder = "@ext_REMOTE_PUBKEY:"
 
 func newEngineN7Harness(t *testing.T) *engineN5Harness {
+	if os.Getenv(n7RestrictivePolicyEnv) != "" {
+		// The whole catalogue again, under a policy that is a verb policy on the peer's
+		// subtree only (see TestEngine_N7_WholeCatalogueUnderARestrictivePolicy).
+		n5SourceForB = n7RestrictiveSource
+		defer func() { n5SourceForB = nil }()
+	}
+	return newEngineN7HarnessWith(t, nil)
+}
+
+const n7RestrictivePolicyEnv = "BRIQUE_N7_RESTRICTIVE_POLICY"
+
+// n7RestrictiveSource: read everywhere on B (the projection is queried from its root),
+// and every other verb on the beta child's subtree only (control also on the root itself).
+var n7RestrictiveSource = func() func(string) *policysrc.Source {
+	subtree := policysrc.TargetList{"/root/beta_child/**"}
+	// These flows address B's root to rebuild and query the projection (query scoped to the
+	// beta child by a parameter): recursive reading and control are needed ON the root,
+	// everything that changes something stays inside the subtree.
+	return n5VerbSource(policysrc.Grant{Read: policysrc.TargetList{"/root/**"}}, policysrc.Grant{Write: subtree}, policysrc.Grant{Create: subtree},
+		policysrc.Grant{Define: subtree}, policysrc.Grant{Call: subtree}, policysrc.Grant{Control: subtree},
+		policysrc.Grant{Control: policysrc.TargetList{"/root"}})
+}()
+
+// n7NoControlSource is the same policy without control: the projection of meaning can
+// be read but not rebuilt by the peer.
+var n7NoControlSource = func() func(string) *policysrc.Source {
+	subtree := policysrc.TargetList{"/root/beta_child/**"}
+	return n5VerbSource(policysrc.Grant{Read: policysrc.TargetList{"/root/**"}}, policysrc.Grant{Write: subtree}, policysrc.Grant{Create: subtree},
+		policysrc.Grant{Define: subtree}, policysrc.Grant{Call: subtree})
+}()
+
+// TestEngine_N7_WholeCatalogueUnderARestrictivePolicy runs every N7 composition test
+// again, in a child run of this test binary, with B granting A only the verbs above.
+func TestEngine_N7_WholeCatalogueUnderARestrictivePolicy(t *testing.T) {
+	if os.Getenv(n7RestrictivePolicyEnv) != "" {
+		t.Skip("already inside the restrictive run")
+	}
+	if testing.Short() {
+		t.Skip("re-runs the whole N7 catalogue")
+	}
+	command := exec.Command(os.Args[0], "-test.run", "^TestEngine_N7_(ENG|ENG_CONC)_", "-test.count=1")
+	command.Env = append(os.Environ(), n7RestrictivePolicyEnv+"=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the N7 catalogue fails under a restrictive policy: %v\n%s", err, tailLines(string(output), 60))
+	}
+	if !strings.Contains(string(output), "PASS") {
+		t.Fatalf("unexpected output:\n%s", tailLines(string(output), 20))
+	}
+}
+
+func tailLines(text string, n int) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// newEngineN7HarnessWith is the N7 composition harness with the policy B grants to A
+// chosen by the caller (nil: permissive).
+func newEngineN7HarnessWith(t *testing.T, allowB func(trust.Catalog) trust.PermissionSet) *engineN5Harness {
 	t.Helper()
 
 	rootADir, rootBDir := copyN5SandboxRoots(t)
 	installGenericPythonWrapperN5(t, rootADir)
 	installGenericPythonWrapperN5(t, rootBDir)
-	configDir := filepath.Join(t.TempDir(), "brique-config")
-	t.Setenv("BRIQUE_CONFIG_DIR", configDir)
-
-	pubA, err := writeN5IdentityKey(configDir, "instance-a")
-	if err != nil {
-		t.Fatalf("write identity key A: %v", err)
-	}
-	pubB, err := writeN5IdentityKey(configDir, "instance-b")
-	if err != nil {
-		t.Fatalf("write identity key B: %v", err)
-	}
-	patchN7DSLRefs(t, rootADir, pubB)
+	const principalA = "instance-a"
+	const principalB = "instance-b"
+	patchN7DSLRefs(t, rootADir, principalB)
 
 	certA, keyA, err := writeN5TLSCert(t.TempDir(), "127.0.0.1")
 	if err != nil {
@@ -61,6 +117,7 @@ func newEngineN7Harness(t *testing.T) *engineN5Harness {
 	if err != nil {
 		t.Fatalf("write tls cert B: %v", err)
 	}
+	t.Setenv("SSL_CERT_FILE", n5TLSCAPath)
 
 	addrA := reserveLocalAddr(t)
 	addrB := reserveLocalAddr(t)
@@ -69,16 +126,26 @@ func newEngineN7Harness(t *testing.T) *engineN5Harness {
 	wsURLs := map[string]string{}
 	patchN5ContextsForRuntime(t, rootADir, wsURLs)
 	patchN5ContextsForRuntime(t, rootBDir, wsURLs)
-	patchN5RootRuntime(t, filepath.Join(rootADir, "context.json"), addrA, wsAddrA, certA, keyA, pubB, "https://"+addrB+"/brique")
-	patchN5RootRuntime(t, filepath.Join(rootBDir, "context.json"), addrB, wsAddrB, certB, keyB, pubA, "https://"+addrA+"/brique")
+	patchN5RootRuntime(t, filepath.Join(rootADir, "context.json"), addrA, wsAddrA, certA, keyA, principalB, "https://"+addrB+"/brique")
+	patchN5RootRuntime(t, filepath.Join(rootBDir, "context.json"), addrB, wsAddrB, certB, keyB, principalA, "https://"+addrA+"/brique")
 
 	regA := junction.NewContextCommRegistry()
 	regB := junction.NewContextCommRegistry()
+	kit := startN5SecurityKit(t, rootADir, rootBDir, regA, regB, "https://"+addrB+"/brique", "https://"+addrA+"/brique", allowB)
+	managerA, managerB := kit.managerA, kit.managerB
+	t.Cleanup(func() {
+		if err := managerA.Close(); err != nil {
+			t.Errorf("close n7 security manager A: %v", err)
+		}
+		if err := managerB.Close(); err != nil {
+			t.Errorf("close n7 security manager B: %v", err)
+		}
+	})
 
 	sinkA := make(chan circulation.Message, 16)
 	sinkB := make(chan circulation.Message, 16)
-	regA.Register(shared.ContextAddr(n5SinkAID), sinkA, n5SinkAExt)
-	regB.Register(shared.ContextAddr(n5SinkBID), sinkB, n5SinkBExt)
+	registerContextTestSink(regA, shared.ContextAddr(n5SinkAID), sinkA, n5SinkAExt)
+	registerContextTestSink(regB, shared.ContextAddr(n5SinkBID), sinkB, n5SinkBExt)
 
 	rootA, err := NewContextLoop(rootADir, shared.RootContextID, regA)
 	if err != nil {
@@ -112,8 +179,9 @@ func newEngineN7Harness(t *testing.T) *engineN5Harness {
 		regB:     regB,
 		sinkA:    sinkA,
 		sinkB:    sinkB,
-		pubA:     pubA,
-		pubB:     pubB,
+		kit:      kit,
+		pubA:     principalA,
+		pubB:     principalB,
 		rootADir: rootADir,
 		rootBDir: rootBDir,
 		wsURLs:   wsURLs,
@@ -137,6 +205,8 @@ func patchN7DSLRefs(t *testing.T, rootDir, remotePub string) {
 			return nil
 		}
 		replaced := bytes.ReplaceAll(b, []byte(n7RemotePubPlaceholder), []byte("@ext_"+remotePub+":"))
+		replaced = bytes.ReplaceAll(replaced, []byte("@ext_"+remotePub+":/root-b"), []byte("@ext_"+remotePub+":/root"))
+		replaced = bytes.ReplaceAll(replaced, []byte("@ext_"+remotePub+":/beta-child"), []byte("@ext_"+remotePub+":/root/beta_child"))
 		return os.WriteFile(path, replaced, 0o644)
 	})
 	if err != nil {
@@ -279,8 +349,8 @@ func TestEngine_N7_ENG_03_DSLDirectRemoteEngineNativeComposition(t *testing.T) {
 	if ctxPayload[circulation.KeyContextId] != n5BetaChildIDB {
 		t.Fatalf("context_id=%#v want %s", ctxPayload[circulation.KeyContextId], n5BetaChildIDB)
 	}
-	if out.Response.Identity.PubKey != h.pubB || strings.TrimSpace(out.Response.Identity.Signature) == "" {
-		t.Fatalf("response identity=%#v want remote pubkey/signature", out.Response.Identity)
+	if out.Response.Identity.ID != "" || out.Response.Identity.Kind != "" {
+		t.Fatalf("response contains embedded external identity: %#v", out.Response.Identity)
 	}
 	recvNoN5Msg(t, h.sinkA, 150*time.Millisecond, "single n7 remote engine terminal emission")
 }
@@ -512,7 +582,7 @@ func TestEngine_N7_ENG_11_WrapperReceivesParamsAndMatterInputs(t *testing.T) {
 	}
 	secondaryContext, _ := secondary["context"].(string)
 	secondaryRef, _ := secondary["ref"].(string)
-	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/beta-child") || secondary["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
+	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/root/beta_child") || secondary["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
 		t.Fatalf("unexpected secondary matter input: %#v", secondary)
 	}
 }
@@ -544,7 +614,7 @@ func TestEngine_N7_ENG_12_DSLBuildsParamsAndMatterInputsFromPreviousCapacity(t *
 	}
 	secondaryContext, _ := secondary["context"].(string)
 	secondaryRef, _ := secondary["ref"].(string)
-	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/beta-child") || secondary["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
+	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/root/beta_child") || secondary["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
 		t.Fatalf("unexpected dynamic secondary matter input: %#v", secondary)
 	}
 }
@@ -579,7 +649,7 @@ func TestEngine_N7_ENG_13_AggregatedParamsAndMixedMattersFromPreviousCapacities(
 	secondaryInput := mustN5PayloadMap(t, matters["secondary"])
 	secondaryContext, _ := secondaryInput["context"].(string)
 	secondaryRef, _ := secondaryInput["ref"].(string)
-	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/beta-child") || secondaryInput["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
+	if !strings.HasPrefix(secondaryContext, "@ext_") || !strings.HasSuffix(secondaryContext, ":/root/beta_child") || secondaryInput["id"] != "m_chain_remote" || !strings.HasPrefix(secondaryRef, secondaryContext+"/") || !strings.HasSuffix(secondaryRef, "/m_chain_remote") {
 		t.Fatalf("unexpected aggregated secondary input: %#v", secondaryInput)
 	}
 	resolved := mustN5PayloadMap(t, payload["resolved_matters"])
@@ -801,7 +871,7 @@ func TestEngine_N7_ENG_20_DSLQueriesThenReadsRemoteMeaningBeforeBranch(t *testin
 	h := newEngineN7Harness(t)
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n7-preflight-remote-meaning-rebuild",
-		"@ext_"+h.pubB+":/root-b",
+		"@ext_"+h.pubB+":/root",
 		circulation.ValueTypeReflexive,
 		"meaning.rebuild",
 		n5SinkAID,
@@ -813,7 +883,7 @@ func TestEngine_N7_ENG_20_DSLQueriesThenReadsRemoteMeaningBeforeBranch(t *testin
 	}
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n7-preflight-remote-meaning-query",
-		"@ext_"+h.pubB+":/root-b",
+		"@ext_"+h.pubB+":/root",
 		circulation.ValueTypeReflexive,
 		"meaning.query",
 		n5SinkAID,
@@ -835,7 +905,7 @@ func TestEngine_N7_ENG_20_DSLQueriesThenReadsRemoteMeaningBeforeBranch(t *testin
 	}
 	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(
 		"n7-preflight-remote-read-meaning",
-		"@ext_"+h.pubB+":/beta-child",
+		"@ext_"+h.pubB+":/root/beta_child",
 		circulation.ValueTypeReflexive,
 		"read.meaning",
 		n5SinkAID,
@@ -1053,11 +1123,11 @@ func TestEngine_N7_ENG_26_ConcurrentReflectiveFlowsRemainCorrelated(t *testing.T
 		seen[out.Response.IntentionID] = out
 	}
 
-	remoteBranch, ok := seen["n7-conc-reflect-remote-branch"]
+	remoteBranch, ok := seen[n5TestIntentionID("n7-conc-reflect-remote-branch")]
 	if !ok {
 		t.Fatalf("missing remote branch response: %#v", seen)
 	}
-	parallelMix, ok := seen["n7-conc-reflect-parallel"]
+	parallelMix, ok := seen[n5TestIntentionID("n7-conc-reflect-parallel")]
 	if !ok {
 		t.Fatalf("missing parallel reflective response: %#v", seen)
 	}
@@ -1157,7 +1227,7 @@ func TestEngine_N7_ENG_30_WrapperComposesLocalAndRemoteReflectiveReads(t *testin
 		map[string]any{
 			"local_name":  "sandbox.echo",
 			"remote_name": "sandbox.echo",
-			"to_context":  "@ext_" + h.pubB + ":/root-b",
+			"to_context":  "@ext_" + h.pubB + ":/root",
 			"ctx_id":      n5BetaChildIDB,
 		},
 	))
@@ -1318,7 +1388,7 @@ func TestEngine_N7_ENG_36_WrapperTraceUserThenRemoteWrapperInspectsIt(t *testing
 		t.Fatalf("wrapper trace.user should report accepted=true: %#v", tracePayload)
 	}
 
-	remoteAlphaCtx := "@ext_" + h.pubA + ":/alpha-child"
+	remoteAlphaCtx := "@ext_" + h.pubA + ":/root/alpha_child"
 	waitFor(t, 3*time.Second, func() bool {
 		sendToN5Context(t, h.regB, n5BetaChildIDB, mkN5Call(
 			"n7-remote-wrapper-trace-inspect",
@@ -1373,7 +1443,7 @@ func TestEngine_N7_ENG_CONC_01_ConcurrentCompositeFlowsRemainSeparated(t *testin
 	}
 	for i := 0; i < 2; i++ {
 		id := fmt.Sprintf("n7-conc-ok-%d", i)
-		out, ok := seen[id]
+		out, ok := seen[n5TestIntentionID(id)]
 		if !ok {
 			t.Fatalf("missing response %s", id)
 		}
@@ -1409,11 +1479,11 @@ func TestEngine_N7_ENG_CONC_02_FailingCompositeFlowDoesNotCorruptSuccessfulOne(t
 		seen[out.Response.IntentionID] = out
 	}
 
-	success, ok := seen["n7-conc-success"]
+	success, ok := seen[n5TestIntentionID("n7-conc-success")]
 	if !ok {
 		t.Fatalf("missing success response: %#v", seen)
 	}
-	fail, ok := seen["n7-conc-fail"]
+	fail, ok := seen[n5TestIntentionID("n7-conc-fail")]
 	if !ok {
 		t.Fatalf("missing fail response: %#v", seen)
 	}
@@ -1423,5 +1493,55 @@ func TestEngine_N7_ENG_CONC_02_FailingCompositeFlowDoesNotCorruptSuccessfulOne(t
 	}
 	if fail.Response.Status != circulation.ValueStatusError || fail.Response.Error == nil {
 		t.Fatalf("unexpected fail response: %#v", fail)
+	}
+}
+
+// N7 composition under a policy that is not permissive: the remote leg of a DSL flow
+// is decided by what B grants to A, like any other call.
+func TestEngine_N7_ENG_POLICY_01_RemoteLegFollowsWhatThePeerGrants(t *testing.T) {
+	call := func(h *engineN5Harness, label string) circulation.Message {
+		sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call(label, n5AlphaChildIDA, circulation.ValueTypeUser,
+			"sandbox.dsl.remote.engine", n5SinkAID, map[string]any{"message": label}))
+		return recvN5Msg(t, h.sinkA, label)
+	}
+	t.Run("granted: the flow completes", func(t *testing.T) {
+		h := newEngineN7HarnessWith(t, n5OnlyReadState)
+		out := call(h, "n7-policy-granted")
+		if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK {
+			t.Fatalf("the flow was refused although the remote capacity is granted: %#v error=%+v", out, out.Response.Error)
+		}
+		recvNoN5Msg(t, h.sinkA, 150*time.Millisecond, "single terminal emission")
+	})
+	t.Run("not granted: the flow ends once, with a refusal that leaks nothing", func(t *testing.T) {
+		h := newEngineN7HarnessWith(t, n5Allow(map[string][]string{"reflexive": {"read.structure"}}))
+		out := call(h, "n7-policy-refused")
+		if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusError {
+			t.Fatalf("the flow was not refused: %#v", out)
+		}
+		if out.Response.Payload != nil && len(out.Response.Payload) > 0 {
+			t.Fatalf("a refused flow carries data: %#v", out.Response.Payload)
+		}
+		recvNoN5Msg(t, h.sinkA, 300*time.Millisecond, "single terminal emission")
+	})
+}
+
+// The flows that rebuild the remote projection of meaning need control on that context:
+// without it they end with the canonical refusal, while the flows that only read still run.
+func TestEngine_N7_ENG_POLICY_02_RebuildingARemoteProjectionNeedsControl(t *testing.T) {
+	n5SourceForB = n7NoControlSource
+	h := newEngineN7HarnessWith(t, nil)
+	n5SourceForB = nil
+	sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call("n7-no-control", n5AlphaChildIDA, circulation.ValueTypeUser,
+		"sandbox.dsl.switch.remote.meaning", n5SinkAID, map[string]any{}))
+	out := recvN5Msg(t, h.sinkA, "n7 no control")
+	if out.Response.Status != circulation.ValueStatusError || out.Response.Error == nil || out.Response.Error.Code != "unauthorized" {
+		t.Fatalf("a rebuild of the remote projection was allowed without control: %#v error=%+v", out, out.Response.Error)
+	}
+	recvNoN5Msg(t, h.sinkA, 200*time.Millisecond, "single terminal emission")
+
+	sendToN5Context(t, h.regA, n5AlphaChildIDA, mkN5Call("n7-no-control-read", n5AlphaChildIDA, circulation.ValueTypeUser,
+		"sandbox.dsl.remote.engine", n5SinkAID, map[string]any{"message": "read-only"}))
+	if out := recvN5Msg(t, h.sinkA, "n7 read without control"); out.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("a read-only flow was refused without control: %#v error=%+v", out, out.Response.Error)
 	}
 }

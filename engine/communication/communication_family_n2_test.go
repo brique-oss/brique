@@ -30,14 +30,14 @@ type commFamilyN2Harness struct {
 	loop *CommLoop
 	reg  *mockCommReg
 
-	traceCh  chan circulation.Message
-	execCh   chan circulation.Message
-	ctrlCh   chan circulation.Message
-	matterCh chan circulation.Message
+	traceCh  chan junction.Delivery
+	execCh   chan junction.Delivery
+	ctrlCh   chan junction.Delivery
+	matterCh chan junction.Delivery
 
-	rootCh     chan circulation.Message
-	targetCh   chan circulation.Message
-	boundaryCh chan circulation.Message
+	rootCh     chan junction.Delivery
+	targetCh   chan junction.Delivery
+	boundaryCh chan junction.Delivery
 
 	uiCh      chan circulation.Message
 	wrapperCh chan circulation.Message
@@ -50,13 +50,13 @@ func newCommFamilyN2Harness(t *testing.T, ctxID string) *commFamilyN2Harness {
 	reg := newMockCommReg()
 	h := &commFamilyN2Harness{
 		reg:        reg,
-		traceCh:    make(chan circulation.Message, 128),
-		execCh:     make(chan circulation.Message, 32),
-		ctrlCh:     make(chan circulation.Message, 32),
-		matterCh:   make(chan circulation.Message, 32),
-		rootCh:     make(chan circulation.Message, 32),
-		targetCh:   make(chan circulation.Message, 32),
-		boundaryCh: make(chan circulation.Message, 32),
+		traceCh:    make(chan junction.Delivery, 128),
+		execCh:     make(chan junction.Delivery, 32),
+		ctrlCh:     make(chan junction.Delivery, 32),
+		matterCh:   make(chan junction.Delivery, 32),
+		rootCh:     make(chan junction.Delivery, 32),
+		targetCh:   make(chan junction.Delivery, 32),
+		boundaryCh: make(chan junction.Delivery, 32),
 		uiCh:       make(chan circulation.Message, 32),
 		wrapperCh:  make(chan circulation.Message, 32),
 		outerCh:    make(chan circulation.Message, 32),
@@ -75,13 +75,13 @@ func newCommFamilyN2Harness(t *testing.T, ctxID string) *commFamilyN2Harness {
 			TraceEnabled: true,
 			TraceLevel:   configuration.ValueConfigTraceLevelDebug,
 		},
-		in:      make(chan circulation.Message, 32),
-		ctxIn:   make(chan circulation.Message, 32),
+		in:      make(chan junction.Delivery, 32),
+		ctxIn:   make(chan junction.Delivery, 32),
 		ingress: make(chan IngressItem, 32),
 		ifaces: map[string]*InterfaceRuntime{
-			"main":     {Name: "main", Egress: h.uiCh},
-			"w":        {Name: "w", Egress: h.wrapperCh},
-			"outerCtx": {Name: "outerCtx", Egress: h.outerCh},
+			"main":     {Name: "main", Egress: h.uiCh, status: InterfaceRunning},
+			"w":        {Name: "w", Egress: h.wrapperCh, status: InterfaceRunning},
+			"outerCtx": {Name: "outerCtx", Egress: h.outerCh, status: InterfaceRunning},
 		},
 		done:  make(chan struct{}),
 		state: shared.FamilyInitializing,
@@ -100,16 +100,17 @@ func newCommFamilyN2Harness(t *testing.T, ctxID string) *commFamilyN2Harness {
 	return h
 }
 
-func ctrlChOrNil(ch chan circulation.Message) chan circulation.Message {
+func ctrlChOrNil(ch chan junction.Delivery) chan junction.Delivery {
 	return ch
 }
 
-func recvTraceByKind(t *testing.T, ch <-chan circulation.Message, traceKind string) circulation.Message {
+func recvTraceByKind(t *testing.T, ch <-chan junction.Delivery, traceKind string) circulation.Message {
 	t.Helper()
 	deadline := time.After(300 * time.Millisecond)
 	for {
 		select {
-		case msg := <-ch:
+		case delivery := <-ch:
+			msg := unwrapTestMessage(t, delivery)
 			if msg.Kind == circulation.ValueKindTrace && msg.Trace.TraceKind == traceKind {
 				return msg
 			}
@@ -120,12 +121,13 @@ func recvTraceByKind(t *testing.T, ch <-chan circulation.Message, traceKind stri
 	}
 }
 
-func waitTraceContains(t *testing.T, ch <-chan circulation.Message, traceKind, reason string) {
+func waitTraceContains(t *testing.T, ch <-chan junction.Delivery, traceKind, reason string) {
 	t.Helper()
 	deadline := time.After(300 * time.Millisecond)
 	for {
 		select {
-		case msg := <-ch:
+		case delivery := <-ch:
+			msg := unwrapTestMessage(t, delivery)
 			if msg.Kind == circulation.ValueKindTrace && msg.Trace.TraceKind == traceKind {
 				if reason == "" || msg.Trace.ReasonCode == reason {
 					return
@@ -138,13 +140,14 @@ func waitTraceContains(t *testing.T, ch <-chan circulation.Message, traceKind, r
 	}
 }
 
-func noTraceReason(t *testing.T, ch <-chan circulation.Message, reason string) {
+func noTraceReason(t *testing.T, ch <-chan junction.Delivery, reason string) {
 	t.Helper()
 	timer := time.NewTimer(40 * time.Millisecond)
 	defer timer.Stop()
 	for {
 		select {
-		case msg := <-ch:
+		case delivery := <-ch:
+			msg := unwrapTestMessage(t, delivery)
 			if msg.Kind == circulation.ValueKindTrace && msg.Trace.ReasonCode == reason {
 				t.Fatalf("unexpected trace reason=%s", reason)
 			}
@@ -157,7 +160,7 @@ func noTraceReason(t *testing.T, ch <-chan circulation.Message, reason string) {
 func TestCommunicationFamily_N2_COMM_01_ContextEgressInternalForward(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 
-	h.loop.in <- mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, "")
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, ""))
 
 	got := recvMsg(t, h.targetCh, "n2 internal forward")
 	if got.Intention.From.Context != circulation.ContextID("/ctx/local") {
@@ -172,7 +175,7 @@ func TestCommunicationFamily_N2_COMM_01_ContextEgressInternalForward(t *testing.
 func TestCommunicationFamily_N2_COMM_02_ContextEgressExternalForwardToRoot(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 
-	h.loop.in <- mkIntentionMsg("@ext_peer:/op", circulation.ValueTypeMatter, "")
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("@ext_peer:/op", circulation.ValueTypeMatter, ""))
 
 	got := recvMsg(t, h.rootCh, "n2 external forward to root")
 	if got.Intention.From.Context != circulation.ContextID("/ctx/local") {
@@ -182,24 +185,21 @@ func TestCommunicationFamily_N2_COMM_02_ContextEgressExternalForwardToRoot(t *te
 	noMsg(t, h.outerCh, "non-root egress should not hit outer iface directly")
 }
 
-func TestCommunicationFamily_N2_COMM_03_RootEgressExternalRelay(t *testing.T) {
+func TestCommunicationFamily_N2_COMM_03_RootEgressExternalRequiresProtectedSigner(t *testing.T) {
 	h := newCommFamilyN2Harness(t, shared.RootContextID)
 	h.reg.idToExt["/ctx/src"] = "public-src"
 
-	h.loop.in <- mkIntentionMsg("@ext_peer:/op", circulation.ValueTypeMatter, "/ctx/src")
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("@ext_peer:/op", circulation.ValueTypeMatter, "/ctx/src"))
 
-	got := recvMsg(t, h.outerCh, "n2 root external relay")
-	if got.Intention.From.Context != circulation.ContextID("public-src") {
-		t.Fatalf("from.context=%q want public-src", got.Intention.From.Context)
-	}
-	noMsg(t, h.outerCh, "single root external relay cardinality")
+	waitTraceContains(t, h.traceCh, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto)
+	noMsg(t, h.outerCh, "unsigned root external relay")
 	noMsg(t, h.rootCh, "root egress should not forward to root")
 }
 
 func TestCommunicationFamily_N2_COMM_04_InnerIngressUserDispatch(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 
-	h.loop.ctxIn <- mkIntentionMsg("/ctx/local", circulation.ValueTypeUser, "/ctx/src")
+	h.loop.ctxIn <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/local", circulation.ValueTypeUser, "/ctx/src"))
 
 	got := recvMsg(t, h.execCh, "n2 inner user dispatch")
 	if got.Intention.To.Context != circulation.ContextID("/ctx/local") {
@@ -214,7 +214,7 @@ func TestCommunicationFamily_N2_COMM_05_InnerIngressWrapperRelay(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 	h.reg.wrapperToID["w"] = "/ctx/local"
 
-	h.loop.ctxIn <- mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeMatter, "/ctx/src")
+	h.loop.ctxIn <- h.loop.frame.MustDelivery(mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeMatter, "/ctx/src"))
 
 	_ = recvMsg(t, h.wrapperCh, "n2 inner wrapper relay")
 	noMsg(t, h.wrapperCh, "single inner wrapper relay cardinality")
@@ -226,7 +226,7 @@ func TestCommunicationFamily_N2_COMM_05_InnerIngressWrapperRelay(t *testing.T) {
 func TestCommunicationFamily_N2_COMM_06_InnerIngressRejectFailClosed(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 
-	h.loop.ctxIn <- mkIntentionMsg("/ctx/local", circulation.ValueTypeControl, "/ctx/src")
+	h.loop.ctxIn <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/local", circulation.ValueTypeControl, "/ctx/src"))
 
 	waitTraceContains(t, h.traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidEndPoint)
 	noMsg(t, h.execCh, "reject should not dispatch execution")
@@ -281,11 +281,10 @@ func TestCommunicationFamily_N2_COMM_09_InterfaceIngressUIExternalForwardToRoot(
 	noMsg(t, h.ctrlCh, "external ui path should not dispatch ctrl")
 }
 
-func TestCommunicationFamily_N2_COMM_10_RootOuterIngressOwnedUIRelay(t *testing.T) {
+func TestCommunicationFamily_N2_COMM_10_RootOuterIngressCannotRelayUIWithoutEnvelope(t *testing.T) {
 	h := newCommFamilyN2Harness(t, shared.RootContextID)
 	h.reg.uiToID["main"] = shared.ContextAddr(shared.RootContextID)
 	msg := mkIntentionMsg("@ui_main:/screen", circulation.ValueTypeMatter, "")
-	msg.Intention.Identity.PubKey = "PUB"
 
 	h.loop.ingress <- IngressItem{
 		Endpoint:  EndpointOuterCtx,
@@ -293,11 +292,8 @@ func TestCommunicationFamily_N2_COMM_10_RootOuterIngressOwnedUIRelay(t *testing.
 		Msg:       msg,
 	}
 
-	got := recvMsg(t, h.uiCh, "n2 root outer owned ui relay")
-	if got.Intention.From.Context != circulation.ContextID("@ext_PUB") {
-		t.Fatalf("from.context=%q want @ext_PUB", got.Intention.From.Context)
-	}
-	noMsg(t, h.uiCh, "single owned ui relay cardinality")
+	waitTraceContains(t, h.traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto)
+	noMsg(t, h.uiCh, "unprotected outer ingress must not relay ui")
 	noMsg(t, h.targetCh, "owned ui relay should not forward context")
 	noMsg(t, h.rootCh, "owned ui relay should not forward root")
 }
@@ -320,7 +316,7 @@ func TestCommunicationFamily_N2_COMM_11_RootOuterIngressRejectFailClosed(t *test
 func TestCommunicationFamily_N2_COMM_12_RootScatterFanoutAndAck(t *testing.T) {
 	h := newCommFamilyN2Harness(t, shared.RootContextID)
 	h.reg.uiToID["main"] = shared.ContextAddr(shared.RootContextID)
-	target2Ch := make(chan circulation.Message, 32)
+	target2Ch := make(chan junction.Delivery, 32)
 	h.reg.chByID["/ctx/target"] = h.targetCh
 	h.reg.chByID["/ctx/target2"] = target2Ch
 	h.loop.cfg.AllowedScatter = map[string]map[string]bool{
@@ -406,8 +402,8 @@ func TestCommunicationFamily_N2_COMM_CONC_01_MixedEntryPointsDoNotCrossRoute(t *
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 	h.reg.wrapperToID["w"] = "/ctx/local"
 
-	h.loop.in <- mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, "")
-	h.loop.ctxIn <- mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeMatter, "/ctx/src")
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, ""))
+	h.loop.ctxIn <- h.loop.frame.MustDelivery(mkIntentionMsg("@wrapper_w:/op", circulation.ValueTypeMatter, "/ctx/src"))
 	h.loop.ingress <- IngressItem{
 		Endpoint:  EndpointUI,
 		IfaceName: "main",
@@ -433,8 +429,8 @@ func TestCommunicationFamily_N2_COMM_CONC_02_MixedValidInvalidBurstRemainsIsolat
 		IfaceName: "main",
 		Msg:       mkIntentionMsg("", circulation.ValueTypeUser, ""),
 	}
-	h.loop.ctxIn <- mkIntentionMsg("/ctx/local", circulation.ValueTypeControl, "/ctx/src")
-	h.loop.in <- mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, "")
+	h.loop.ctxIn <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/local", circulation.ValueTypeControl, "/ctx/src"))
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, ""))
 
 	_ = recvMsg(t, h.execCh, "burst valid execution")
 	_ = recvMsg(t, h.targetCh, "burst valid forward")
@@ -448,7 +444,7 @@ func TestCommunicationFamily_N2_COMM_CONC_02_MixedValidInvalidBurstRemainsIsolat
 func TestCommunicationFamily_N2_COMM_CONC_03_StopDoesNotDeadlockOrDoubleEmit(t *testing.T) {
 	h := newCommFamilyN2Harness(t, "/ctx/local")
 
-	h.loop.in <- mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, "")
+	h.loop.in <- h.loop.frame.MustDelivery(mkIntentionMsg("/ctx/target", circulation.ValueTypeMatter, ""))
 	_ = recvMsg(t, h.targetCh, "pre-stop forward")
 
 	done := make(chan struct{})

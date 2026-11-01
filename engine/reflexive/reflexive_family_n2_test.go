@@ -43,8 +43,8 @@ func newReflexiveFamilyN2Harness(t *testing.T) *reflexiveFamilyN2Harness {
 		ContextDir:   ctxDir,
 		TraceEnabled: true,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm:  commCh,
-			shared.FamilyTrace: traceCh,
+			shared.FamilyComm:  reflexiveDeliveryBridge(commCh, 128),
+			shared.FamilyTrace: reflexiveDeliveryBridge(traceCh, 128),
 		},
 	}
 	loop := NewReflexiveLoop(frame, nil)
@@ -126,7 +126,7 @@ func TestReflexiveFamily_N2_REF_01_LocalCapabilityDispatchesResponse(t *testing.
 		loop.emitResponseOK(msg.Intention, map[string]any{"ok": true})
 	}
 
-	h.loop.in <- mkReflexiveIntention("i-ref-ok", "cap_n2_ok")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-ok", "cap_n2_ok"))
 
 	out := recvReflexiveFamilyMsg(t, h.commCh, "local reflexive response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK || out.Response.Payload["ok"] != true {
@@ -139,14 +139,14 @@ func TestReflexiveFamily_N2_REF_01_LocalCapabilityDispatchesResponse(t *testing.
 func TestReflexiveFamily_N2_REF_02_InvalidIntentionFailsClosed(t *testing.T) {
 	h := newReflexiveFamilyN2Harness(t)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-ref-bad",
 			From:        circulation.Address{Context: "/ctx/caller"},
 			To:          circulation.Address{Context: "/ctx/reflexive-a", Type: circulation.ValueTypeReflexive},
 		},
-	}
+	})
 
 	out := recvReflexiveFamilyMsg(t, h.commCh, "invalid reflexive intention")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Error == nil || out.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonMissingCapName {
@@ -157,10 +157,10 @@ func TestReflexiveFamily_N2_REF_02_InvalidIntentionFailsClosed(t *testing.T) {
 func TestReflexiveFamily_N2_REF_03_ResponseOnInboxTracedAsOrphan(t *testing.T) {
 	h := newReflexiveFamilyN2Harness(t)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:     circulation.ValueKindResponse,
 		Response: circulation.Response{IntentionID: "i-ref-orphan"},
-	}
+	})
 
 	waitReflexiveTraceKind(t, h.traceCh, circulation.ValueTracePendingOrphanId)
 	noReflexiveFamilyMsg(t, h.commCh, "response on reflexive inbox should not emit comm")
@@ -177,9 +177,9 @@ func TestReflexiveFamily_N2_REF_04_SaturationEmitsBusyResponse(t *testing.T) {
 	}
 	h.loop.handlerSlots = make(chan struct{}, 1)
 
-	h.loop.in <- mkReflexiveIntention("i-ref-block-1", "cap_n2_block")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-block-1", "cap_n2_block"))
 	<-blocked
-	h.loop.in <- mkReflexiveIntention("i-ref-block-2", "cap_n2_block")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-block-2", "cap_n2_block"))
 
 	busy := recvReflexiveFamilyMsg(t, h.commCh, "reflexive busy response")
 	if busy.Kind != circulation.ValueKindResponse || busy.Response.Error == nil || busy.Response.Error.Code != circulation.ValueCodeUnavailable || busy.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonBusy {
@@ -203,12 +203,12 @@ func TestReflexiveFamily_N2_REF_CONC_01_JobAndOrphanResponseRemainIsolated(t *te
 		loop.emitResponseOK(msg.Intention, map[string]any{"id": msg.Intention.IntentionID})
 	}
 
-	h.loop.in <- mkReflexiveIntention("i-ref-job", "cap_n2_mix")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-job", "cap_n2_mix"))
 	<-blocked
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:     circulation.ValueKindResponse,
 		Response: circulation.Response{IntentionID: "i-ref-orphan-mixed"},
-	}
+	})
 
 	waitReflexiveTraceKind(t, h.traceCh, circulation.ValueTracePendingOrphanId)
 	close(release)
@@ -224,9 +224,9 @@ func TestReflexiveFamily_N2_REF_CONC_02_AdmittedBurstRemainsNonBlocking(t *testi
 		loop.emitResponseOK(msg.Intention, map[string]any{"id": msg.Intention.IntentionID})
 	}
 
-	h.loop.in <- mkReflexiveIntention("i-ref-burst-1", "cap_n2_burst")
-	h.loop.in <- mkReflexiveIntention("i-ref-burst-2", "cap_n2_burst")
-	h.loop.in <- mkReflexiveIntention("i-ref-burst-3", "cap_n2_burst")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-burst-1", "cap_n2_burst"))
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-burst-2", "cap_n2_burst"))
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-burst-3", "cap_n2_burst"))
 
 	r1 := recvReflexiveFamilyMsg(t, h.commCh, "reflexive burst 1")
 	r2 := recvReflexiveFamilyMsg(t, h.commCh, "reflexive burst 2")
@@ -251,7 +251,7 @@ func TestReflexiveFamily_N2_REF_CONC_03_StopDoesNotDeadlockOrDoubleEmit(t *testi
 		loop.emitResponseOK(msg.Intention, map[string]any{"done": true})
 	}
 
-	h.loop.in <- mkReflexiveIntention("i-ref-stop", "cap_n2_stop")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-stop", "cap_n2_stop"))
 	<-blocked
 
 	done := make(chan struct{})
@@ -273,4 +273,3 @@ func TestReflexiveFamily_N2_REF_CONC_03_StopDoesNotDeadlockOrDoubleEmit(t *testi
 	}
 	noReflexiveFamilyMsg(t, h.commCh, "no duplicate reflexive message after stop")
 }
-

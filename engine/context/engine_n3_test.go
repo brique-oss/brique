@@ -46,6 +46,30 @@ type engineN3Harness struct {
 	sinkCh chan circulation.Message
 }
 
+func contextTestSinkBridge(out chan<- circulation.Message) chan junction.Delivery {
+	size := cap(out)
+	if size < 1 {
+		size = 1
+	}
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
+func registerContextTestSink(reg *junction.ContextCommRegistry, addr shared.ContextAddr, out chan<- circulation.Message, extName string) {
+	reg.Register(addr, contextTestSinkBridge(out), extName)
+}
+
+func contextTestEnvelope(msg circulation.Message) junction.Delivery {
+	return junction.MustLocalDelivery(junction.MustLocalAuthority("test:context-engine"), msg)
+}
+
 func newEngineN3Harness(t *testing.T) *engineN3Harness {
 	t.Helper()
 
@@ -69,7 +93,7 @@ func newEngineN3Harness(t *testing.T) *engineN3Harness {
 	waitFor(t, 2*time.Second, func() bool { return child.State() == shared.ContextRunning }, "n3_child running")
 
 	sinkCh := make(chan circulation.Message, 32)
-	reg.Register(shared.ContextAddr(n3SinkContextID), sinkCh, "")
+	registerContextTestSink(reg, shared.ContextAddr(n3SinkContextID), sinkCh, "")
 
 	return &engineN3Harness{
 		root:   root,
@@ -132,7 +156,7 @@ func patchN3ContextForRuntime(t *testing.T, ctxPath string, sharedWSAddr string)
 	ifaces, _ := commCfg["interfaces"].([]any)
 	if filepath.Base(filepath.Dir(ctxPath)) == "root" {
 		commCfg["websocket_listener"] = map[string]any{
-			"addr": sharedWSAddr,
+			"addr": sharedWSAddr, "wrapper_auth": "optional",
 		}
 		ifaces = append(ifaces, map[string]any{
 			"name":   "outerCtx",
@@ -271,7 +295,7 @@ func sendToContext(t *testing.T, h *engineN3Harness, ctxID string, msg circulati
 		t.Fatalf("context channel not found for %s", ctxID)
 	}
 	select {
-	case ch <- msg:
+	case ch <- contextTestEnvelope(msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending message to %s", ctxID)
 	}
@@ -562,7 +586,7 @@ func TestEngine_N3_ENG_04_CommToExecutionWrapperCapacityExecution(t *testing.T) 
 func TestEngine_N3_ENG_05_CommToExecutionAwaitingDSLFlow(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-dsl-await",
@@ -828,7 +852,7 @@ func TestEngine_N3_ENG_12_OrphanResponseDoesNotWakeWrongPath(t *testing.T) {
 func TestEngine_N3_ENG_13_WrapperOutboundFireAndForgetToOtherContext(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-wrapper-out-fire",
@@ -870,7 +894,7 @@ func TestEngine_N3_ENG_13_WrapperOutboundFireAndForgetToOtherContext(t *testing.
 func TestEngine_N3_ENG_14_WrapperOutboundAwaitingToOtherContext(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-wrapper-out-await",
@@ -931,7 +955,7 @@ func TestEngine_N3_ENG_14_WrapperOutboundAwaitingToOtherContext(t *testing.T) {
 func TestEngine_N3_ENG_15_MixedConcurrentPipelinesRemainIsolated(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 16)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-mixed-matter",

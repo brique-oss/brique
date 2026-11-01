@@ -41,10 +41,19 @@ const capacityDirName = shared.ContextDirCapacity
 // See design doc sections 2, 3, 7.
 
 type ExecutionCfg struct {
-	Wrappers              []WrapperRuntimeCfg
-	CtxRegistry           CtxRegistry
+	Wrappers               []WrapperRuntimeCfg
+	CtxRegistry            CtxRegistry
 	DefaultInvokeTimeoutMs int // 0 => use built-in default (30s)
+
+	// MaxConcurrentJobs bounds simultaneous user jobs. Parsed value: absent or
+	// 0 => defaultMaxConcurrentJobs; negative => unlimited.
+	MaxConcurrentJobs int
 }
+
+// defaultMaxConcurrentJobs is the default bound on simultaneous user jobs per
+// execution loop. It is deliberately large: it protects against runaway fan-out,
+// not against normal load.
+const defaultMaxConcurrentJobs = 1024
 
 type WrapperRuntimeCfg struct {
 	Name string
@@ -53,6 +62,20 @@ type WrapperRuntimeCfg struct {
 	ReadyTimeoutMs int // 0 => wait indefinitely
 
 	StopTimeoutMs int
+
+	// SourceCheckIntervalMs enables and paces source-change detection: a
+	// compiled wrapper is rebuilt and an interpreted one restarted when a
+	// source is newer than its build or process.
+	// 0 (default) => no check: the wrapper is built/started once and edits are
+	// not noticed until it is stopped and started again. > 0 => the source tree
+	// is scanned at most once per interval, so an edit is seen within that delay.
+	SourceCheckIntervalMs int
+
+	// Watch lists extra source trees (relative to the wrapper source
+	// directory, or absolute) whose changes make the wrapper stale: a compiled
+	// one is rebuilt, an interpreted one is restarted. Typically the runtime
+	// library shared by the instance. Build.Watch is added to this list.
+	Watch []string
 
 	Build *BuildCfg
 	Run   RunCfg
@@ -67,6 +90,11 @@ type BuildCfg struct {
 
 	Artifact     string
 	ArtifactKind string // file | dir | glob
+
+	// Watch lists extra source trees (relative to the wrapper source directory,
+	// or absolute) whose changes also make the build stale. A wrapper compiled
+	// against a library shared by the instance lists that library here.
+	Watch []string
 }
 
 type RunCfg struct {
@@ -139,7 +167,7 @@ type CapEntry struct {
 // - engineCfg map[string]any.
 // - config keys read directly:
 //   - `configuration.KeyWrappers`
-//   - per-wrapper: `configuration.KeyWrpName`, `configuration.KeyWrpMode`, `configuration.KeyWrpReadyTO`, `configuration.KeyWrpStopTO`, `configuration.KeyWrpBuild`, `configuration.KeyWrpRun`
+//   - per-wrapper: `configuration.KeyWrpName`, `configuration.KeyWrpMode`, `configuration.KeyWrpReadyTO`, `configuration.KeyWrpStopTO`, `configuration.KeyWrpSourceCheckMs` (optional), `configuration.KeyWrpBuild`, `configuration.KeyWrpRun`
 //   - build section: `configuration.KeyWrpShell`, `configuration.KeyWrpTO`, `configuration.KeyWrpArti`, `configuration.KeyWrpArtiKind`, `configuration.KeyWrpCmd`
 //   - run section: `configuration.KeyWrpShell`, `configuration.KeyWrpCmd`, `configuration.KeyWrpEnv`
 //
@@ -155,6 +183,8 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 	cfg := ExecutionCfg{
 		Wrappers:    nil,
 		CtxRegistry: CtxRegistry{Caps: map[string]CapEntry{}},
+
+		MaxConcurrentJobs: defaultMaxConcurrentJobs,
 	}
 	if engineCfg == nil {
 		return cfg
@@ -168,6 +198,10 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 	//   "wrappers": [ { ...WrapperRuntimeCfg... }, ... ],
 	//   capacity descriptors are loaded lazily from disk (contextDir/capacity/<capName>.json).
 	// }
+
+	if v, ok := shared.AnyToInt(engineCfg[configuration.KeyExecMaxJobs]); ok && v != 0 {
+		cfg.MaxConcurrentJobs = int(v)
+	}
 
 	if v, ok := shared.AnyToInt(engineCfg[configuration.KeyExecDefaultTimeoutMs]); ok && v > 0 {
 		cfg.DefaultInvokeTimeoutMs = v
@@ -193,6 +227,12 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 			if v, ok := shared.AnyToInt(m[configuration.KeyWrpStopTO]); ok {
 				w.StopTimeoutMs = int(v)
 			}
+			if v, ok := shared.AnyToInt(m[configuration.KeyWrpSourceCheckMs]); ok && v > 0 {
+				w.SourceCheckIntervalMs = int(v)
+			}
+			if watch, ok := m[configuration.KeyWrpWatch].([]any); ok {
+				w.Watch = shared.AnySliceToStringSlice(watch)
+			}
 			// Build
 			if bm, ok := m[configuration.KeyWrpBuild].(map[string]any); ok && bm != nil {
 				b := &BuildCfg{}
@@ -210,6 +250,9 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 				}
 				if cmd, ok := bm[configuration.KeyWrpCmd].([]any); ok {
 					b.Cmd = shared.AnySliceToStringSlice(cmd)
+				}
+				if watch, ok := bm[configuration.KeyWrpWatch].([]any); ok {
+					b.Watch = shared.AnySliceToStringSlice(watch)
 				}
 				w.Build = b
 			}

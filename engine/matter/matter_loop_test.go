@@ -29,6 +29,18 @@ import (
 	"brique_engine/shared"
 )
 
+func matterDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newMatterLoopHarness(t *testing.T) (*MatterLoop, chan circulation.Message, string) {
 	t.Helper()
 	ctxDir := t.TempDir()
@@ -38,7 +50,7 @@ func newMatterLoopHarness(t *testing.T) (*MatterLoop, chan circulation.Message, 
 		CtxVersion: "v1",
 		ContextDir: ctxDir,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: matterDeliveryBridge(commCh, 64),
 		},
 	}
 	return NewMatterLoop(frame), commCh, ctxDir
@@ -357,7 +369,7 @@ func TestMatterLoop_N1_MLO_05_RunJobGuardsAndSuccess(t *testing.T) {
 	commCh2 := make(chan circulation.Message, 8)
 	lMissingCtx := NewMatterLoop(&junction.ContextRegistry{
 		CtxId: "/ctx/no-dir",
-		FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: commCh2},
+		FamIn: junction.FamiliesInChanRegistry{shared.FamilyComm: matterDeliveryBridge(commCh2, 8)},
 	})
 	lMissingCtx.caps["cap_test"] = func(_ *MatterLoop, _ circulation.Message) {}
 	lMissingCtx.runJob(circulation.Message{
@@ -398,7 +410,7 @@ func TestMatterLoop_N1_MLO_06_LifecycleAndLoopInbox(t *testing.T) {
 		t.Fatalf("state should be running after Start")
 	}
 
-	l.InChan() <- circulation.Message{
+	l.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-loop-unknown-cap",
@@ -406,7 +418,7 @@ func TestMatterLoop_N1_MLO_06_LifecycleAndLoopInbox(t *testing.T) {
 			To:          circulation.Address{Cap: "unknown_cap"},
 			Correlation: &circulation.Correlation{},
 		},
-	}
+	})
 	m := recvMatterLoopMsg(t, commCh, "loop inbox unknown cap")
 	if m.Kind != circulation.ValueKindResponse || m.Response.Error == nil || m.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonUnknownCap {
 		t.Fatalf("loop unknown cap branch not observed: %#v", m)
@@ -416,13 +428,13 @@ func TestMatterLoop_N1_MLO_06_LifecycleAndLoopInbox(t *testing.T) {
 	if !ok || pch == nil {
 		t.Fatalf("registerPending for loop response should succeed")
 	}
-	l.InChan() <- circulation.Message{
+	l.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-loop-resp",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 	select {
 	case got := <-pch:
 		if got.Response.IntentionID != "i-loop-resp" {

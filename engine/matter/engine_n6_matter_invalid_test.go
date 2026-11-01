@@ -213,8 +213,8 @@ func TestEngine_N6_MAT_44_WrapperMissingNameIsRefused(t *testing.T) {
 		circulation.KeyMatterID: "m_wrapper_noname",
 		circulation.KeyMatter: map[string]any{
 			circulation.KeyBrique: map[string]any{
-				circulation.KeySubstanceMode:   circulation.ValueModeWrapper,
-				configuration.KeyWrpName:       "",
+				circulation.KeySubstanceMode: circulation.ValueModeWrapper,
+				configuration.KeyWrpName:     "",
 			},
 		},
 	})

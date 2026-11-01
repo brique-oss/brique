@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"brique_engine/circulation"
+	"brique_engine/junction"
 )
 
 const (
@@ -36,6 +37,8 @@ type dslExecState struct {
 	input       map[string]any
 	aliases     map[string]circulation.Response
 	localScopes []dslLocalScope
+	// parent is the externally admitted delivery that called this capacity.
+	parent *junction.Delivery
 }
 
 type dslLocalScope struct {
@@ -162,7 +165,7 @@ func (s *dslExecState) resolveValueRef(ref string) (any, error) {
 			return nil, fmt.Errorf("unknown DSL alias ref: %s", ref)
 		}
 		base := map[string]any{
-			"status": resp.Status,
+			"status":  resp.Status,
 			"payload": resp.Payload,
 		}
 		if resp.Error != nil {
@@ -235,7 +238,11 @@ func executionCorrelationIDs(in circulation.Intention) (string, string) {
 func normalizeDSLResponse(resp circulation.Response) circulation.Response {
 	resp.Payload = normalizeDSLMap(resp.Payload)
 	if resp.Error != nil {
-		resp.Error.Details = normalizeDSLMap(resp.Error.Details)
+		// Copy: the problem is shared with the original response, which other
+		// goroutines may still be reading.
+		problem := *resp.Error
+		problem.Details = normalizeDSLMap(problem.Details)
+		resp.Error = &problem
 	}
 	return resp
 }

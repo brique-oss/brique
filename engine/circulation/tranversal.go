@@ -17,8 +17,6 @@
 package circulation
 
 type Identity struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind,omitempty"`
-	PubKey    string `json:"pubkey,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	ID   string `json:"id"`
+	Kind string `json:"kind,omitempty"`
 }

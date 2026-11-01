@@ -23,11 +23,16 @@ inline constexpr const char* kKindResponse = "response";
 
 inline constexpr const char* kTypeExecution = "execution";
 inline constexpr const char* kTypeUser = "user";
+inline constexpr const char* kTypeMatter = "matter";
 
 inline constexpr const char* kStatusOk = "ok";
 inline constexpr const char* kStatusError = "error";
 
 inline constexpr const char* kCapWrapperReady = "wrapper_ready";
 inline constexpr const char* kCapWrapperStop = "wrapper_stop";
+inline constexpr const char* kCapMatterRead = "matter.read";
+inline constexpr const char* kCapMatterWrite = "matter.write";
+inline constexpr const char* kCapMatterSubscribe = "matter.subscribe";
+inline constexpr const char* kCapMatterUnsubscribe = "matter.unsubscribe";
 
 }  // namespace wrapper

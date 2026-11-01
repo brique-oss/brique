@@ -307,7 +307,7 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 	matterObj := map[string]any{}
 	if in.Params != nil {
 		if m, ok := in.Params[circulation.KeyMatter].(map[string]any); ok && m != nil {
-			matterObj = m
+			matterObj = shared.DeepCloneMap(m) // never mutate the caller's params
 		}
 	}
 	ensureMatterMinimalSections(matterObj)
@@ -930,7 +930,7 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 	matterObj := map[string]any{}
 	if in.Params != nil {
 		if m, ok := in.Params[circulation.KeyMatter].(map[string]any); ok && m != nil {
-			matterObj = m
+			matterObj = shared.DeepCloneMap(m) // never mutate the caller's params
 		}
 	}
 	ensureMatterMinimalSections(matterObj)

@@ -26,10 +26,11 @@ package comm
 // - Comm creates its internal channels, including its family InChan (ContextLoop wires via l.InChan()).
 // - Comm registers/unregisters the context ctxIn into the global registry (CtxCommReg).
 //   ctxIn is used for inter-context addressing within the same Brique instance.
-// - External interfaces are implemented per-kind (ws/http/mq/...), selected by cfg.Kind.
-//   Each interface implementation is long-lived:
-//     - ReadLoop pushes messages into CommLoop.ingress (global ingress)
-//     - WriteLoop consumes from the per-interface Egress channel
+// - External interfaces are implemented per driver (ws/http/https), selected by cfg.Driver.
+// - Start synchronously acquires readiness resources; Running is never published
+//   before bind/certificate/route registration succeeds.
+// - Directions declares only the long-lived loops owned by the context. Websocket
+//   ingress remains owned by the instance-wide shared listener.
 // - CommLoop remains agnostic of concrete interface kinds: implementations are provided
 //   via a registry of constructors (factories) keyed by kind.
 // - Comm relays external control commands (stop/restart child) into frame.CtrlIn.
@@ -39,6 +40,8 @@ package comm
 // so CommLoop must not unmarshal/marshal JSON except at interface boundaries.
 
 import (
+	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -56,25 +59,29 @@ type CommLoop struct {
 	frame *junction.ContextRegistry
 
 	// Family ingress from the context (owned/created by ContextLoop).
-	in chan circulation.Message
+	in chan junction.Delivery
 
 	// Parsed config for this context.
 	cfg CommCfg
 
-	// Root external identity (optional, root-only).
-	instanceKeyName string
-	instancePubKey  string
-	instancePrivRaw []byte
-	instanceKeyErr  error
-
-	externalReplyMu    sync.Mutex
-	externalReplyToPub map[string]string
+	// Injectable security clock used by signed ingress/egress tests.
+	externalReplyNow func() time.Time
 
 	// ctxIn is the COMM ingress channel addressable by other contexts via CtxCommReg.
-	ctxIn chan circulation.Message
+	ctxIn chan junction.Delivery
 
 	// ingress is the global ingress channel fed by interface ReadLoop.
-	ingress chan IngressItem
+	ingress               chan IngressItem
+	signedExternalIngress chan signedExternalIngressItem
+
+	// interfaceOutcomes decouples physical transport reporting from routing.
+	// Failures are rare, but processing them on a dedicated Comm goroutine
+	// prevents a driver WriteLoop from re-entering its own egress queue.
+	interfaceOutcomes      chan interfaceEgressReport
+	signedExternalOutcomes chan signedExternalEgressReport
+	signedExternalMu       sync.Mutex
+	signedExternalPending  map[string]signedExternalEgressItem
+	pendingSweepInterval   time.Duration
 
 	// Interface runtimes (IO surface for impls).
 	ifaces map[string]*InterfaceRuntime
@@ -145,26 +152,33 @@ type CommLoop struct {
 
 func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *CommLoop {
 	cfg := ParseCommCfg(engineCfg)
+	var signedExternalIngress chan signedExternalIngressItem
+	if frame != nil && shared.IsRootContext(frame.CtxId) && frame.CtxCommReg != nil {
+		if provider, ok := any(frame.CtxCommReg).(junction.SecurityRuntimeProvider); ok && provider.SecurityRuntime() != nil {
+			signedExternalIngress = make(chan signedExternalIngressItem, 64)
+		}
+	}
 	l := &CommLoop{
-		frame:           frame,
-		cfg:             cfg,
-		instanceKeyName: cfg.InstanceKeyName,
-
+		frame: frame,
+		cfg:   cfg,
 		// Runtime-owned channels (created by Comm):
-		in:      make(chan circulation.Message, 16),
-		ctxIn:   make(chan circulation.Message, 16),
-		ingress: make(chan IngressItem, 16),
+		in:                     make(chan junction.Delivery, 16),
+		ctxIn:                  make(chan junction.Delivery, 16),
+		ingress:                make(chan IngressItem, 16),
+		signedExternalIngress:  signedExternalIngress,
+		interfaceOutcomes:      make(chan interfaceEgressReport, 16),
+		signedExternalOutcomes: make(chan signedExternalEgressReport, 16),
+		signedExternalPending:  make(map[string]signedExternalEgressItem),
+		pendingSweepInterval:   time.Second,
 
-		ifaces:             make(map[string]*InterfaceRuntime),
-		externalReplyToPub: map[string]string{},
+		ifaces:           make(map[string]*InterfaceRuntime),
+		externalReplyNow: time.Now,
 
 		state: shared.FamilyInitializing,
 		done:  make(chan struct{}),
 	}
 
-	if frame != nil && frame.CtxId == shared.RootContextID && cfg.InstanceKeyName != "" {
-		l.instancePrivRaw, l.instancePubKey, l.instanceKeyErr = loadInstancePrivateKey(cfg.InstanceKeyName)
-	}
+	l.warnAboutInterfaces()
 
 	// Build interface runtimes and attach concrete implementations based on Kind.
 	for _, ic := range cfg.Ifaces {
@@ -199,8 +213,19 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 
 		// Inject wiring owned by CommLoop.
 		rt.Ingress = l.ingress
+		if l.signedExternalIngress != nil && rt.Driver == "https" && rt.Type == EndpointOuterCtx {
+			rt.SignedExternalIngress = l.signedExternalIngress
+		}
 		rt.Egress = make(chan circulation.Message, 16)
+		if rt.Driver == "https" && rt.Impl != nil && rt.Impl.Directions().WriteLoop {
+			rt.SignedExternalEgress = make(chan signedExternalEgressItem, 16)
+		}
+		if rt.Type == EndpointWrapper {
+			rt.WrapperEgress = make(chan wrapperInterfaceEgressItem, 16)
+		}
 		rt.PrepareEgress = l.prepareInterfaceEgress
+		rt.ReportEgressOutcome = l.enqueueInterfaceEgressOutcome
+		rt.ReportSignedExternalOutcome = l.enqueueSignedExternalEgressOutcome
 
 		l.ifaces[name] = rt
 	}
@@ -252,13 +277,13 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 //
 //
 // Outputs:
-// - returns CommLoop inbound channel (`chan circulation.Message`)
+// - returns CommLoop protected inbound channel (`chan junction.Delivery`)
 //
 //
 // Contract:
 // - Returns the same family ingress channel for the lifetime of the loop.
 
-func (l *CommLoop) InChan() chan circulation.Message { return l.in }
+func (l *CommLoop) InChan() chan junction.Delivery { return l.in }
 
 // State
 //
@@ -361,7 +386,7 @@ func (l *CommLoop) State() shared.FamilyState {
 // State/Storage Effects:
 // - launches core Comm goroutines.
 // - starts configured interface runtimes and their read/write loops.
-// - mutates per-interface runtime status and error fields (`Status`, `Err`) during startup.
+// - advances synchronized per-interface lifecycle state during startup.
 // - registers the context and wrapper boundaries in the global comm registry.
 // - mutates lifecycle state to `shared.FamilyRunning`.
 //
@@ -376,8 +401,10 @@ func (l *CommLoop) State() shared.FamilyState {
 // Contract:
 // - Idempotent for already running/stopped instance (no restart of stopped instance).
 // - Best-effort interface startup: failed interfaces are marked failed and skipped.
+// - Running means all resources required by the configured directions are acquired.
+// - Any required loop exit before shutdown marks only that interface failed and closes it.
 // - Already-running and already-stopped instances return without side effects.
-// - Interface startup failures do not roll back already-started goroutines or successful registrations.
+// - Interface startup failures do not stop internal context routing or healthy interfaces.
 // - Registry registration is skipped when `frame` or `frame.CtxCommReg` is nil.
 
 func (l *CommLoop) Start() {
@@ -411,6 +438,44 @@ func (l *CommLoop) Start() {
 		l.loopInterfaceIngress()
 	}()
 
+	if l.interfaceOutcomes != nil {
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			l.loopInterfaceEgressOutcomes()
+		}()
+	}
+	if l.signedExternalOutcomes != nil {
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			l.loopSignedExternalEgressOutcomes()
+		}()
+	}
+	if l.signedExternalIngress != nil {
+		workers := runtime.GOMAXPROCS(0)
+		if workers < 1 {
+			workers = 1
+		}
+		if workers > 16 {
+			workers = 16
+		}
+		for range workers {
+			l.wg.Add(1)
+			go func() {
+				defer l.wg.Done()
+				l.loopSignedExternalIngress()
+			}()
+		}
+	}
+	if l.signedExternalIngress != nil {
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			l.loopPendingExternalExpirations()
+		}()
+	}
+
 	// Interfaces:
 	// - Start() is blocking/non-long-lived: it prepares the interface (connect/bind/listen, etc.).
 	// - ReadLoop/WriteLoop are long-lived goroutines.
@@ -419,31 +484,33 @@ func (l *CommLoop) Start() {
 			continue
 		}
 
-		// Start is blocking (setup) and should return quickly (or fail).
-		err := rt.Impl.Start()
-		if err != nil {
-			rt.Status = InterfaceFailed
-			rt.Err = err
+		if err := rt.beginStart(); err != nil {
+			rt.markFailed(err)
+			l.sendToTrace(circulation.Message{}, circulation.ValueTraceCommReject, "interface_unavailable", fmt.Sprintf("interface %q cannot start: %v", rt.Name, err))
 			continue
 		}
-		// If implementation didn't set it explicitly, mark running.
-		if rt.Status != InterfaceRunning {
-			rt.Status = InterfaceRunning
+
+		// Start acquires every resource required for readiness. Long-lived
+		// transport work starts only after this synchronous boundary succeeds.
+		err := rt.Impl.Start()
+		if err != nil {
+			rt.markFailed(err)
+			_ = rt.closeImpl()
+			l.sendToTrace(circulation.Message{}, circulation.ValueTraceCommReject, "interface_unavailable", fmt.Sprintf("interface %q start failed: %v", rt.Name, err))
+			continue
+		}
+		if !rt.markRunning() {
+			_ = rt.closeImpl()
+			continue
 		}
 
-		// ReadLoop (long-lived)
-		l.wg.Add(1)
-		go func(r *InterfaceRuntime) {
-			defer l.wg.Done()
-			_ = r.Impl.ReadLoop()
-		}(rt)
-
-		// WriteLoop (long-lived)
-		l.wg.Add(1)
-		go func(r *InterfaceRuntime) {
-			defer l.wg.Done()
-			_ = r.Impl.WriteLoop()
-		}(rt)
+		directions := rt.Impl.Directions()
+		if directions.ReadLoop {
+			l.startInterfaceLoop(rt, "read", rt.Impl.ReadLoop)
+		}
+		if directions.WriteLoop {
+			l.startInterfaceLoop(rt, "write", rt.Impl.WriteLoop)
+		}
 	}
 
 	l.state = shared.FamilyRunning
@@ -454,7 +521,8 @@ func (l *CommLoop) Start() {
 		l.frame.CtxCommReg.Register(shared.ContextAddr(l.frame.CtxId), l.ctxIn, l.frame.CtxExtName)
 
 		for _, iface := range l.cfg.Ifaces {
-			if iface.Type == EndpointUI && iface.Name != "" {
+			rt := l.ifaces[iface.Name]
+			if iface.Type == EndpointUI && iface.Name != "" && rt != nil && rt.isRunning() {
 				l.frame.CtxCommReg.RegisterUI(iface.Name, shared.ContextAddr(l.frame.CtxId))
 			}
 		}
@@ -463,6 +531,32 @@ func (l *CommLoop) Start() {
 			_ = l.frame.CtxCommReg.RegisterWrapperBoundary(wrapperName, shared.ContextAddr(l.frame.CtxId))
 		}
 	}
+}
+
+func (l *CommLoop) startInterfaceLoop(rt *InterfaceRuntime, direction string, run func() error) {
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		err := run()
+		select {
+		case <-l.done:
+			return
+		default:
+		}
+		if err == nil {
+			err = fmt.Errorf("interface %q %s loop exited unexpectedly", rt.Name, direction)
+		} else {
+			err = fmt.Errorf("interface %q %s loop failed: %w", rt.Name, direction, err)
+		}
+		if !rt.markFailed(err) {
+			return
+		}
+		_ = rt.closeImpl()
+		if rt.Type == EndpointUI && rt.Name != "" && l.frame != nil && l.frame.CtxCommReg != nil {
+			l.frame.CtxCommReg.UnregisterUIOwner(rt.Name, shared.ContextAddr(l.frame.CtxId))
+		}
+		l.sendToTrace(circulation.Message{}, circulation.ValueTraceCommReject, "interface_unavailable", err.Error())
+	}()
 }
 
 // Stop
@@ -510,6 +604,7 @@ func (l *CommLoop) Start() {
 // - closes lifecycle `done` once.
 // - closes all interface runtimes best effort.
 // - unregisters the context and wrapper boundaries from the global registry.
+// - clears pending external reply routes owned by this communication loop.
 // - waits for loop goroutines up to 5 seconds before continuing shutdown completion.
 // - mutates lifecycle state to `shared.FamilyStopped`.
 //
@@ -528,15 +623,10 @@ func (l *CommLoop) Start() {
 // - Marks the family stopped even if some goroutines fail to exit before the 5-second safety timeout.
 
 func (l *CommLoop) Stop() {
-	l.once.Do(func() { close(l.done) })
-
-	// Ask all external interfaces to close (best-effort).
-	for _, rt := range l.ifaces {
-		if rt == nil {
-			continue
-		}
-		_ = rt.Close()
-	}
+	l.once.Do(func() {
+		l.drainPendingExternalState()
+		close(l.done)
+	})
 
 	// Unregister ctxIn.
 	if l.frame != nil && l.frame.CtxCommReg != nil {
@@ -553,6 +643,14 @@ func (l *CommLoop) Stop() {
 		}
 	}
 
+	// Ask all external interfaces to close after removing routing exposure.
+	for _, rt := range l.ifaces {
+		if rt == nil {
+			continue
+		}
+		_ = rt.Close()
+	}
+
 	done := make(chan struct{})
 	go func() { l.wg.Wait(); close(done) }()
 	select {
@@ -560,7 +658,6 @@ func (l *CommLoop) Stop() {
 	case <-time.After(5 * time.Second):
 		// safety: avoid deadlock if an interface loop does not exit after Close().
 	}
-
 	l.stateMu.Lock()
 	l.state = shared.FamilyStopped
 	l.stateMu.Unlock()
@@ -683,11 +780,15 @@ func (l *CommLoop) loopContextIngress() {
 		select {
 		case <-l.done:
 			return
-		case msg, ok := <-l.in:
+		case delivery, ok := <-l.in:
 			if !ok {
 				return
 			}
-			l.routeEgress(msg)
+			msg, valid := delivery.Message()
+			if !valid {
+				continue
+			}
+			l.routeEgress(msg, delivery)
 		}
 	}
 }
@@ -707,7 +808,7 @@ func (l *CommLoop) loopContextIngress() {
 //   - `to.context`
 //   - `to.type`
 //   - `from.context`
-//   - `identity.pubkey`
+//   - authenticated Delivery authority (never message identity fields)
 //   - `intention.params`
 //
 // Expected Params Keys/values:
@@ -758,11 +859,15 @@ func (l *CommLoop) loopInterContextIngress() {
 		select {
 		case <-l.done:
 			return
-		case msg, ok := <-l.ctxIn:
+		case delivery, ok := <-l.ctxIn:
 			if !ok {
 				return
 			}
-			l.routeIngress(msg, EndpointInnerCtx, "")
+			msg, valid := delivery.Message()
+			if !valid {
+				continue
+			}
+			l.routeIngress(msg, EndpointInnerCtx, "", delivery)
 		}
 	}
 }
@@ -782,7 +887,7 @@ func (l *CommLoop) loopInterContextIngress() {
 //   - `to.context`
 //   - `to.type`
 //   - `from.context`
-//   - `identity.pubkey`
+//   - interface endpoint provenance; raw external messages are rejected
 //   - `intention.params`
 //
 // Expected Params Keys/values:
@@ -837,7 +942,34 @@ func (l *CommLoop) loopInterfaceIngress() {
 			if !ok {
 				return
 			}
-			l.routeIngress(it.Msg, it.Endpoint, it.IfaceName)
+			l.handleInterfaceIngress(it)
 		}
 	}
+}
+
+// handleInterfaceIngress admits and routes one item that arrived from an
+// interface: a delegated wrapper call, a restricted wrapper's own intention, or
+// an ordinary message.
+func (l *CommLoop) handleInterfaceIngress(it IngressItem) {
+	if it.WrapperDelegation.Valid() {
+		if resolved, err := l.resolveWrapperDelegatedIngressDetailed(it); !resolved {
+			detail := "wrapper delegation could not be resolved"
+			if err != nil {
+				detail += ": " + err.Error()
+			}
+			l.sendToTrace(it.Msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
+				detail)
+		}
+		return
+	}
+	if delivery, restricted, err := l.restrictedWrapperDelivery(it); restricted {
+		if err != nil {
+			l.refuseRestrictedWrapper(it, err)
+			return
+		}
+		message, _ := delivery.Message()
+		l.routeIngress(message, it.Endpoint, it.IfaceName, delivery)
+		return
+	}
+	l.routeIngress(it.Msg, it.Endpoint, it.IfaceName)
 }

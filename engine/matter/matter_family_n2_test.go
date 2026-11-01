@@ -45,8 +45,8 @@ func newMatterFamilyN2Harness(t *testing.T) *matterFamilyN2Harness {
 		ContextDir:   ctxDir,
 		TraceEnabled: true,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm:  commCh,
-			shared.FamilyTrace: traceCh,
+			shared.FamilyComm:  matterDeliveryBridge(commCh, 128),
+			shared.FamilyTrace: matterDeliveryBridge(traceCh, 128),
 		},
 	}
 	loop := NewMatterLoop(frame)
@@ -130,7 +130,7 @@ func TestMatterFamily_N2_MAT_01_LocalCapabilityDispatchesResponse(t *testing.T) 
 		loop.emitResponseOK(in.Intention, map[string]any{"ok": true})
 	}
 
-	h.loop.in <- mkMatterIntention("i-n2-ok", "cap_n2_ok")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-n2-ok", "cap_n2_ok"))
 
 	out := recvMatterFamilyMsg(t, h.commCh, "local capability response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK || out.Response.Payload["ok"] != true {
@@ -143,7 +143,7 @@ func TestMatterFamily_N2_MAT_01_LocalCapabilityDispatchesResponse(t *testing.T) 
 func TestMatterFamily_N2_MAT_02_InvalidIntentionFailsClosed(t *testing.T) {
 	h := newMatterFamilyN2Harness(t)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-bad",
@@ -151,7 +151,7 @@ func TestMatterFamily_N2_MAT_02_InvalidIntentionFailsClosed(t *testing.T) {
 			To:          circulation.Address{Context: "/ctx/matter-a", Type: circulation.ValueTypeMatter},
 			Correlation: &circulation.Correlation{},
 		},
-	}
+	})
 
 	out := recvMatterFamilyMsg(t, h.commCh, "invalid matter intention")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Error == nil || out.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonMissingCapName {
@@ -166,13 +166,13 @@ func TestMatterFamily_N2_MAT_03_PendingResponseDeliveredFromInbox(t *testing.T) 
 		t.Fatalf("failed to register pending")
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-pending",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 
 	got := recvMatterFamilyMsg(t, pch, "pending delivery from inbox")
 	if got.Response.IntentionID != "i-pending" {
@@ -185,13 +185,13 @@ func TestMatterFamily_N2_MAT_03_PendingResponseDeliveredFromInbox(t *testing.T) 
 func TestMatterFamily_N2_MAT_03b_ResponseWithEmptyIDDropsSilently(t *testing.T) {
 	h := newMatterFamilyN2Harness(t)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 
 	waitMatterTraceKind(t, h.traceCh, circulation.ValueTracePendingResponse)
 	noMatterFamilyMsg(t, h.commCh, "empty response id should not emit comm")
@@ -201,13 +201,13 @@ func TestMatterFamily_N2_MAT_03b_ResponseWithEmptyIDDropsSilently(t *testing.T) 
 func TestMatterFamily_N2_MAT_04_OrphanResponseTracedAndDropped(t *testing.T) {
 	h := newMatterFamilyN2Harness(t)
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-orphan",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 
 	waitMatterTraceKind(t, h.traceCh, circulation.ValueTracePendingResponse)
 	waitMatterTraceKind(t, h.traceCh, circulation.ValueTracePendingOrphanId)
@@ -238,7 +238,7 @@ func TestMatterFamily_N2_MAT_05_DelegatedWaitViaCommCompletesThroughInbox(t *tes
 		})
 	}
 
-	h.loop.in <- mkMatterIntention("i-wait", "cap_n2_wait")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-wait", "cap_n2_wait"))
 	outbound := recvMatterFamilyMsg(t, h.commCh, "delegated wait outbound request")
 	if outbound.Kind != circulation.ValueKindIntention {
 		t.Fatalf("expected outbound delegated intention, got %#v", outbound)
@@ -247,7 +247,7 @@ func TestMatterFamily_N2_MAT_05_DelegatedWaitViaCommCompletesThroughInbox(t *tes
 		t.Fatalf("expected rewritten from.context=/ctx/matter-a, got %q", outbound.Intention.From.Context)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-wait",
@@ -255,7 +255,7 @@ func TestMatterFamily_N2_MAT_05_DelegatedWaitViaCommCompletesThroughInbox(t *tes
 			To:          circulation.Address{Context: "/ctx/placeholder"},
 			From:        circulation.Address{Context: "/ctx/remote"},
 		},
-	}
+	})
 
 	final := recvMatterFamilyMsg(t, h.commCh, "delegated wait final response")
 	if final.Kind != circulation.ValueKindResponse || final.Response.Status != circulation.ValueStatusOK || final.Response.Payload["status"] != circulation.ValueStatusOK {
@@ -286,7 +286,7 @@ func TestMatterFamily_N2_MAT_05b_DelegatedWaitTimeoutPath(t *testing.T) {
 		loop.emitResponseError(errorResp(in.Intention, circulation.ValueCodeInternal, map[string]any{circulation.KeyReason: reason}, "delegated wait timed out"))
 	}
 
-	h.loop.in <- mkMatterIntention("i-wait-timeout", "cap_n2_wait_timeout")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-wait-timeout", "cap_n2_wait_timeout"))
 
 	outbound := recvMatterFamilyMsg(t, h.commCh, "delegated wait timeout outbound request")
 	if outbound.Kind != circulation.ValueKindIntention {
@@ -324,13 +324,13 @@ func TestMatterFamily_N2_MAT_05c_DelegatedWaitRestoresResponseToCaller(t *testin
 		loop.emitResponseOK(in.Intention, map[string]any{"restored": true})
 	}
 
-	h.loop.in <- mkMatterIntention("i-wait-restore", "cap_n2_wait_restore")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-wait-restore", "cap_n2_wait_restore"))
 	outbound := recvMatterFamilyMsg(t, h.commCh, "delegated wait restore outbound request")
 	if outbound.Kind != circulation.ValueKindIntention {
 		t.Fatalf("expected outbound delegated intention on restore path, got %#v", outbound)
 	}
 
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-wait-restore",
@@ -338,7 +338,7 @@ func TestMatterFamily_N2_MAT_05c_DelegatedWaitRestoresResponseToCaller(t *testin
 			To:          circulation.Address{Context: "/ctx/placeholder"},
 			From:        circulation.Address{Context: "/ctx/remote"},
 		},
-	}
+	})
 
 	restored := recvMatterFamilyMsg(t, restoredCh, "restored delegated wait response")
 	if restored.Response.To.Context != "/ctx/caller" {
@@ -363,9 +363,9 @@ func TestMatterFamily_N2_MAT_06_SaturationEmitsBusyResponse(t *testing.T) {
 	}
 
 	h.loop.handlerSlots = make(chan struct{}, 1)
-	h.loop.in <- mkMatterIntention("i-block-1", "cap_n2_block")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-block-1", "cap_n2_block"))
 	<-blocked
-	h.loop.in <- mkMatterIntention("i-block-2", "cap_n2_block")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-block-2", "cap_n2_block"))
 
 	busy := recvMatterFamilyMsg(t, h.commCh, "busy saturation response")
 	if busy.Kind != circulation.ValueKindResponse || busy.Response.Error == nil || busy.Response.Error.Code != circulation.ValueCodeUnavailable || busy.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonBusy {
@@ -394,15 +394,15 @@ func TestMatterFamily_N2_MAT_CONC_01_JobsAndResponsesRemainIsolated(t *testing.T
 		t.Fatalf("failed to register pending")
 	}
 
-	h.loop.in <- mkMatterIntention("i-job-mix", "cap_n2_mix")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-job-mix", "cap_n2_mix"))
 	<-blocked
-	h.loop.in <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindResponse,
 		Response: circulation.Response{
 			IntentionID: "i-pending-mix",
 			Status:      circulation.ValueStatusOK,
 		},
-	}
+	})
 
 	pendingResp := recvMatterFamilyMsg(t, pch, "mixed pending response")
 	if pendingResp.Response.IntentionID != "i-pending-mix" {
@@ -424,9 +424,9 @@ func TestMatterFamily_N2_MAT_CONC_02_AdmittedBurstRemainsNonBlocking(t *testing.
 		loop.emitResponseOK(in.Intention, map[string]any{"id": in.Intention.IntentionID})
 	}
 
-	h.loop.in <- mkMatterIntention("i-burst-1", "cap_n2_burst")
-	h.loop.in <- mkMatterIntention("i-burst-2", "cap_n2_burst")
-	h.loop.in <- mkMatterIntention("i-burst-3", "cap_n2_burst")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-burst-1", "cap_n2_burst"))
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-burst-2", "cap_n2_burst"))
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-burst-3", "cap_n2_burst"))
 
 	r1 := recvMatterFamilyMsg(t, h.commCh, "burst 1")
 	r2 := recvMatterFamilyMsg(t, h.commCh, "burst 2")
@@ -461,7 +461,7 @@ func TestMatterFamily_N2_MAT_CONC_03_StopAbandonsWaitsWithoutDoubleEmit(t *testi
 		loop.emitResponseError(errorResp(in.Intention, circulation.ValueCodeInternal, map[string]any{circulation.KeyReason: reason}, "stopped while waiting"))
 	}
 
-	h.loop.in <- mkMatterIntention("i-stop-wait", "cap_n2_stop_wait")
+	h.loop.deliveryIn <- localTestDelivery(mkMatterIntention("i-stop-wait", "cap_n2_stop_wait"))
 	_ = recvMatterFamilyMsg(t, h.commCh, "stop-wait outbound delegated request")
 	<-waiting
 

@@ -52,7 +52,7 @@ func TestExecutionFamily_N2_EXEC_08_WrapperWithReadyErrFailsClosedBeforeDispatch
 	st.ReadyErr = fmt.Errorf("wrapper crashed on startup")
 	st.Unlock()
 
-	h.loop.in <- mkExecUserIntention("i-failed-ready", false)
+	h.loop.deliveryIn <- localTestDelivery(mkExecUserIntention("i-failed-ready", false))
 
 	out := recvExecMsg(t, h.commCh, "wrapper failed-ready response")
 	if out.Kind != circulation.ValueKindResponse {
@@ -92,11 +92,11 @@ func TestExecutionFamily_N2_EXEC_09_WrapperFailedSignalSetsReadyErrAndNoCommEmis
 	st.SetReadyCh()
 	st.Unlock()
 
-	h.loop.in <- mkExecInternalSignalMsg(
+	h.loop.deliveryIn <- localTestDelivery(mkExecInternalSignalMsg(
 		"i-failed-signal",
 		"@wrapper_w1:/runtime",
 		execCapWrapperFailed,
-	)
+	))
 
 	// Give the loop time to process the signal.
 	waitExecutionFamilyPred(t, time.Second, func() bool {
@@ -140,11 +140,11 @@ func TestExecutionFamily_N2_EXEC_10_WrapperStopSignalIsNoOpNoStateChange(t *test
 	st.ReadyErr = nil
 	st.Unlock()
 
-	h.loop.in <- mkExecInternalSignalMsg(
+	h.loop.deliveryIn <- localTestDelivery(mkExecInternalSignalMsg(
 		"i-stop-signal",
 		"@wrapper_w1:/runtime",
 		execCapWrapperStop,
-	)
+	))
 
 	// Give the loop time to process the signal.
 	time.Sleep(50 * time.Millisecond)

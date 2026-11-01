@@ -17,6 +17,7 @@
 package execution
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,9 +120,9 @@ func TestExecutionDSL_N1_AddressParsing(t *testing.T) {
 		{"/root/my.cap", "/root", "my.cap", false},
 		{"@ext_abc123:/remote/my.cap", "@ext_abc123:/remote", "my.cap", false},
 		// forbidden forms
-		{"@wrapper_x", "", "", true},     // @wrapper_ forbidden in DSL descriptors
-		{"./my.cap", "", "", true},        // relative refs are wrapper-internal only, not DSL
-		{"", "", "", true},               // empty
+		{"@wrapper_x", "", "", true},        // @wrapper_ forbidden in DSL descriptors
+		{"./my.cap", "", "", true},          // relative refs are wrapper-internal only, not DSL
+		{"", "", "", true},                  // empty
 		{"relative_no_slash", "", "", true}, // no leading slash
 	}
 
@@ -150,10 +151,10 @@ func TestExecutionDSL_N1_ValidateGuards(t *testing.T) {
 		CapName:  "cap.bad",
 		RootName: "#root",
 		RootSection: DSLSection{
-			Name:    "#root",
-			Role:    "",
-			Inputs:  map[string]any{},
-			Outputs: map[string]any{},
+			Name:                   "#root",
+			Role:                   "",
+			Inputs:                 map[string]any{},
+			Outputs:                map[string]any{},
 			TransformationContract: DSLTransformationContract{Morphing: "x"},
 		},
 	}
@@ -254,7 +255,7 @@ func TestExecutionDSL_N1_RetryPolicySucceedsOnSecondAttempt(t *testing.T) {
 		To:          circulation.Address{Context: "/ctx/root", Cap: "cap.dsl", Type: circulation.ValueTypeUser},
 		From:        circulation.Address{Context: "/ctx/caller"},
 	}
-	resp, err := l.evalDSLInvokeWithPolicy(node, sub)
+	resp, err := l.evalDSLInvokeWithPolicy(node, sub, nil)
 	if err != nil {
 		t.Fatalf("evalDSLInvokeWithPolicy error: %v", err)
 	}
@@ -1278,5 +1279,46 @@ func TestExecutionDSL_N7_OutputNodeAsSequenceTerminal(t *testing.T) {
 	finalPayload, ok := finalMap["payload"].(map[string]any)
 	if !ok || finalPayload["value"] != 42 {
 		t.Fatalf("expected final.payload={value:42}, got %#v", finalMap)
+	}
+}
+
+// A step whose answer never came may have completed: it is not repeated unless the
+// author wrote retry.on_timeout; a definitive error is retried as before.
+func TestExecutionDSL_RetryNeverRepeatsAnUnknownOutcomeUnlessAsked(t *testing.T) {
+	run := func(retry map[string]any) (attempts int, status string) {
+		l, commCh, _ := newExecutionLoopHarness(nil)
+		var seen atomic.Int32
+		go func() {
+			for msg := range commCh {
+				if msg.Kind == circulation.ValueKindIntention {
+					seen.Add(1)
+				}
+			}
+		}()
+		node := map[string]any{
+			"@capacity": "/ctx/root/slow.cap",
+			"timeout":   map[string]any{"ms": 30},
+			"retry":     retry,
+		}
+		sub := circulation.Intention{
+			IntentionID: "unknown-root",
+			To:          circulation.Address{Context: "/ctx/root", Cap: "cap.dsl", Type: circulation.ValueTypeUser},
+			From:        circulation.Address{Context: "/ctx/caller"},
+		}
+		resp, err := l.evalDSLInvokeWithPolicy(node, sub, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+		return int(seen.Load()), resp.Status
+	}
+	if attempts, status := run(map[string]any{"max": 2, "delay_ms": 0}); attempts != 1 || status != circulation.ValueStatusError {
+		t.Fatalf("a timeout was retried by default: %d attempts, status %q", attempts, status)
+	}
+	if attempts, _ := run(map[string]any{"max": 2, "delay_ms": 0, "on_timeout": true}); attempts != 3 {
+		t.Fatalf("retry.on_timeout did not retry: %d attempts", attempts)
+	}
+	if err := validateDSLNode("invoke", map[string]any{"@capacity": "/a/b", "retry": map[string]any{"max": 1, "on_timeout": "yes"}}); err == nil {
+		t.Fatal("a non-boolean on_timeout was accepted")
 	}
 }

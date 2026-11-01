@@ -39,10 +39,8 @@ const (
 	KeyContext = "context"
 	KeyVersion = "version"
 
-	KeyIdentity  = "identity"
-	KeyID        = "id"
-	KeyPubKey    = "pubkey"
-	KeySignature = "signature"
+	KeyIdentity = "identity"
+	KeyID       = "id"
 
 	KeyCap               = "cap"
 	KeyAwaitResponse     = "await_response"
@@ -110,6 +108,8 @@ const (
 	KeyMeaning           = "meaning"
 	KeyObjective         = "objective"
 	KeySubjective        = "subjective"
+	KeySync              = "sync"
+	KeyVerify            = "verify"
 	KeyFunctional        = "functional"
 	KeyFormat            = "format"
 	KeyData              = "data"
@@ -275,6 +275,8 @@ const (
 
 	KeyIntentionId       = "intention_id"
 	KeyRootIntentionId   = "root_intention_id"
+	KeyPrincipal         = "principal"
+	KeyActor             = "actor"
 	KeyParentIntentionId = "parent_intention_id"
 	KeyFamily            = "family"
 	KeyTraceKind         = "trace_kind"

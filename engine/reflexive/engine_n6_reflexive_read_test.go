@@ -385,3 +385,31 @@ func TestEngine_N6_REF_23_ReadStateExplicitInclude(t *testing.T) {
 		t.Fatalf("read.state must not return tree: %#v", payload)
 	}
 }
+
+func TestEngine_N6_REF_ReadStructureClampsDepthAndListing(t *testing.T) {
+	h := newEngineN6Harness(t)
+	resp := callN6Reflexive(t, h, n6WorkspaceID, "n6-read-structure-clamp", "read.structure", map[string]any{
+		configuration.KeyDepth:      1_000_000,
+		configuration.KeyMaxPerPath: 1_000_000,
+	})
+	if resp.Status != circulation.ValueStatusOK {
+		t.Fatalf("status=%q error=%#v", resp.Status, resp.Error)
+	}
+	params := mustPayloadMap(t, mustPayloadMap(t, resp.Payload)["params"])
+	num := func(v any) float64 {
+		switch x := v.(type) {
+		case int:
+			return float64(x)
+		case float64:
+			return x
+		}
+		return -1
+	}
+	// Bounds are the engine's: depth 16, 1000 entries per path.
+	if got := num(params[configuration.KeyDepth]); got != 16 {
+		t.Fatalf("effective depth = %v, want 16", params[configuration.KeyDepth])
+	}
+	if got := num(params[configuration.KeyMaxPerPath]); got != 1000 {
+		t.Fatalf("effective max_per_path = %v, want 1000", params[configuration.KeyMaxPerPath])
+	}
+}

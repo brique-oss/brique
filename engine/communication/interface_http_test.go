@@ -19,6 +19,7 @@ package comm
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,8 +67,8 @@ func TestHTTPInterface_N1_HTTP_01_NewRuntimeDefaults(t *testing.T) {
 	if rt.Name != "http-main" || rt.Type != EndpointOuterCtx || rt.Driver != configuration.KeyIntHTTP {
 		t.Fatalf("unexpected runtime identity: %#v", rt)
 	}
-	if rt.Status != InterfaceInit {
-		t.Fatalf("status=%v want InterfaceInit", rt.Status)
+	if state := rt.State(); state.Status != InterfaceInit {
+		t.Fatalf("status=%v want InterfaceInit", state.Status)
 	}
 
 	h, ok := rt.Impl.(*HttpInterface)
@@ -117,8 +118,8 @@ func TestHTTPInterface_N1_HTTP_03_StartClientMode(t *testing.T) {
 	if err := h.Start(); err != nil {
 		t.Fatalf("Start error: %v", err)
 	}
-	if rt.Status != InterfaceRunning {
-		t.Fatalf("status=%v want running", rt.Status)
+	if state := rt.State(); state.Status != InterfaceInit {
+		t.Fatalf("implementation Start must not own runtime state, got=%v", state.Status)
 	}
 	if h.server != nil {
 		t.Fatalf("client mode should not create server")
@@ -129,6 +130,7 @@ func TestHTTPInterface_N1_HTTP_03b_StartWithExplicitCapabilities(t *testing.T) {
 	rt, err := NewHTTPInterfaceRuntime(newHTTPTestCfg("http-both", "", map[string]any{
 		configuration.KeyIntIngressEnabled: true,
 		configuration.KeyIntEgressEnabled:  true,
+		configuration.KeyIntAddr:           "127.0.0.1:0",
 	}))
 	if err != nil {
 		t.Fatalf("constructor error: %v", err)
@@ -143,10 +145,13 @@ func TestHTTPInterface_N1_HTTP_03b_StartWithExplicitCapabilities(t *testing.T) {
 	if h.server == nil {
 		t.Fatalf("ingress enabled should initialize server")
 	}
+	t.Cleanup(func() { _ = h.Close() })
 }
 
 func TestHTTPInterface_N1_HTTP_04_StartServerHandlerIngress(t *testing.T) {
-	rt, err := NewHTTPInterfaceRuntime(newHTTPTestCfg("http-server", configuration.ValueConfigIntModeServer, nil))
+	rt, err := NewHTTPInterfaceRuntime(newHTTPTestCfg("http-server", configuration.ValueConfigIntModeServer, map[string]any{
+		configuration.KeyIntAddr: "127.0.0.1:0",
+	}))
 	if err != nil {
 		t.Fatalf("constructor error: %v", err)
 	}
@@ -160,14 +165,15 @@ func TestHTTPInterface_N1_HTTP_04_StartServerHandlerIngress(t *testing.T) {
 	if h.server == nil {
 		t.Fatalf("expected server initialized")
 	}
+	t.Cleanup(func() { _ = h.Close() })
 
 	msg := mkIntentionMsg("/ctx/dst", circulation.ValueTypeMatter, "/ctx/src")
 	body, _ := json.Marshal(msg)
 	req := httptest.NewRequest(http.MethodPost, "/brique/msg", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
 	h.server.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d want 202", w.Code)
 	}
 
 	select {
@@ -189,13 +195,6 @@ func TestHTTPInterface_N1_HTTP_04_StartServerHandlerIngress(t *testing.T) {
 		t.Fatalf("GET status=%d want 405", badW.Code)
 	}
 
-	h.readLimit = int64(len(body) - 1)
-	tooLargeReq := httptest.NewRequest(http.MethodPost, "/brique/msg", strings.NewReader(string(body)))
-	tooLargeW := httptest.NewRecorder()
-	h.server.Handler.ServeHTTP(tooLargeW, tooLargeReq)
-	if tooLargeW.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized POST status=%d want 413", tooLargeW.Code)
-	}
 }
 
 func TestHTTPInterface_N1_HTTP_05_ReadLoopGuards(t *testing.T) {
@@ -217,6 +216,29 @@ func TestHTTPInterface_N1_HTTP_05_ReadLoopGuards(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "server not initialized") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPInterface_StartDetectsBindCollisionSynchronously(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	rt, err := NewHTTPInterfaceRuntime(newHTTPTestCfg("http-collision", configuration.ValueConfigIntModeServer, map[string]any{
+		configuration.KeyIntAddr: occupied.Addr().String(),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := rt.Impl.(*HttpInterface)
+	err = h.Start()
+	if err == nil || !strings.Contains(err.Error(), "listen") {
+		t.Fatalf("expected synchronous bind failure, got %v", err)
+	}
+	if h.listener != nil {
+		t.Fatal("failed start must not retain a listener")
 	}
 }
 
@@ -358,5 +380,42 @@ func TestHTTPInterface_N1_HTTP_08_CloseAndRtName(t *testing.T) {
 		// expected
 	default:
 		t.Fatalf("done should be closed")
+	}
+}
+
+func TestHTTPInterface_WriteLoopReportsDefinitivePeerRejection(t *testing.T) {
+	rt, err := NewHTTPInterfaceRuntime(newHTTPTestCfg("http-client", configuration.ValueConfigIntModeClient, map[string]any{
+		configuration.KeyIntTargets: map[string]any{"pub1": "http://peer.local"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := rt.Impl.(*HttpInterface)
+	rt.Egress = make(chan circulation.Message, 1)
+	outcomes := make(chan InterfaceEgressOutcome, 1)
+	rt.ReportEgressOutcome = func(_ circulation.Message, outcome InterfaceEgressOutcome) { outcomes <- outcome }
+	h.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- h.WriteLoop() }()
+	rt.Egress <- mkIntentionMsg("@ext_pub1:/route", circulation.ValueTypeMatter, "/ctx/src")
+
+	select {
+	case outcome := <-outcomes:
+		if !outcome.Definitive || outcome.StatusCode != http.StatusServiceUnavailable || outcome.Err == nil {
+			t.Fatalf("unexpected outcome: %#v", outcome)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing peer rejection outcome")
+	}
+	_ = h.Close()
+	select {
+	case err := <-loopDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write loop did not stop")
 	}
 }

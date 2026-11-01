@@ -79,7 +79,7 @@ func (l *MatterLoop) capStructureCreate(msg circulation.Message) {
 	obj := map[string]any{}
 	if in.Params != nil {
 		if m, ok := in.Params[circulation.KeyStructure].(map[string]any); ok && m != nil {
-			obj = m
+			obj = shared.DeepCloneMap(m) // never mutate the caller's params
 		}
 	}
 	ensureStructureMinimalSections(obj)
@@ -405,7 +405,7 @@ func (l *MatterLoop) capStructureDerive(msg circulation.Message) {
 	doc := map[string]any{}
 	if in.Params != nil {
 		if m, ok := in.Params[circulation.KeyStructure].(map[string]any); ok && m != nil {
-			doc = m
+			doc = shared.DeepCloneMap(m) // never mutate the caller's params
 		}
 	}
 	ensureStructureMinimalSections(doc)

@@ -45,9 +45,9 @@ package reflexive
 //   "edit.get_element_template"-> (*ReflexiveLoop).capEditGetElementTemplate
 
 import (
+	"brique_engine/junction"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -744,6 +744,14 @@ func resolveDestinationContextDir(selfCtxID, selfCtxDir, destCtxID string) (stri
 	return destDir, nil
 }
 
+// updateParentChildListLocked serializes the read-modify-write of a parent
+// descriptor so that concurrent creations or deletions never lose an entry.
+func (l *ReflexiveLoop) updateParentChildListLocked(ctxDir string, child string, present bool) error {
+	unlock := l.lockEditPath(filepath.Join(ctxDir, ContextDescriptorFilename))
+	defer unlock()
+	return updateParentChildList(ctxDir, child, present)
+}
+
 func updateParentChildList(ctxDir string, child string, present bool) error {
 	child = strings.TrimSpace(child)
 	if child == "" || strings.Contains(child, "/") || strings.Contains(child, "\\") {
@@ -849,45 +857,40 @@ func ensureDirForFile(absPath string) error {
 // - Reports failure via returned `error`; callers convert it to the appropriate circulation response semantics.
 
 func atomicWriteFile(absPath string, data []byte, perm os.FileMode) error {
-	if err := ensureDirForFile(absPath); err != nil {
-		return err
-	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(absPath), "."+filepath.Base(absPath)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := tmpFile.Name()
-	if err := tmpFile.Chmod(perm); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if _, err := tmpFile.Write(data); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := shared.AtomicReplace(tmp, absPath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return shared.WriteFileAtomic(absPath, data, perm)
 }
 
+// editLock is a per-path mutex with a holder count so that idle entries can
+// be dropped instead of accumulating for the lifetime of the loop.
+type editLock struct {
+	mu      sync.Mutex
+	holders int
+}
+
+// lockEditPath serializes read-modify-write cycles on one file. The returned
+// function releases the lock; the entry disappears once nobody holds or waits.
 func (l *ReflexiveLoop) lockEditPath(absPath string) func() {
 	l.editLocksMu.Lock()
-	mu := l.editLocks[absPath]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		l.editLocks[absPath] = mu
+	e := l.editLocks[absPath]
+	if e == nil {
+		e = &editLock{}
+		l.editLocks[absPath] = e
 	}
+	e.holders++
 	l.editLocksMu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	e.mu.Lock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.mu.Unlock()
+			l.editLocksMu.Lock()
+			e.holders--
+			if e.holders == 0 {
+				delete(l.editLocks, absPath)
+			}
+			l.editLocksMu.Unlock()
+		})
+	}
 }
 
 // copyFileAtomic
@@ -945,36 +948,7 @@ func (l *ReflexiveLoop) lockEditPath(absPath string) func() {
 // - Reports failure via returned `error`; callers convert it to circulation response semantics.
 
 func copyFileAtomic(srcAbs, dstAbs string) error {
-	if err := ensureDirForFile(dstAbs); err != nil {
-		return err
-	}
-	in, err := os.Open(srcAbs)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	tmp := dstAbs + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	_, cErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if cErr != nil {
-		_ = os.Remove(tmp)
-		return cErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmp)
-		return closeErr
-	}
-	if err := shared.AtomicReplace(tmp, dstAbs); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-
-	return nil
+	return shared.CopyFileAtomic(srcAbs, dstAbs, 0o644)
 }
 
 // removeAllIfExists
@@ -1094,14 +1068,6 @@ func removeAllIfExists(absPath string) error {
 // - Returns exactly one cloned value.
 // - Emits no response, trace, or outbound message.
 // - Best-effort copy for JSON-shaped values; marshal/unmarshal errors are ignored and may yield nil or zero-shape output.
-
-func deepCopyJSON(v any) any {
-	// Safe & simple for JSON-y values
-	b, _ := json.Marshal(v)
-	var out any
-	_ = json.Unmarshal(b, &out)
-	return out
-}
 
 // ensureDocumentLocalDefault
 //
@@ -1708,6 +1674,7 @@ func semanticMeaningPatchOptions() shared.SemanticPatchOptions {
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
 func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
+	defer l.lockContentEdit()()
 	in := msg.Intention
 	if in.Params == nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -1869,6 +1836,7 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 		continue
 	}
 
+	l.notifyIfEdited(results, true)
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyResult: results,
 	})
@@ -1882,6 +1850,7 @@ func (l *ReflexiveLoop) capEditPatchMeaning(msg circulation.Message) {
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
 func (l *ReflexiveLoop) capEditDelete(msg circulation.Message) {
+	defer l.lockStructuralEdit()()
 	in := msg.Intention
 	if in.Params == nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -1931,11 +1900,15 @@ func (l *ReflexiveLoop) capEditDelete(msg circulation.Message) {
 				results = append(results, editErr(base, circulation.ValueCodeRefused, "scope violation", map[string]any{circulation.KeyReason: "scope_violation"}))
 				continue
 			}
+			if l.externalRequestMissing(in, childDir) {
+				results = append(results, editErr(base, circulation.ValueCodeNotFound, "not found", map[string]any{circulation.KeyReason: "not_found"}))
+				continue
+			}
 			if derr := removeAllIfExists(childDir); derr != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, derr.Error(), map[string]any{circulation.KeyReason: "delete_failed"}))
 				continue
 			}
-			if uerr := updateParentChildList(l.frame.ContextDir, name, false); uerr != nil {
+			if uerr := l.updateParentChildListLocked(l.frame.ContextDir, name, false); uerr != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, uerr.Error(), map[string]any{circulation.KeyReason: "parent_update_failed"}))
 				continue
 			}
@@ -1950,6 +1923,13 @@ func (l *ReflexiveLoop) capEditDelete(msg circulation.Message) {
 		}
 		if ok, e := ensureWithinDir(l.frame.ContextDir, absMeaning); e != nil || !ok {
 			results = append(results, editErr(base, circulation.ValueCodeRefused, "scope violation", map[string]any{circulation.KeyReason: "scope_violation"}))
+			continue
+		}
+
+		if l.externalRequestMissing(in, absMeaning) {
+			// Deleting what is not there is "not found" for an external caller, the
+			// same answer as for what it may not touch (the local call stays idempotent).
+			results = append(results, editErr(base, circulation.ValueCodeNotFound, "not found", map[string]any{circulation.KeyReason: "not_found"}))
 			continue
 		}
 
@@ -1996,6 +1976,7 @@ func (l *ReflexiveLoop) capEditDelete(msg circulation.Message) {
 		results = append(results, editOK(base))
 	}
 
+	l.notifyIfEdited(results, true)
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyResult: results,
 	})
@@ -2009,6 +1990,7 @@ func (l *ReflexiveLoop) capEditDelete(msg circulation.Message) {
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
 func (l *ReflexiveLoop) capEditCreate(msg circulation.Message) {
+	defer l.lockStructuralEdit()()
 	in := msg.Intention
 	if in.Params == nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -2126,7 +2108,7 @@ func (l *ReflexiveLoop) capEditCreate(msg circulation.Message) {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, err.Error(), map[string]any{circulation.KeyReason: "write_failed"}))
 				goto nextItem
 			}
-			if err := updateParentChildList(l.frame.ContextDir, name, true); err != nil {
+			if err := l.updateParentChildListLocked(l.frame.ContextDir, name, true); err != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, err.Error(), map[string]any{circulation.KeyReason: "parent_update_failed"}))
 				goto nextItem
 			}
@@ -2229,6 +2211,7 @@ func (l *ReflexiveLoop) capEditCreate(msg circulation.Message) {
 		continue
 	}
 
+	l.notifyIfEdited(results, true)
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyResult: results,
 	})
@@ -2242,6 +2225,7 @@ func (l *ReflexiveLoop) capEditCreate(msg circulation.Message) {
 // Keep this header minimal.
 // Update the capacity descriptor when external behavior changes.
 func (l *ReflexiveLoop) capEditDuplicate(msg circulation.Message) {
+	defer l.lockStructuralEdit()()
 	in := msg.Intention
 	if in.Params == nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -2344,7 +2328,7 @@ func (l *ReflexiveLoop) capEditDuplicate(msg circulation.Message) {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, err.Error(), map[string]any{circulation.KeyReason: "copy_failed"}))
 				continue
 			}
-			if err := updateParentChildList(dstCtxDir, dst, true); err != nil {
+			if err := l.updateParentChildListLocked(dstCtxDir, dst, true); err != nil {
 				results = append(results, editErr(base, circulation.ValueCodeInternal, err.Error(), map[string]any{circulation.KeyReason: "parent_update_failed"}))
 				continue
 			}
@@ -2442,6 +2426,7 @@ func (l *ReflexiveLoop) capEditDuplicate(msg circulation.Message) {
 		results = append(results, editOK(base))
 	}
 
+	l.notifyIfEdited(results, false)
 	l.emitResponseOK(in, map[string]any{
 		circulation.KeyResult: results,
 	})
@@ -2617,4 +2602,29 @@ func (l *ReflexiveLoop) capEditGetElementTemplate(msg circulation.Message) {
 	}
 
 	l.emitResponseOK(in, payload)
+}
+
+// notifyIfEdited tells the root that descriptors changed when at least one item
+// of an edit.* request succeeded, so the projection can follow immediately.
+// With precise set, it names each element that was written; otherwise (and for
+// contexts, whose effects reach beyond one file) the root does a regular pass.
+func (l *ReflexiveLoop) notifyIfEdited(results []map[string]any, precise bool) {
+	var hints []junction.ProjectionHint
+	changed := false
+	for _, r := range results {
+		if ok, _ := r[circulation.KeyOK].(bool); !ok {
+			continue
+		}
+		changed = true
+		t, _ := r[circulation.KeyType].(string)
+		name, _ := r[circulation.KeyName].(string)
+		if !precise || name == "" || t == circulation.ValueContext || l.frame == nil {
+			l.notifyProjectionChange() // cannot say what: regular pass
+			return
+		}
+		hints = append(hints, junction.ProjectionHint{CtxID: l.frame.CtxId, ElementType: t, Name: name})
+	}
+	if changed {
+		l.notifyProjectionChange(hints...)
+	}
 }

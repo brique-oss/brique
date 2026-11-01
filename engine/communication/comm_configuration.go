@@ -17,8 +17,8 @@
 package comm
 
 import (
-	"strings"
 	"brique_engine/configuration"
+	"strings"
 )
 
 // -----------------------------
@@ -30,7 +30,6 @@ type CommCfg struct {
 	Scope           map[string]any
 	Ifaces          []InterfaceCfg
 	WrapperBoundary []string
-	InstanceKeyName string
 
 	// Scatter (root-only fan-out implemented in CommLoop)
 	// AllowedScatter maps: intention_type (family) -> cap_name -> true
@@ -127,10 +126,6 @@ func ParseCommCfg(engineCfg map[string]any) CommCfg {
 	if s, ok := engineCfg[configuration.KeyScope].(map[string]any); ok && s != nil {
 		cfg.Scope = s
 	}
-	if v, ok := engineCfg[configuration.KeyInstanceKeyName].(string); ok {
-		cfg.InstanceKeyName = strings.TrimSpace(v)
-	}
-
 	// interfaces[]
 	if arr, ok := engineCfg[configuration.KeyInterfaces].([]any); ok && arr != nil {
 		out := make([]InterfaceCfg, 0, len(arr))

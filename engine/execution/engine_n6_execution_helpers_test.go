@@ -48,6 +48,18 @@ type engineN6ExecutionHarness struct {
 	rootDir string
 }
 
+func n6ExecutionDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newEngineN6ExecutionHarness(t *testing.T) *engineN6ExecutionHarness {
 	t.Helper()
 
@@ -65,8 +77,11 @@ func newEngineN6ExecutionHarness(t *testing.T) *engineN6ExecutionHarness {
 
 func startEngineN6ExecutionHarnessOnRootDir(t *testing.T, rootDir string) *engineN6ExecutionHarness {
 	t.Helper()
+	return startEngineN6ExecutionHarnessWithRegistry(t, rootDir, junction.NewContextCommRegistry())
+}
 
-	reg := junction.NewContextCommRegistry()
+func startEngineN6ExecutionHarnessWithRegistry(t *testing.T, rootDir string, reg *junction.ContextCommRegistry) *engineN6ExecutionHarness {
+	t.Helper()
 	root, err := ctxpkg.NewContextLoop(rootDir, shared.RootContextID, reg)
 	if err != nil {
 		t.Fatalf("NewContextLoop(root) error: %v", err)
@@ -80,7 +95,7 @@ func startEngineN6ExecutionHarnessOnRootDir(t *testing.T, rootDir string) *engin
 	}, "n6 execution workspace comm registry entry")
 
 	sinkCh := make(chan circulation.Message, 64)
-	reg.Register(shared.ContextAddr(n6ExecutionSinkID), sinkCh, "")
+	reg.Register(shared.ContextAddr(n6ExecutionSinkID), n6ExecutionDeliveryBridge(sinkCh, 64), "")
 
 	return &engineN6ExecutionHarness{
 		root:    root,
@@ -161,6 +176,16 @@ func patchN6ExecutionContextForRuntime(t *testing.T, ctxPath string, listenerAdd
 			iface["config"] = cfg
 		}
 		delete(cfg, "addr")
+	}
+
+	// Source-change detection is off unless a wrapper opts in with an interval;
+	// the stale-runtime tests rely on it.
+	execCfg, _ := engineConfig["execution"].(map[string]any)
+	wrappers, _ := execCfg["wrappers"].([]any)
+	for _, raw := range wrappers {
+		if w, ok := raw.(map[string]any); ok {
+			w["source_check_interval_ms"] = 1
+		}
 	}
 
 	if os.Getenv("BRIQUE_N6_EXECUTION_TRACE_EAGER") == "1" {
@@ -271,7 +296,7 @@ func sendToN6ExecutionContext(t *testing.T, h *engineN6ExecutionHarness, ctxID s
 		t.Fatalf("context channel not found for %s", ctxID)
 	}
 	select {
-	case ch <- msg:
+	case ch <- junction.MustLocalDelivery(junction.MustLocalAuthority("test:execution"), msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending message to %s", ctxID)
 	}
@@ -316,7 +341,7 @@ func recvEngineN6ExecutionMsgByID(t *testing.T, ch <-chan circulation.Message, i
 func newDedicatedSink(t *testing.T, h *engineN6ExecutionHarness, sinkID string) (chan circulation.Message, func(intentionID, capName string, params map[string]any) circulation.Response) {
 	t.Helper()
 	ch := make(chan circulation.Message, 8)
-	h.reg.Register(shared.ContextAddr(sinkID), ch, "")
+	h.reg.Register(shared.ContextAddr(sinkID), n6ExecutionDeliveryBridge(ch, 8), "")
 	call := func(intentionID, capName string, params map[string]any) circulation.Response {
 		msg := circulation.Message{
 			Kind: circulation.ValueKindIntention,

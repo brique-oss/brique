@@ -25,12 +25,12 @@
       "communication": {
         "_comment": "Read by CommunicationLoop. Key presence required (empty {} is enough to start a context with no wrapper and no UI attached — a pure logic child context that only reacts to intentions routed to it from its parent). Everything below is optional and only needed once this context must exchange messages with a wrapper process or a UI over WebSocket/HTTP.",
 
-        "instance_key_name": "main",
-        "_instance_key_name_note": "Root context only. Logical key name used to load the instance private key from the local Brique config directory. Non-root contexts omit this field entirely.",
 
         "websocket_listener": {
           "_comment": "Root context only — the engine never reads this key from a non-root context.json (setting it there is a silent no-op). Optional even on root: only needed if this instance must expose one shared physical WebSocket listener for wrappers and UIs across the whole context tree to connect to. Child contexts never open their own listener; they only declare logical paths on 'ws' interfaces below, which are served by this single root listener.",
-          "addr": ":8080",
+          "addr": "127.0.0.1:8080",
+          "wrapper_auth": "required",
+          "_wrapper_auth_note": "Optional because the engine defaults to 'required'. Wrapper connections must carry the per-launch secret the engine puts in BRIQUE_WS_URL (/k/<secret>), otherwise 404. 'optional' is reserved for explicit local development.",
           "_addr_note": "Required inside this block if websocket_listener is present at all. host:port the shared listener binds to."
         },
 
@@ -65,9 +65,10 @@
               "_timeouts_note": "Optional. 0 means no timeout / engine default for each. Only meaningful for 'http'/'https' interfaces.",
               "tls_cert_file": "",
               "tls_key_file": "",
+              "tls_ca_file": "",
               "tls_insecure_skip_verify": false,
               "tls_server_name": "",
-              "_tls_note": "Optional. Only read for 'https' interfaces."
+              "_tls_note": "Optional. Only read for 'https' interfaces. tls_ca_file is a PEM bundle used to verify peers from a private PKI; signed external traffic still refuses tls_insecure_skip_verify=true."
             }
           }
         ],
@@ -165,7 +166,7 @@
       },
 
       "reflexive": {},
-      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Currently no standard keys; reserved for future reflexive-family configuration."
+      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Optional, root only: 'projection_sync_interval_ms' (>0) keeps the meaning projection up to date by itself, applying new/changed/deleted descriptors found on disk (cost follows the change, not the instance size); 'projection_verify_interval_ms' (>0) adds a slower pass that also catches in-place edits; 'projection_sync_on_edit' (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. All default to off; meaning.update {sync:true} does the same pass on demand."
     }
   },
 

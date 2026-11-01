@@ -40,6 +40,7 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/security/refusal"
 	"brique_engine/shared"
 )
 
@@ -366,6 +367,11 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error(), circulation.KeyMatterID: matterID},
 				"failed to open substance read lease"
 		}
+		if !l.bindLeaseToCaller(h.RID, msg.Intention, "read") {
+			return map[string]any{}, false, circulation.ValueCodeUnauthorized,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure, circulation.KeyMatterID: matterID},
+				"lease authorization unavailable"
+		}
 
 		payload = map[string]any{
 			circulation.KeyKind:       circulation.ValueDataKindHTTP,
@@ -440,7 +446,7 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 			// The inbound message may still be owned by asynchronous tracing. A
 			// Message value copy shares its Params map, so clone the map before
 			// enriching the delegated request.
-			msg.Intention.Params = deepCloneMap(msg.Intention.Params)
+			msg.Intention.Params = shared.DeepCloneMap(msg.Intention.Params)
 			// Privileged wrapper transport destination emitted by the family:
 			// Comm will forward to the boundary, then boundary ingress will deliver to wrapper iface.
 			msg.Intention.To.Context = circulation.ContextID("@wrapper_" + wrapperName + ":/" + rel)
@@ -613,9 +619,15 @@ func (l *MatterLoop) capMatterReadBatch(msg circulation.Message) {
 	wantMeaning, wantFunctional, wantData, wantBrique := parseReadWants(in.Params)
 
 	results := make([]map[string]any, 0, len(ids))
+	scope := l.externalReadScope(in)
 	for _, raw := range ids {
 		mid := strings.TrimSpace(raw)
 		if mid == "" {
+			continue
+		}
+		if scope != nil && !scope.CanRead(l.frame.CtxId, circulation.ValueMatter, mid) {
+			// Not readable by this caller: reported as absent, without looking at storage.
+			results = append(results, map[string]any{circulation.KeyMatterID: mid, circulation.KeyOK: false, circulation.KeyError: refusal.ItemNotFound()})
 			continue
 		}
 		item := func() map[string]any {
@@ -665,6 +677,13 @@ func (l *MatterLoop) capMatterReadBatch(msg circulation.Message) {
 			item[circulation.KeyOK] = true
 			return item
 		}()
+		if scope != nil {
+			if problem, isMap := item[circulation.KeyError].(map[string]any); isMap {
+				if reason, _ := problem[circulation.KeyReason].(string); refusal.IsNonexistenceReason(reason) {
+					item[circulation.KeyError] = refusal.ItemNotFound()
+				}
+			}
+		}
 		results = append(results, item)
 	}
 

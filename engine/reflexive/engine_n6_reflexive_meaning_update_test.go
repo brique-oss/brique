@@ -473,3 +473,74 @@ func TestEngine_N6_REF_36_MeaningRebuildModes(t *testing.T) {
 		}
 	})
 }
+
+func syncCounts(t *testing.T, resp circulation.Response) (added, changed, removed float64) {
+	t.Helper()
+	if resp.Status != circulation.ValueStatusOK {
+		t.Fatalf("meaning.update sync status=%q error=%#v", resp.Status, resp.Error)
+	}
+	p := mustPayloadMap(t, resp.Payload)
+	added, _ = anyToFloat(p["added"])
+	changed, _ = anyToFloat(p["changed"])
+	removed, _ = anyToFloat(p["removed"])
+	return
+}
+
+// meaning.update {sync:true} discovers on-disk changes by itself: after a full
+// rebuild it finds nothing to do, then it picks up an out-of-band edit, a new
+// element and a deletion, and meaning.query reflects them.
+func TestEngine_N6_REF_SyncDiscoversChangesAfterRebuild(t *testing.T) {
+	h := newEngineN6Harness(t)
+	rebuildN6Meaning(t, h, "n6-sync-rebuild")
+
+	// The rebuild recorded fingerprints: nothing to reindex.
+	a, c, r := syncCounts(t, callN6MeaningUpdate(t, h, "n6-sync-noop", map[string]any{circulation.KeySync: true}))
+	if a != 0 || c != 0 || r != 0 {
+		t.Fatalf("sync right after rebuild should be a no-op: added=%v changed=%v removed=%v", a, c, r)
+	}
+
+	// Out-of-band edit (in place) is found by a verifying pass.
+	descPath := filepath.Join(h.rootDir, "workspace", "capacity", "sample.echo.json")
+	patchDescriptorField(t, descPath, "objective", map[string]any{"description": "patched-by-sync-test"})
+	_, c, _ = syncCounts(t, callN6MeaningUpdate(t, h, "n6-sync-verify", map[string]any{
+		circulation.KeySync: true, circulation.KeyVerify: true,
+	}))
+	if c != 1 {
+		t.Fatalf("verify sync should reindex exactly the edited element, changed=%v", c)
+	}
+	rows := mustMeaningResultRows(t, queryN6Meaning(t, h, "n6-sync-query", map[string]any{
+		circulation.KeyCtxId:       n6WorkspaceID,
+		circulation.KeyElementKind: "capacity",
+		circulation.KeyFilters: map[string]any{
+			"objective.description": map[string]any{"eq": "patched-by-sync-test"},
+		},
+	}))
+	names := map[string]bool{}
+	for _, row := range rows {
+		names[row.(map[string]any)["name"].(string)] = true
+	}
+	if !names["sample.echo"] {
+		t.Fatalf("query should find the synced edit, got %v", names)
+	}
+
+	// Deleting the file removes it from the projection.
+	if err := os.Remove(descPath); err != nil {
+		t.Fatal(err)
+	}
+	_, _, r = syncCounts(t, callN6MeaningUpdate(t, h, "n6-sync-removed", map[string]any{circulation.KeySync: true}))
+	if r != 1 {
+		t.Fatalf("sync should drop the deleted element, removed=%v", r)
+	}
+	rows = mustMeaningResultRows(t, queryN6Meaning(t, h, "n6-sync-query2", map[string]any{
+		circulation.KeyCtxId:       n6WorkspaceID,
+		circulation.KeyElementKind: "capacity",
+		circulation.KeyFilters: map[string]any{
+			"objective.name": map[string]any{"eq": "sample.echo"},
+		},
+	}))
+	for _, row := range rows {
+		if row.(map[string]any)["name"] == "sample.echo" {
+			t.Fatalf("deleted element still queryable: %v", row)
+		}
+	}
+}

@@ -27,6 +27,18 @@ import (
 	"brique_engine/shared"
 )
 
+func reflexiveDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newReflexiveLoopHarness(t *testing.T) (*ReflexiveLoop, chan circulation.Message, string) {
 	t.Helper()
 	ctxDir := t.TempDir()
@@ -35,7 +47,7 @@ func newReflexiveLoopHarness(t *testing.T) (*ReflexiveLoop, chan circulation.Mes
 		CtxId:      "/ctx/reflexive-a",
 		ContextDir: ctxDir,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: reflexiveDeliveryBridge(commCh, 64),
 		},
 	}
 	return NewReflexiveLoop(frame, nil), commCh, ctxDir
@@ -194,23 +206,23 @@ func TestReflexiveLoop_N1_RLO_04_LifecycleAndLoopInbox(t *testing.T) {
 		t.Fatalf("state should be running after Start")
 	}
 
-	l.InChan() <- circulation.Message{
+	l.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "i-loop-unknown",
 			From:        circulation.Address{Context: "/ctx/caller"},
 			To:          circulation.Address{Cap: "unknown_cap"},
 		},
-	}
+	})
 	m := recvReflexiveLoopMsg(t, commCh, "loop unknown cap")
 	if m.Kind != circulation.ValueKindResponse || m.Response.Error == nil || m.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonUnknownCap {
 		t.Fatalf("loop unknown cap response mismatch: %#v", m)
 	}
 
-	l.InChan() <- circulation.Message{
+	l.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:     circulation.ValueKindResponse,
 		Response: circulation.Response{IntentionID: "ignored"},
-	}
+	})
 	select {
 	case m := <-commCh:
 		t.Fatalf("response-kind inbox messages should be ignored, got %#v", m)

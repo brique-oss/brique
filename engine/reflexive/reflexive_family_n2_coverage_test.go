@@ -30,7 +30,7 @@ import (
 func TestReflexiveFamily_N2_REF_05_UnknownCapFailsClosed(t *testing.T) {
 	h := newReflexiveFamilyN2Harness(t)
 
-	h.loop.in <- mkReflexiveIntention("i-ref-unknown-cap", "cap_does_not_exist")
+	h.loop.deliveryIn <- localTestDelivery(mkReflexiveIntention("i-ref-unknown-cap", "cap_does_not_exist"))
 
 	out := recvReflexiveFamilyMsg(t, h.commCh, "unknown cap response")
 	if out.Kind != circulation.ValueKindResponse {
@@ -76,7 +76,7 @@ func TestReflexiveFamily_N2_REF_06_CorrelationPreservedOnResponse(t *testing.T) 
 			To:   circulation.Address{Context: "/ctx/reflexive-a", Type: circulation.ValueTypeReflexive, Cap: "cap_n2_corr"},
 		},
 	}
-	h.loop.in <- msg
+	h.loop.deliveryIn <- localTestDelivery(msg)
 
 	out := recvReflexiveFamilyMsg(t, h.commCh, "correlated reflexive response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK {

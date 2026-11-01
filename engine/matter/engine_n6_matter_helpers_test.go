@@ -50,6 +50,18 @@ type engineN6MatterHarness struct {
 	rootDir string
 }
 
+func n6MatterDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newEngineN6MatterHarness(t *testing.T) *engineN6MatterHarness {
 	t.Helper()
 
@@ -71,7 +83,7 @@ func newEngineN6MatterHarness(t *testing.T) *engineN6MatterHarness {
 	}, "n6 matter workspace comm registry entry")
 
 	sinkCh := make(chan circulation.Message, 64)
-	reg.Register(shared.ContextAddr(n6MatterSinkID), sinkCh, "")
+	reg.Register(shared.ContextAddr(n6MatterSinkID), n6MatterDeliveryBridge(sinkCh, 64), "")
 
 	return &engineN6MatterHarness{
 		root:    root,
@@ -114,7 +126,10 @@ func installGenericPythonWrapper(t *testing.T, rootDir string) {
 		t.Fatalf("runtime.Caller failed")
 	}
 	engineDir := filepath.Dir(filepath.Dir(file))
-	src := filepath.Join(engineDir, "..", "templates", "instance", "wrapper", "python", "code")
+	pyDir := filepath.Join(engineDir, "..", "templates", "instance", "wrapper", "python")
+	src := filepath.Join(pyDir, "code")
+	// The runtime library is shared per instance, not copied per wrapper.
+	t.Setenv("BRIQUE_WRAPPER_LIB", filepath.Join(pyDir, "lib"))
 	dst := filepath.Join(rootDir, "workspace", "code", "sandbox_py")
 
 	if err := copyFileMatter(filepath.Join(src, "main.py"), filepath.Join(dst, "main.py")); err != nil {
@@ -122,9 +137,6 @@ func installGenericPythonWrapper(t *testing.T, rootDir string) {
 	}
 	if err := copyFileMatter(filepath.Join(src, "requirements.txt"), filepath.Join(dst, "requirements.txt")); err != nil {
 		t.Fatalf("copy wrapper requirements.txt: %v", err)
-	}
-	if err := copyDirRecursiveMatter(filepath.Join(src, "wrapper"), filepath.Join(dst, "wrapper")); err != nil {
-		t.Fatalf("copy wrapper package: %v", err)
 	}
 }
 
@@ -284,7 +296,7 @@ func sendToN6MatterContext(t *testing.T, h *engineN6MatterHarness, ctxID string,
 		t.Fatalf("context channel not found for %s", ctxID)
 	}
 	select {
-	case ch <- msg:
+	case ch <- junction.MustLocalDelivery(junction.MustLocalAuthority("test:matter"), msg):
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timeout sending message to %s", ctxID)
 	}

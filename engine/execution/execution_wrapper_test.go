@@ -17,8 +17,10 @@
 package execution
 
 import (
+	"brique_engine/shared"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -411,5 +413,66 @@ func TestExecutionWrapper_N1_EXWRP_13_DeriveWrapperRuntimeDirsAndEnv(t *testing.
 	}
 	if env["X"] != "1" {
 		t.Fatalf("expected override env to be preserved: %#v", env)
+	}
+}
+
+// secretRegistry is a registry that issues wrapper secrets, as the real one does.
+type secretRegistry struct {
+	*mockExecCommReg
+	issued  map[string]string
+	revoked []string
+}
+
+func (r *secretRegistry) IssueWrapperSecret(owner shared.ContextAddr, wrapper string) (string, error) {
+	if r.issued == nil {
+		r.issued = map[string]string{}
+	}
+	r.issued[wrapper] = "secret-" + strconv.Itoa(len(r.issued)+len(r.revoked)+1)
+	return r.issued[wrapper], nil
+}
+
+func (r *secretRegistry) RevokeWrapperSecret(owner shared.ContextAddr, wrapper string) {
+	r.revoked = append(r.revoked, wrapper)
+	delete(r.issued, wrapper)
+}
+
+func TestWrapperLaunchCarriesAFreshSecretInTheURLAndABuildNeverDoes(t *testing.T) {
+	l, _, _ := newExecutionLoopHarness(nil)
+	l.frame.ContextDir = "/tmp/brique_ctx"
+	registry := &secretRegistry{mockExecCommReg: l.frame.CtxCommReg.(*mockExecCommReg)}
+	registry.webSocketAddr = ":8080"
+	l.frame.CtxCommReg = registry
+
+	if build := l.wrapperRuntimeEnv("w1", nil); build["BRIQUE_WS_URL"] != "ws://127.0.0.1:8080" || len(registry.issued) != 0 {
+		t.Fatalf("a build environment got a secret: %#v", build)
+	}
+	first := l.wrapperLaunchEnv("w1", nil)["BRIQUE_WS_URL"]
+	if first != "ws://127.0.0.1:8080/k/secret-1" {
+		t.Fatalf("launch URL = %q", first)
+	}
+	second := l.wrapperLaunchEnv("w1", nil)["BRIQUE_WS_URL"]
+	if second == first || !strings.HasSuffix(second, "/k/"+registry.issued["w1"]) {
+		t.Fatalf("a relaunch must carry a new secret: %q then %q", first, second)
+	}
+	// An address variable stays free of the secret: only the URL carries it.
+	if env := l.wrapperLaunchEnv("w2", nil); env["BRIQUE_WS_ADDR"] != ":8080" {
+		t.Fatalf("address env = %#v", env)
+	}
+	// The exit of the current process revokes its secret; a replaced process does not.
+	st := l.frame.Wrappers["w1"]
+	if st == nil {
+		st = &junction.WrapperState{}
+		l.frame.Wrappers["w1"] = st
+	}
+	st.Lock()
+	st.PID = 4242
+	st.Unlock()
+	l.onWrapperExit("w1", 1)
+	if len(registry.revoked) != 0 {
+		t.Fatal("the exit of an old process revoked the secret of its successor")
+	}
+	l.onWrapperExit("w1", 4242)
+	if len(registry.revoked) != 1 || registry.revoked[0] != "w1" {
+		t.Fatalf("revocations = %v", registry.revoked)
 	}
 }

@@ -23,15 +23,15 @@ import (
 	"brique_engine/shared"
 )
 
-type FamiliesInChanRegistry map[shared.FamilyName]chan<- circulation.Message
+type FamiliesInChanRegistry map[shared.FamilyName]chan<- Delivery
 
 // ContextCommInRegistry exposes the minimal contract used by Comm and Context loops.
 // It aggregates internal routing, UI resolution, and wrapper domain resolution.
 type ContextCommInRegistry interface {
 	// Context registration
-	Register(addr shared.ContextAddr, commIn chan<- circulation.Message, extName string)
+	Register(addr shared.ContextAddr, commIn chan<- Delivery, extName string)
 	Unregister(addr shared.ContextAddr, extName string)
-	ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool)
+	ResolveCh(addr shared.ContextAddr) (chan<- Delivery, bool)
 
 	// External / public identity resolution
 	ResolveExtName(extName string) (shared.ContextAddr, bool)
@@ -51,7 +51,7 @@ type ContextCommInRegistry interface {
 }
 
 type ContextRegistry struct {
-	CtrlIn chan<- circulation.Message
+	CtrlIn chan<- Delivery
 
 	CtxCommReg ContextCommInRegistry
 
@@ -74,10 +74,38 @@ type ContextRegistry struct {
 	// trace
 	TraceEnabled bool
 	TraceLevel   string // minimal | normal | debug
+
+	localAuthority LocalAuthority
+}
+
+// SetLocalAuthority installs the authority used by trusted components owned by
+// this context. It is runtime state and never comes from a routed message.
+func (r *ContextRegistry) SetLocalAuthority(authority LocalAuthority) {
+	r.localAuthority = authority
+}
+
+// NewDelivery wraps a locally produced message with this context's explicit
+// runtime authority.
+func (r *ContextRegistry) NewDelivery(message circulation.Message) (Delivery, error) {
+	authority := r.localAuthority
+	if authority.security == nil && r.CtxId != "" {
+		authority = MustLocalAuthority("context:" + r.CtxId)
+	}
+	return NewLocalDelivery(authority, message)
+}
+
+// MustDelivery is for internal sends after context construction has installed
+// a valid authority.
+func (r *ContextRegistry) MustDelivery(message circulation.Message) Delivery {
+	delivery, err := r.NewDelivery(message)
+	if err != nil {
+		panic(err)
+	}
+	return delivery
 }
 
 // LookupFamily returns the ingress channel for the given family name, safe for concurrent use.
-func (r *ContextRegistry) LookupFamily(name shared.FamilyName) (chan<- circulation.Message, bool) {
+func (r *ContextRegistry) LookupFamily(name shared.FamilyName) (chan<- Delivery, bool) {
 	r.famInMu.RLock()
 	ch, ok := r.FamIn[name]
 	r.famInMu.RUnlock()
@@ -85,7 +113,7 @@ func (r *ContextRegistry) LookupFamily(name shared.FamilyName) (chan<- circulati
 }
 
 // SetFamily replaces or removes (ch == nil) one family entry, safe for concurrent use.
-func (r *ContextRegistry) SetFamily(name shared.FamilyName, ch chan<- circulation.Message) {
+func (r *ContextRegistry) SetFamily(name shared.FamilyName, ch chan<- Delivery) {
 	r.famInMu.Lock()
 	if ch == nil {
 		delete(r.FamIn, name)

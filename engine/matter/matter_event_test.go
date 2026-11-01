@@ -31,7 +31,7 @@ type mockMatterCommReg struct {
 	boundary map[string]shared.ContextAddr
 }
 
-func (m *mockMatterCommReg) Register(addr shared.ContextAddr, commIn chan<- circulation.Message, extName string) {
+func (m *mockMatterCommReg) Register(addr shared.ContextAddr, commIn chan<- junction.Delivery, extName string) {
 	_ = addr
 	_ = commIn
 	_ = extName
@@ -40,7 +40,7 @@ func (m *mockMatterCommReg) Unregister(addr shared.ContextAddr, extName string) 
 	_ = addr
 	_ = extName
 }
-func (m *mockMatterCommReg) ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool) {
+func (m *mockMatterCommReg) ResolveCh(addr shared.ContextAddr) (chan<- junction.Delivery, bool) {
 	_ = addr
 	return nil, false
 }
@@ -93,7 +93,7 @@ func newMatterEventHarness() (*MatterLoop, chan circulation.Message) {
 	frame := &junction.ContextRegistry{
 		CtxId: "/ctx/a",
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: matterDeliveryBridge(commCh, 32),
 		},
 		CtxCommReg: &mockMatterCommReg{boundary: map[string]shared.ContextAddr{"w1": "/ctx/a/w1"}},
 		Wrappers:   map[string]*junction.WrapperState{"w1": {ProcState: junction.ProcRunning}},

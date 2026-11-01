@@ -17,8 +17,9 @@
 package reflexive
 
 import (
-	"strings"
 	"brique_engine/configuration"
+	"strings"
+	"time"
 )
 
 // -----------------------------
@@ -43,6 +44,19 @@ import (
 type ReflexiveCfg struct {
 	RootRepo bool
 	RepoName string
+
+	// ProjectionSyncInterval > 0 makes the root keep the meaning projection
+	// up to date by itself: every interval it applies the changes found on
+	// disk (see syncProjection). 0 (default) leaves the projection to explicit
+	// meaning.rebuild / meaning.update calls.
+	ProjectionSyncInterval time.Duration
+	// ProjectionVerifyInterval > 0 adds a slower full pass that does not trust
+	// directory timestamps (detects in-place edits that keep a directory's
+	// mtime). It only has effect together with ProjectionSyncInterval.
+	ProjectionVerifyInterval time.Duration
+	// ProjectionSyncOnEdit makes the root refresh the projection right after
+	// any context's reflexive edit.* capacity changed a descriptor.
+	ProjectionSyncOnEdit bool
 }
 
 // ParseReflexiveCfg
@@ -115,6 +129,15 @@ func ParseReflexiveCfg(engineCfg map[string]any) ReflexiveCfg {
 	}
 	if v, ok := engineCfg[configuration.KeyRepoName].(string); ok {
 		cfg.RepoName = strings.TrimSpace(v)
+	}
+	if v, ok := engineCfg[configuration.KeyProjectionSyncIntervalMs].(float64); ok && v > 0 {
+		cfg.ProjectionSyncInterval = time.Duration(v) * time.Millisecond
+	}
+	if v, ok := engineCfg[configuration.KeyProjectionSyncOnEdit].(bool); ok {
+		cfg.ProjectionSyncOnEdit = v
+	}
+	if v, ok := engineCfg[configuration.KeyProjectionVerifyIntervalMs].(float64); ok && v > 0 {
+		cfg.ProjectionVerifyInterval = time.Duration(v) * time.Millisecond
 	}
 	return cfg
 }

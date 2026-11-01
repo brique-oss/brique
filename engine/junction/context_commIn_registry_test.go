@@ -19,7 +19,6 @@ package junction_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
 	"brique_engine/junction"
 	"brique_engine/shared"
 )
@@ -51,7 +50,7 @@ func TestContextCommRegistry_N1_CCR_01_10_NewRegistryStartsEmpty(t *testing.T) {
 // Covers: N1-CCR-02
 func TestContextCommRegistry_N1_CCR_02_RegisterGuardNoOp(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 
 	r.Register("", ch, "ext-a")
 	r.Register("/ctx/a", nil, "ext-a")
@@ -67,7 +66,7 @@ func TestContextCommRegistry_N1_CCR_02_RegisterGuardNoOp(t *testing.T) {
 // Covers: N1-CCR-03
 func TestContextCommRegistry_N1_CCR_03_RegisterAndResolve(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 
 	r.Register("/ctx/a", ch, "ext-a")
 
@@ -75,7 +74,7 @@ func TestContextCommRegistry_N1_CCR_03_RegisterAndResolve(t *testing.T) {
 	if !ok || resolvedCh == nil {
 		t.Fatalf("ResolveCh expected hit")
 	}
-	if resolvedCh != (chan<- circulation.Message)(ch) {
+	if resolvedCh != (chan<- junction.Delivery)(ch) {
 		t.Fatalf("ResolveCh returned unexpected channel")
 	}
 
@@ -83,7 +82,7 @@ func TestContextCommRegistry_N1_CCR_03_RegisterAndResolve(t *testing.T) {
 	if !ok || entry.CommIn == nil {
 		t.Fatalf("ResolveEntry expected hit")
 	}
-	if entry.CommIn != (chan<- circulation.Message)(ch) {
+	if entry.CommIn != (chan<- junction.Delivery)(ch) {
 		t.Fatalf("ResolveEntry returned unexpected CommIn")
 	}
 
@@ -101,7 +100,7 @@ func TestContextCommRegistry_N1_CCR_03_RegisterAndResolve(t *testing.T) {
 // Covers: N1-CCR-04
 func TestContextCommRegistry_N1_CCR_04_ReregisterChangesExtAlias(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 
 	r.Register("/ctx/a", ch, "ext-a")
 	r.Register("/ctx/a", ch, "ext-b")
@@ -122,7 +121,7 @@ func TestContextCommRegistry_N1_CCR_04_ReregisterChangesExtAlias(t *testing.T) {
 // Covers: N1-CCR-05
 func TestContextCommRegistry_N1_CCR_05_ReregisterWithEmptyExtKeepsInverseAsImplemented(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 
 	r.Register("/ctx/a", ch, "ext-a")
 	r.Register("/ctx/a", ch, "")
@@ -139,7 +138,7 @@ func TestContextCommRegistry_N1_CCR_05_ReregisterWithEmptyExtKeepsInverseAsImple
 // Covers: N1-CCR-06
 func TestContextCommRegistry_N1_CCR_06_UnregisterGuardNoOp(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 	r.Register("/ctx/a", ch, "ext-a")
 
 	r.Unregister("", "ext-a")
@@ -152,7 +151,7 @@ func TestContextCommRegistry_N1_CCR_06_UnregisterGuardNoOp(t *testing.T) {
 // Covers: N1-CCR-07, N1-CCR-09
 func TestContextCommRegistry_N1_CCR_07_09_UnregisterCleansIDUIAndInverse(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 	r.Register("/ctx/a", ch, "ext-a")
 	r.RegisterUI("ui-1", "/ctx/a")
 	r.RegisterUI("ui-2", "/ctx/a")
@@ -179,7 +178,7 @@ func TestContextCommRegistry_N1_CCR_07_09_UnregisterCleansIDUIAndInverse(t *test
 // Covers: N1-CCR-08
 func TestContextCommRegistry_N1_CCR_08_UnregisterWithExplicitExtName(t *testing.T) {
 	r := junction.NewContextCommRegistry()
-	ch := make(chan circulation.Message)
+	ch := make(chan junction.Delivery)
 	r.Register("/ctx/a", ch, "ext-a")
 
 	r.Unregister("/ctx/a", "ext-a")

@@ -20,10 +20,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
+	"brique_engine/junction"
 )
 
 const n6ContextDescriptorFilename = "context.json"
@@ -271,7 +273,7 @@ func TestEngine_N6_REF_06_EditDeleteDocumentThenReadStructure(t *testing.T) {
 				circulation.KeyType: circulation.ValueDocument,
 				circulation.KeyName: docName,
 				circulation.KeyContent: map[string]any{
-					circulation.KeyBrique:     map[string]any{circulation.KeyKind: circulation.ValueDocument},
+					circulation.KeyBrique:      map[string]any{circulation.KeyKind: circulation.ValueDocument},
 					circulation.ValueObjective: map[string]any{"title": "Delete me"},
 				},
 			},
@@ -390,7 +392,7 @@ func TestEngine_N6_REF_09_EditBatchPartialNoRollback(t *testing.T) {
 				circulation.KeyType: circulation.ValueDocument,
 				circulation.KeyName: "n6_batch_doc",
 				circulation.KeyContent: map[string]any{
-					circulation.KeyBrique:     map[string]any{circulation.KeyKind: circulation.ValueDocument},
+					circulation.KeyBrique:      map[string]any{circulation.KeyKind: circulation.ValueDocument},
 					circulation.ValueObjective: map[string]any{"title": "Batch doc"},
 				},
 			},
@@ -899,5 +901,42 @@ func TestEngine_N6_REF_44_EditDuplicateSameNameSameContextRejected(t *testing.T)
 	}
 	if errMap := mustPayloadMap(t, item[circulation.KeyError]); errMap[circulation.KeyCode] != circulation.ValueCodeInvalid {
 		t.Fatalf("same-name same-context duplicate should return invalid: %#v", item)
+	}
+}
+
+// Every edit.* capacity that changed a descriptor tells the root (through the
+// shared registry), naming the element, so the projection can follow without
+// listing directories; a failed edit stays silent.
+func TestEngine_N6_REF_EditCapacitiesNotifyProjectionListener(t *testing.T) {
+	h := newEngineN6Harness(t)
+	var mu sync.Mutex
+	var calls [][]junction.ProjectionHint
+	h.reg.SetProjectionNotifier(func(hints ...junction.ProjectionHint) {
+		mu.Lock()
+		calls = append(calls, hints)
+		mu.Unlock()
+	})
+	t.Cleanup(func() { h.reg.SetProjectionNotifier(nil) })
+	count := func() int { mu.Lock(); defer mu.Unlock(); return len(calls) }
+
+	item := map[string]any{circulation.KeyType: circulation.ValueCapacity, circulation.KeyName: "notify.cap"}
+	call := func(id, capName string) {
+		callN6Reflexive(t, h, n6WorkspaceID, id, capName, map[string]any{circulation.KeyItems: []any{item}})
+	}
+	call("n6-notify-create", "edit.create")
+	if count() != 1 {
+		t.Fatalf("edit.create success should notify once, got %d", count())
+	}
+	want := junction.ProjectionHint{CtxID: n6WorkspaceID, ElementType: circulation.ValueCapacity, Name: "notify.cap"}
+	if got := calls[0]; len(got) != 1 || got[0] != want {
+		t.Fatalf("hint = %v, want [%v]", got, want)
+	}
+	call("n6-notify-dup", "edit.create") // already exists: the item fails
+	if count() != 1 {
+		t.Fatalf("failed edit must not notify, got %d", count())
+	}
+	call("n6-notify-delete", "edit.delete")
+	if count() != 2 || calls[1][0] != want {
+		t.Fatalf("edit.delete success should notify with the same hint, calls=%v", calls)
 	}
 }

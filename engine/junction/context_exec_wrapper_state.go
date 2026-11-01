@@ -41,6 +41,11 @@ type WrapperState struct {
 	BuiltAt        time.Time
 	RunningBuiltAt time.Time
 
+	// RunningSourceAt is the newest source modification time seen when the
+	// running process of an interpreted wrapper was started. A newer source
+	// afterwards means that process runs stale code.
+	RunningSourceAt time.Time
+
 	// Process state
 	PID        int
 	ProcState  WrapperProcState

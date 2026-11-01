@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/junction"
+	"brique_engine/security/admission"
+	"brique_engine/security/refusal"
 	"brique_engine/shared"
 )
 
@@ -29,6 +32,15 @@ func (l *ExecutionLoop) invokeAndAwait(in circulation.Intention) (circulation.Re
 }
 
 func (l *ExecutionLoop) invokeAndAwaitWithTimeout(in circulation.Intention, timeout time.Duration) (circulation.Response, error) {
+	return l.invokeAndAwaitUnder(in, timeout, nil)
+}
+
+// invokeAndAwaitUnder emits one child and waits for its answer. When parent is
+// the externally admitted delivery of the calling capacity, the child is derived
+// under the caller's admission (D13): it is authorized at every door like the
+// caller's own request, and only its answer, bound to that admission, can satisfy
+// the wait. Without a parent the child is an ordinary local call.
+func (l *ExecutionLoop) invokeAndAwaitUnder(in circulation.Intention, timeout time.Duration, parent *junction.Delivery) (circulation.Response, error) {
 	in.IntentionID = stringsOrFallback(in.IntentionID, circulation.NewIntentionID())
 	in.AwaitResponse = true
 
@@ -47,7 +59,19 @@ func (l *ExecutionLoop) invokeAndAwaitWithTimeout(in circulation.Intention, time
 		).Response, nil
 	}
 
-	ch, ok := l.registerPending(in.IntentionID)
+	message := circulation.Message{Kind: circulation.ValueKindIntention, Intention: in}
+	var derived junction.Delivery
+	var bound *admission.Context
+	if parent != nil {
+		var refusal *circulation.Response
+		derived, bound, refusal = l.deriveUnder(*parent, message)
+		if refusal != nil {
+			return *refusal, nil
+		}
+	}
+	entry := newPendingEntry()
+	entry.admission = bound
+	ch, ok := l.registerPendingEntry(in.IntentionID, entry)
 	if !ok {
 		return errorResp(in,
 			circulation.ValueCodeConfiguration,
@@ -57,10 +81,14 @@ func (l *ExecutionLoop) invokeAndAwaitWithTimeout(in circulation.Intention, time
 	}
 	defer l.unregisterPending(in.IntentionID)
 
-	l.emitToComm(circulation.Message{
-		Kind:      circulation.ValueKindIntention,
-		Intention: in,
-	})
+	if parent != nil {
+		if !l.emitDeliveryToComm(derived) {
+			return errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonContextStopped}, "Context has been stopped").Response, nil
+		}
+	} else {
+		l.emitToComm(message)
+	}
 
 	if timeout <= 0 {
 		timeout = l.timeoutFor(in)
@@ -89,6 +117,10 @@ func (l *ExecutionLoop) invokeAndAwaitWithTimeout(in circulation.Intention, time
 }
 
 func (l *ExecutionLoop) invokeNoWait(in circulation.Intention) error {
+	return l.invokeNoWaitUnder(in, nil)
+}
+
+func (l *ExecutionLoop) invokeNoWaitUnder(in circulation.Intention, parent *junction.Delivery) error {
 	in.IntentionID = stringsOrFallback(in.IntentionID, circulation.NewIntentionID())
 	in.AwaitResponse = false
 
@@ -99,11 +131,46 @@ func (l *ExecutionLoop) invokeNoWait(in circulation.Intention) error {
 		return fmt.Errorf("communication family missing")
 	}
 
-	l.emitToComm(circulation.Message{
+	message := circulation.Message{
 		Kind:      circulation.ValueKindIntention,
 		Intention: in,
-	})
+	}
+	if parent != nil {
+		derived, _, refusal := l.deriveUnder(*parent, message)
+		if refusal != nil {
+			return fmt.Errorf("derived capability is not authorized")
+		}
+		if !l.emitDeliveryToComm(derived) {
+			return fmt.Errorf("context stopped")
+		}
+		return nil
+	}
+	l.emitToComm(message)
 	return nil
+}
+
+// deriveUnder derives a child intention under the admission of parent. A refusal
+// is returned as the canonical capability refusal, which does not say whether the
+// capacity exists.
+func (l *ExecutionLoop) deriveUnder(parent junction.Delivery, message circulation.Message) (junction.Delivery, *admission.Context, *circulation.Response) {
+	in := message.Intention
+	refuse := func() (junction.Delivery, *admission.Context, *circulation.Response) {
+		resp := circulation.Response{
+			IntentionID: in.IntentionID, To: in.From, From: in.To, Status: circulation.ValueStatusError,
+			Error: refusal.CapabilityDenied("execution"),
+		}
+		return junction.Delivery{}, nil, &resp
+	}
+	provider, ok := l.frame.CtxCommReg.(junction.TrustRuntimeProvider)
+	if !ok || provider.TrustRuntime() == nil {
+		return refuse()
+	}
+	derived, err := junction.DeriveExternalAudited(parent, message, provider.TrustRuntime(), junction.AuditOf(l.frame.CtxCommReg))
+	if err != nil {
+		return refuse()
+	}
+	bound, _ := derived.ExternalAdmission()
+	return derived, bound, nil
 }
 
 func stringsOrFallback(v string, fallback string) string {

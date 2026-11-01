@@ -26,15 +26,16 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/context"
+	"brique_engine/junction"
 	"brique_engine/shared"
 )
 
 type mockCtxCommReg struct{}
 
-func (m *mockCtxCommReg) Register(addr shared.ContextAddr, commIn chan<- circulation.Message, extName string) {
+func (m *mockCtxCommReg) Register(addr shared.ContextAddr, commIn chan<- junction.Delivery, extName string) {
 }
 func (m *mockCtxCommReg) Unregister(addr shared.ContextAddr, extName string) {}
-func (m *mockCtxCommReg) ResolveCh(addr shared.ContextAddr) (chan<- circulation.Message, bool) {
+func (m *mockCtxCommReg) ResolveCh(addr shared.ContextAddr) (chan<- junction.Delivery, bool) {
 	return nil, false
 }
 func (m *mockCtxCommReg) ResolveExtName(extName string) (shared.ContextAddr, bool) {

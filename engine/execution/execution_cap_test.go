@@ -37,7 +37,7 @@ func newExecutionCapHarness(wrapperName string, proc junction.WrapperProcState) 
 			CtxId:        "/ctx/a",
 			TraceEnabled: true,
 			TraceLevel:   configuration.ValueConfigTraceLevelDebug,
-			FamIn:        junction.FamiliesInChanRegistry{shared.FamilyTrace: traceCh},
+			FamIn:        junction.FamiliesInChanRegistry{shared.FamilyTrace: executionDeliveryBridge(traceCh, 8)},
 			Wrappers:     map[string]*junction.WrapperState{wrapperName: st},
 		},
 	}

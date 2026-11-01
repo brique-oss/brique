@@ -38,6 +38,18 @@ type traceFamilyN2Harness struct {
 	commCh chan circulation.Message
 }
 
+func traceDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {
+	in := make(chan junction.Delivery, size)
+	go func() {
+		for delivery := range in {
+			if msg, ok := delivery.Message(); ok {
+				out <- msg
+			}
+		}
+	}()
+	return in
+}
+
 func newTraceFamilyN2Harness(t *testing.T, enabled bool) *traceFamilyN2Harness {
 	t.Helper()
 
@@ -51,8 +63,9 @@ func newTraceFamilyN2Harness(t *testing.T, enabled bool) *traceFamilyN2Harness {
 	}
 	commCh := make(chan circulation.Message, 16)
 	frame := &junction.ContextRegistry{
+		CtxId:      "/ctx/trace-test",
 		ContextDir: dir,
-		FamIn:      junction.FamiliesInChanRegistry{shared.FamilyComm: commCh},
+		FamIn:      junction.FamiliesInChanRegistry{shared.FamilyComm: traceDeliveryBridge(commCh, 16)},
 	}
 	loop := NewTraceLoop(frame, cfg)
 	loop.Start()
@@ -115,10 +128,15 @@ func traceSegmentFiles(t *testing.T, dir string) []string {
 func waitTraceFileCountAtLeast(t *testing.T, dir string, n int) []string {
 	t.Helper()
 	var files []string
-	waitTraceFamilyPred(t, time.Second, func() bool {
+	waitTraceFamilyPred(t, 2*time.Second, func() bool {
 		files = traceSegmentFiles(t, dir)
 		return len(files) >= n
 	}, "trace file count")
+	// A segment file exists before its first line is flushed: wait for the first event
+	// too, or a caller that reads the events right away races the writer.
+	waitTraceFamilyPred(t, 2*time.Second, func() bool {
+		return len(readAllTraceEvents(t, dir)) > 0
+	}, "first persisted trace event")
 	return files
 }
 
@@ -178,7 +196,7 @@ func TestTraceFamily_N2_TRC_01_TraceInboxPersistsJSONL(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{
+	loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindTrace,
 		Trace: circulation.TraceWire{
 			Timestamp:  "2026-03-15T12:00:00Z",
@@ -186,9 +204,12 @@ func TestTraceFamily_N2_TRC_01_TraceInboxPersistsJSONL(t *testing.T) {
 			ReasonCode: "ok",
 		},
 		TS: "2026-03-15T12:00:00Z",
-	}
+	})
 
-	waitTraceFileCountAtLeast(t, dir, 1)
+	// The segment file appears before its first line is flushed: wait for the event.
+	waitTraceFamilyPred(t, 2*time.Second, func() bool {
+		return hasTraceKind(readAllTraceEvents(t, dir), circulation.ValueTraceCommIngress)
+	}, "comm ingress trace persisted")
 	events := readAllTraceEvents(t, dir)
 	if !hasTraceKind(events, circulation.ValueTraceCommIngress) {
 		t.Fatalf("expected persisted comm ingress trace, got %#v", events)
@@ -207,7 +228,7 @@ func TestTraceFamily_N2_TRC_02_NonTraceInboxIgnored(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindIntention}
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindIntention})
 	time.Sleep(50 * time.Millisecond)
 	if events := readAllTraceEvents(t, dir); len(events) != 0 {
 		t.Fatalf("non-trace inbox message should not persist events, got %#v", events)
@@ -217,7 +238,7 @@ func TestTraceFamily_N2_TRC_02_NonTraceInboxIgnored(t *testing.T) {
 func TestTraceFamily_N2_TRC_02b_TraceUserIntentionPersistsAndRepliesOK(t *testing.T) {
 	h := newTraceFamilyN2Harness(t, true)
 
-	h.loop.InChan() <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "trc-user-01",
@@ -236,7 +257,7 @@ func TestTraceFamily_N2_TRC_02b_TraceUserIntentionPersistsAndRepliesOK(t *testin
 				"reason_code": "debug_note",
 			},
 		},
-	}
+	})
 
 	out := recvTraceFamilyMsg(t, h.commCh, "trace.user response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK {
@@ -263,7 +284,7 @@ func TestTraceFamily_N2_TRC_02b_TraceUserIntentionPersistsAndRepliesOK(t *testin
 func TestTraceFamily_N2_TRC_02c_TraceUserUnknownCapFailsClosed(t *testing.T) {
 	h := newTraceFamilyN2Harness(t, true)
 
-	h.loop.InChan() <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "trc-user-unknown",
@@ -281,7 +302,7 @@ func TestTraceFamily_N2_TRC_02c_TraceUserUnknownCapFailsClosed(t *testing.T) {
 				"user_text": "should fail",
 			},
 		},
-	}
+	})
 
 	out := recvTraceFamilyMsg(t, h.commCh, "trace unknown response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Error == nil || out.Response.Error.Code != circulation.ValueCodeNotFound {
@@ -305,10 +326,10 @@ func TestTraceFamily_N2_TRC_03_DisabledLoopDrainsWithoutFiles(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{
+	loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:  circulation.ValueKindTrace,
 		Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress},
-	}
+	})
 	time.Sleep(50 * time.Millisecond)
 	if events := readAllTraceEvents(t, dir); len(events) != 0 {
 		t.Fatalf("disabled trace loop should not persist events, got %#v", events)
@@ -318,7 +339,7 @@ func TestTraceFamily_N2_TRC_03_DisabledLoopDrainsWithoutFiles(t *testing.T) {
 func TestTraceFamily_N2_TRC_03b_TraceUserDisabledReturnsAcceptedFalse(t *testing.T) {
 	h := newTraceFamilyN2Harness(t, false)
 
-	h.loop.InChan() <- circulation.Message{
+	h.loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind: circulation.ValueKindIntention,
 		Intention: circulation.Intention{
 			IntentionID: "trc-user-disabled",
@@ -336,7 +357,7 @@ func TestTraceFamily_N2_TRC_03b_TraceUserDisabledReturnsAcceptedFalse(t *testing
 				"user_text": "disabled note",
 			},
 		},
-	}
+	})
 
 	out := recvTraceFamilyMsg(t, h.commCh, "trace.user disabled response")
 	if out.Kind != circulation.ValueKindResponse || out.Response.Status != circulation.ValueStatusOK {
@@ -363,11 +384,11 @@ func TestTraceFamily_N2_TRC_04_StopFlushesPendingTrace(t *testing.T) {
 	loop.Start()
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 
-	loop.InChan() <- circulation.Message{
+	loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:  circulation.ValueKindTrace,
 		Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, Timestamp: "2026-03-15T12:00:01Z"},
-	}
-	waitTraceFamilyPred(t, time.Second, func() bool { return len(loop.InChan()) == 0 }, "trace ingress consumed before stop")
+	})
+	waitTraceFamilyPred(t, time.Second, func() bool { return len(loop.deliveryIn) == 0 }, "trace ingress consumed before stop")
 	loop.Stop()
 
 	waitTraceFileCountAtLeast(t, dir, 1)
@@ -390,9 +411,9 @@ func TestTraceFamily_N2_TRC_05_RingSaturationDropsNewest(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, ReasonCode: "r1"}}
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter, ReasonCode: "r2"}}
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyExit, ReasonCode: "r3"}}
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, ReasonCode: "r1"}})
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter, ReasonCode: "r2"}})
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyExit, ReasonCode: "r3"}})
 	waitTraceFamilyPred(t, time.Second, func() bool {
 		return len(readAllTraceEvents(t, dir)) >= 2
 	}, "ring saturation persisted oldest events")
@@ -423,9 +444,9 @@ func TestTraceFamily_N2_TRC_06_RotatesSegmentOnSmallMaxBytes(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, ReasonCode: "seg-1"}}
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, ReasonCode: "seg-1"}})
 	time.Sleep(5 * time.Millisecond)
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter, ReasonCode: "seg-2"}}
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter, ReasonCode: "seg-2"}})
 
 	files := waitTraceFileCountAtLeast(t, dir, 2)
 	if len(files) < 2 {
@@ -450,10 +471,10 @@ func TestTraceFamily_N2_TRC_07_IntervalFlushPersistsWithoutCountThreshold(t *tes
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{
+	loop.deliveryIn <- localTestDelivery(circulation.Message{
 		Kind:  circulation.ValueKindTrace,
 		Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress, ReasonCode: "interval"},
-	}
+	})
 
 	waitTraceFamilyPred(t, time.Second, func() bool {
 		events := readAllTraceEvents(t, dir)
@@ -475,10 +496,10 @@ func TestTraceFamily_N2_TRC_CONC_01_BurstPersistsWithoutDeadlock(t *testing.T) {
 	t.Cleanup(func() { loop.Stop() })
 
 	for i := 0; i < 10; i++ {
-		loop.InChan() <- circulation.Message{
+		loop.deliveryIn <- localTestDelivery(circulation.Message{
 			Kind:  circulation.ValueKindTrace,
 			Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress},
-		}
+		})
 	}
 
 	waitTraceFileCountAtLeast(t, dir, 1)
@@ -500,10 +521,10 @@ func TestTraceFamily_N2_TRC_CONC_02_MixedKindsPersistTraceOnly(t *testing.T) {
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 	t.Cleanup(func() { loop.Stop() })
 
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindIntention}
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress}}
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindResponse}
-	loop.InChan() <- circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter}}
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindIntention})
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress}})
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindResponse})
+	loop.deliveryIn <- localTestDelivery(circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceFamilyEnter}})
 
 	waitTraceFileCountAtLeast(t, dir, 1)
 	events := readAllTraceEvents(t, dir)
@@ -525,10 +546,10 @@ func TestTraceFamily_N2_TRC_CONC_03_StopDuringIngressKeepsJSONLConsistent(t *tes
 	waitTraceFamilyPred(t, time.Second, func() bool { return loop.State() == shared.FamilyRunning }, "trace loop running")
 
 	for i := 0; i < 5; i++ {
-		loop.InChan() <- circulation.Message{
+		loop.deliveryIn <- localTestDelivery(circulation.Message{
 			Kind:  circulation.ValueKindTrace,
 			Trace: circulation.TraceWire{TraceKind: circulation.ValueTraceCommIngress},
-		}
+		})
 	}
 	loop.Stop()
 

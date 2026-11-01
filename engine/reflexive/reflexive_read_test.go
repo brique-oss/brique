@@ -39,7 +39,7 @@ func newReflexiveReadHarness(t *testing.T) (*ReflexiveLoop, chan circulation.Mes
 		CtxName:    "read-a",
 		ContextDir: ctxDir,
 		FamIn: junction.FamiliesInChanRegistry{
-			shared.FamilyComm: commCh,
+			shared.FamilyComm: reflexiveDeliveryBridge(commCh, 64),
 		},
 	}
 	return NewReflexiveLoop(frame, nil), commCh, ctxDir
@@ -138,8 +138,8 @@ func TestReflexiveRead_N1_RRD_02_CapReadMeaning(t *testing.T) {
 	}
 
 	writeJSONFixture(t, filepath.Join(ctxDir, circulation.ValueCapacity, "capA.json"), map[string]any{
-		circulation.KeyBrique:    map[string]any{circulation.KeyKind: circulation.ValueCapacity},
-		circulation.ValueObjective: map[string]any{"title": "A"},
+		circulation.KeyBrique:       map[string]any{circulation.KeyKind: circulation.ValueCapacity},
+		circulation.ValueObjective:  map[string]any{"title": "A"},
 		circulation.ValueFunctional: map[string]any{"x": 1},
 	})
 
@@ -186,7 +186,7 @@ func TestReflexiveRead_N1_RRD_02_CapReadMeaning(t *testing.T) {
 
 	// detail=invoke on a user capacity: functional.#root reduced to {role, inputs, outputs}
 	writeJSONFixture(t, filepath.Join(ctxDir, circulation.ValueCapacity, "capB.json"), map[string]any{
-		circulation.KeyBrique:     map[string]any{circulation.KeyKind: circulation.ValueCapacity},
+		circulation.KeyBrique:      map[string]any{circulation.KeyKind: circulation.ValueCapacity},
 		circulation.ValueObjective: map[string]any{"title": "B"},
 		circulation.ValueFunctional: map[string]any{
 			circulation.KeyDSLRoot: map[string]any{
@@ -472,8 +472,8 @@ func TestReflexiveRead_N1_RRD_05_CapReadState(t *testing.T) {
 	writeJSONFixture(t, filepath.Join(ctxDir, ContextDescriptorFilename), map[string]any{
 		circulation.KeyBrique: map[string]any{
 			configuration.KeyContextName: "root",
-			configuration.KeyCxtExtName: "root-ext",
-			configuration.KeyCtxVersion: "1.0",
+			configuration.KeyCxtExtName:  "root-ext",
+			configuration.KeyCtxVersion:  "1.0",
 		},
 	})
 	writeJSONFixture(t, filepath.Join(ctxDir, "child1", ContextDescriptorFilename), map[string]any{

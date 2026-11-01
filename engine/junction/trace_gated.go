@@ -17,6 +17,8 @@
 package junction
 
 import (
+	"time"
+
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/shared"
@@ -320,9 +322,28 @@ func TraceEmit(frame *ContextRegistry, tw circulation.TraceWire) bool {
 		return false
 	}
 
+	// Stamp lazily: a trace refused by the gate never pays for timestamp
+	// formatting. Producers leave Timestamp empty; one that sets it keeps it.
+	if tw.Timestamp == "" {
+		tw.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+
 	ch := frame.FamIn[shared.FamilyTrace]
 	if ch == nil {
 		return false
+	}
+
+	// Provenance is stamped by the engine from the admission of the chain's root,
+	// never copied from a message: any value a producer left is replaced.
+	tw.Principal, tw.Actor = "", ""
+	if provider, ok := frame.CtxCommReg.(ProvenanceProvider); ok {
+		root := tw.RootIntentionId
+		if root == "" {
+			root = tw.IntentionId
+		}
+		if principal, actor, found := provider.Provenance().Lookup(root); found {
+			tw.Principal, tw.Actor = principal, actor
+		}
 	}
 
 	msg := circulation.Message{
@@ -332,7 +353,7 @@ func TraceEmit(frame *ContextRegistry, tw circulation.TraceWire) bool {
 	}
 
 	select {
-	case ch <- msg:
+	case ch <- frame.MustDelivery(msg):
 		return true
 	default:
 		// drop: do not block producers

@@ -77,6 +77,7 @@
         "morphing": "A local trace inspection request becomes either an ordered events list or aggregated facets counts over the selected local trace history, with timing and diagnostics.",
         "invariants": [
           "trace.inspect is context-scoped: it reads only the local context trace folder, not parent or child contexts.",
+          "Projection work is bounded by file count, total scanned bytes, line count and build duration. A partial bounded result reports diagnostics.resource_truncated=true.",
           "When time_range is absent, all available local trace segments are scanned.",
           "When time_range is present, both 'from' and 'to' RFC3339 strings are required; providing only one is invalid.",
           "Exactly one of events or facets is populated in the response, depending on the requested mode.",

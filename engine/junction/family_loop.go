@@ -16,17 +16,14 @@
 
 package junction
 
-import (
-	"brique_engine/circulation"
-	"brique_engine/shared"
-)
+import "brique_engine/shared"
 
 // -----------------------------
 // Family loop contract (substrate)
 // -----------------------------
 
 type FamilyLoop interface {
-	InChan() chan circulation.Message
+	InChan() chan Delivery
 	Start()
 	Stop()
 	State() shared.FamilyState

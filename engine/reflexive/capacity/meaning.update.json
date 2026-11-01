@@ -8,7 +8,7 @@
   },
   "objective": {
     "name": "meaning.update",
-    "description": "Incrementally refresh the root meaning projection for selected elements or contexts."
+    "description": "Incrementally refresh the root meaning projection, either for selected elements or contexts, or (params.sync) for everything that changed on disk."
   },
   "functional": {
     "#root": {
@@ -22,6 +22,14 @@
           "context": {
             "type": "array",
             "_comment": "Optional list of context ids (absolute paths from /root). When provided without elements, all elements in those contexts are refreshed."
+          },
+          "sync": {
+            "type": "boolean",
+            "_comment": "Optional. When true, meaning.update discovers by itself what changed on disk (new, modified and deleted descriptors) instead of refreshing named elements, using per-file fingerprints (size, mtime, SHA-256) and per-directory timestamps. Cost follows the amount of change, not the size of the instance. Works on a missing projection (it is created). elements and context are ignored in this mode."
+          },
+          "verify": {
+            "type": "boolean",
+            "_comment": "Optional, with sync. Do not trust directory timestamps: examine every directory (still comparing per-file size and mtime). Catches in-place edits that leave a directory's mtime unchanged. Slower; meant for occasional passes."
           }
         }
       },
@@ -38,6 +46,10 @@
           "duration_ms": {
             "type": "integer",
             "_comment": "Update duration in milliseconds."
+          },
+          "sync_counts": {
+            "type": "object",
+            "_comment": "Only with sync: contexts_visited, directories_scanned, directories_skipped, added, changed, removed, unchanged, verify and duration_ms are returned at the payload top level instead of updated_elements_count."
           }
         }
       },
@@ -51,7 +63,9 @@
           "meaning.update is root-only and runs against the current projection database transactionally.",
           "At least one of params.elements or params.context must be provided to define the update target set.",
           "Elements that cannot be resolved or parsed are skipped rather than aborting the entire update transaction.",
-          "Incremental vocabulary enrichment applies the same semantic filtering policy as a full rebuild; the meaning rows themselves remain complete."
+          "Incremental vocabulary enrichment applies the same semantic filtering policy as a full rebuild; the meaning rows themselves remain complete.",
+          "With params.sync, the target set is discovered from disk: params.elements and params.context are not required.",
+          "A file whose size or mtime moved but whose SHA-256 is unchanged is not reindexed (only its recorded stamp is refreshed)."
         ],
         "success": [
           "On success, meaning.update returns updated_elements_count, affected_vocab_paths, and duration_ms.",
@@ -63,9 +77,10 @@
         ],
         "notes": [
           "meaning.update is incremental and does not rebuild the whole projection.",
-          "Projection removals are not handled by this capability; it mainly refreshes or enriches projected content for targeted elements.",
-          "Nothing in the engine calls meaning.update automatically — edit.create, edit.patch_meaning, edit.delete, matter.write, and every other descriptor-mutating capacity write only to the filesystem and never touch the projection. This is deliberate: descriptor JSON is not required to be edited only through engine capacities (direct filesystem writes by a human or a wrapper are legitimate), so the engine cannot assume capacity calls are the only source of change and must not auto-trigger updates from them alone. Keeping the projection current after edits is an operational hygiene concern for the caller/instance, on whatever cadence or trigger fits how that instance is actually edited — there is no engine-side default.",
-          "If the projection database has no schema yet (e.g. meaning.rebuild has never run in this world, or its file was removed), meaning.update returns status=ok with updated_elements_count=0 for every targeted element instead of an error — a silent no-op, not a failure signal. A zero-update success is not proof the target elements are already up to date; if in doubt whether a rebuild has ever run, call meaning.rebuild instead of retrying meaning.update."
+          "Without params.sync, projection removals are not handled by this capability; with params.sync, files and contexts that disappeared are removed from the projection.",
+          "Automatic maintenance is opt-in (all default off). On the root's engine_config.reflexive: projection_sync_interval_ms (>0) runs the sync periodically; projection_verify_interval_ms (>0) adds a slower verifying pass; projection_sync_on_edit (true) makes every edit.create/patch_meaning/delete/duplicate that changed a descriptor, in any context, trigger a debounced sync on the root right after. Without them nothing calls meaning.update: descriptor-mutating capacities such as matter.write only write the filesystem, and descriptor JSON may also be edited outside the engine (directly, by git, by tools).",
+          "If the projection database has no schema yet (e.g. meaning.rebuild has never run in this world, or its file was removed), meaning.update returns status=ok with updated_elements_count=0 for every targeted element instead of an error — a silent no-op, not a failure signal. A zero-update success is not proof the target elements are already up to date; if in doubt whether a rebuild has ever run, call meaning.rebuild instead of retrying meaning.update.",
+          "Change detection compares size, mtime, ctime and inode, then a SHA-256. A file modified within the last 2 seconds is 'racy' (its timestamps cannot prove it unchanged): it is re-read on the next pass until it is old enough."
         ]
       }
     }

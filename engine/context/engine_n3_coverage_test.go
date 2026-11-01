@@ -32,7 +32,7 @@ import (
 func TestEngine_N3_ENG_16_WrapperOutboundAwaitingErrorResponsePropagatedToCaller(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-await-err-caller",
@@ -116,7 +116,7 @@ func TestEngine_N3_ENG_17_ConcurrentMatterAndReflexivePipelinesReturnCorrectPayl
 		"matter.read",
 		circulation.ValueTypeMatter,
 		map[string]any{
-			circulation.KeyMatterID:  "m_brique",
+			circulation.KeyMatterID: "m_brique",
 			circulation.KeyReadMode: circulation.KeyBrique,
 		},
 	))
@@ -187,7 +187,7 @@ func TestEngine_N3_ENG_17_ConcurrentMatterAndReflexivePipelinesReturnCorrectPayl
 func TestEngine_N3_ENG_18_MixedWrapperAndMatterPipelinesWithWrapperAwaitingRemainIsolated(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-mixed-matter-isolated",
@@ -195,7 +195,7 @@ func TestEngine_N3_ENG_18_MixedWrapperAndMatterPipelinesWithWrapperAwaitingRemai
 		"matter.read",
 		circulation.ValueTypeMatter,
 		map[string]any{
-			circulation.KeyMatterID:  "m_brique",
+			circulation.KeyMatterID: "m_brique",
 			circulation.KeyReadMode: circulation.KeyBrique,
 		},
 	))
@@ -269,7 +269,7 @@ func TestEngine_N3_ENG_18_MixedWrapperAndMatterPipelinesWithWrapperAwaitingRemai
 func TestEngine_N3_ENG_CONC_04_StopDuringWrapperOutboundAwaitingDoesNotDoubleEmit(t *testing.T) {
 	h := newEngineN3Harness(t)
 	remoteCh := make(chan circulation.Message, 8)
-	h.reg.Register("/remote/target", remoteCh, "")
+	registerContextTestSink(h.reg, "/remote/target", remoteCh, "")
 
 	sendToContext(t, h, n3SandboxChildID, mkEngineN3Intention(
 		"n3-stop-await",
