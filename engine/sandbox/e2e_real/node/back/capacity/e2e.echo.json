@@ -1,0 +1,58 @@
+{
+  "brique": {
+    "cap_name": "e2e.echo",
+    "kind": "interpreted",
+    "wrapper": "back_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "e2e.echo",
+    "description": "Echo from the back wrapper."
+  },
+  "functional": {
+    "#root": {
+      "role": "Echo from the back wrapper.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "wrapper": {
+            "type": "string"
+          },
+          "ctx_id": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Echo from the back wrapper.",
+        "invariants": [
+          "The capacity has no effect outside its reply."
+        ],
+        "success": [
+          "It returns its payload."
+        ],
+        "failure": [
+          "It fails only if the wrapper cannot run."
+        ],
+        "notes": [
+          "End-to-end fixture for real processes."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

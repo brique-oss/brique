@@ -1,0 +1,70 @@
+{
+  "brique": {
+    "cap_name": "e2e.relay",
+    "kind": "interpreted",
+    "wrapper": "back_py",
+    "lang": "python",
+    "rel_ctx": ""
+  },
+  "objective": {
+    "name": "e2e.relay",
+    "description": "Call any address from the front wrapper under its own principal and report what came back."
+  },
+  "functional": {
+    "#root": {
+      "role": "Call any address from the front wrapper under its own principal and report what came back.",
+      "inputs": {
+        "params": {
+          "to_context": {
+            "type": "string"
+          },
+          "to_cap": {
+            "type": "string"
+          },
+          "to_type": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "node": {
+            "type": "string"
+          },
+          "wrapper": {
+            "type": "string"
+          },
+          "relayed_status": {
+            "type": "string"
+          },
+          "relayed_error": {
+            "type": "object"
+          },
+          "relayed_payload": {
+            "type": "object"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "Call any address from the front wrapper under its own principal and report what came back.",
+        "invariants": [
+          "The capacity has no effect outside its reply."
+        ],
+        "success": [
+          "It returns its payload."
+        ],
+        "failure": [
+          "It fails only if the wrapper cannot run."
+        ],
+        "notes": [
+          "End-to-end fixture for real processes."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}
