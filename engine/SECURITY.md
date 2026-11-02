@@ -39,7 +39,7 @@ before any side effect, and it refuses by default.
 | Inside the boundary (trusted) | Outside (untrusted until proven) |
 |---|---|
 | the engine process and the operating-system account it runs as | any network peer, whatever it claims to be |
-| the protected security directory (§7) | every message field except what a signature covers |
+| the machine's protected security directory (§7, §11.1) | the instance's files, including its `security/` folder, until their signature is checked |
 | the operator who edits it with `brique-sec` | wrappers when the policy gives them a `local.<name>` principal |
 | wrappers the policy does not restrict (they keep the local authority of their context) | UI clients (people are not authenticated in this version, §1.4) |
 
@@ -582,6 +582,14 @@ signs policies; the engine holds only its public key. A peer's key is only ever 
 policy. Private keys are never configuration data: they live in protected files (or, later, a
 keystore/HSM) read by a signer provider, never in `context.json`, the policy or the source.
 
+**Exchanging keys.** Each instance creates its own key pair with `init`; the private key stays in
+`keys/message-signer.pem` (`0400`) and is read only by the engine's signer. To let instance B recognize
+instance A, the operator of A runs `brique-sec key show` and gives B the *public* key (or the whole
+`principal add` line it prints); B registers it with `principal add a --kind instance --key <public key>`.
+The private key is never transmitted, and the engine uses it for one thing: signing what the instance
+sends (§6). The policy authority key (`authority/policy-authority.pem` in solo mode) is separate and only
+signs policies.
+
 ### 7.2 Signer contract
 
 The engine signs through an interface with one immutable set of signers, selected by the bootstrap
@@ -597,21 +605,35 @@ symbolic link. The key id is recomputed and must equal `expected_key_id`; a self
 the signer is accepted. Other providers (OS keystore, PKCS #11/HSM, remote KMS) are described in the
 roadmap and not shipped.
 
-### 7.4 Bootstrap
+### 7.4 Bootstrap and trust anchor
 
-Strict, bounded JSON, public data only: `instance_id`, the signers, `external_peers`
-(`principal_id`, `audience_instance_id`, `interface`, `target`: HTTPS only, no credentials, one
-principal per audience, no duplicate), `policy_authorities` and `policy_signature_threshold`. The
-engine never rewrites it. It travels with a generation.
+The bootstrap belongs to the **machine**, not to the instance: strict, bounded JSON, public data only —
+`instance_id`, the signers (where each private key file is), `policy_authorities` (the **trust
+anchor**: the public key that signs policies) and `policy_signature_threshold`. The engine never
+rewrites it.
+
+Who the authority is depends on the arrangement (§11.1). By default it is **the machine itself**:
+`init` makes an authority key on the machine, and `apply` compiles the access source of the instance and
+signs it there. Nothing has to be remembered from another machine, and the instance carries no
+signature. In the **anchored** arrangement the authority is external (its private key is offline), the
+signed policies travel with the instance, and the machine is told which public key to trust; keeping the
+anchor out of the instance is what makes the carried signatures meaningful.
+
+The addresses of the peers are **not** in the bootstrap: they are part of the access source and of the
+signed policy (`external_peers`: `principal_id`, `audience_instance_id`, `interface`, `target` — HTTPS
+only, no credentials, one principal per audience, no duplicate, each a principal of the policy). A
+bootstrap may still list peers of its own; the engine refuses a principal named twice.
 
 ### 7.5 Policy generations and activation
 
-`security/` is a protected directory (§11.1). The engine starts from `-security_dir` and recovers, or
+The engine finds its two directories (§11.1) from the instance it is given, and recovers, or
 activates for the first time, one generation:
 
-* the **first** activation must be revision 1 with an empty previous hash; a restart recovers the
-  durable generation recorded in `activation-state.json` (an explicit generation that conflicts with
-  it is refused);
+* the **first** activation of a machine that has never run the instance uses the newest generation it
+  holds (or the one named by `-security_generation`) and **adopts** it, whatever its revision — verified
+  against the trust anchor first — instead of replaying every revision from 1; from then on only the
+  exact successor is accepted. A restart recovers the durable generation recorded in
+  `activation-state.json` (an explicit generation that conflicts with it is refused);
 * a **reload** takes the exact successor (revision +1, previous hash equal), verifies the proof,
   checks lifecycle (tombstones of revoked principals and terminal key states cannot be removed or
   reactivated), compiles, persists the activation record (with the security time floor), then
@@ -640,6 +662,23 @@ process cannot serve.
 * **Compromise of the message key:** revoke it at every peer, generate a new one, re-issue.
 * **Backup:** back up the security directory without the replay journal only if you accept that
   restoring it reopens the freshness window (§6.4); prefer to keep the journal with its host.
+
+### 7.7 The HTTPS certificate is not the identity
+
+Two key pairs, with different jobs. The **message key** (§7.1) signs every message and says *which
+instance sent it*; its public half is what a peer registers with `principal add`. The **HTTPS
+certificate** and its key (`tls_cert_file`, `tls_key_file`) encrypt the connection and say *which
+server this is*; they are ordinary X.509, from a public authority or made by `brique-sec tls init`
+(self-signed, ECDSA P-256), and they say nothing about Brique principals. The engine uses no client
+certificate: a caller authenticates by signing. Messages are not encrypted at the message level (§6.9),
+so the connection's TLS is what protects their content in transit.
+
+When the interface names no file, the engine uses `<machine>/tls/cert.pem` and `key.pem`, and adds
+`<machine>/tls/trusted.pem` to the certificates it accepts from the peers it calls (the system's are kept).
+Both are looked at again every couple of seconds: a regenerated or renewed certificate is served and
+trusted without a restart, and a pair that does not load (half written, mismatched) is ignored while the
+last good one keeps serving. The minimum TLS version is 1.2 and verification is on unless
+`tls_insecure_skip_verify` is set.
 
 ---
 
@@ -696,9 +735,14 @@ engine, Go, Python and C++ suites.
 Messages that leave the instance go through the immutable peer directory (`@ext_<principal>:/path` is
 resolved to the HTTPS target configured for that principal; an unknown principal is refused with no
 send), and an externally admitted message never leaves except as the signed answer to its own request.
-A **policy** decision on outbound calls by a local component or a restricted principal (decision D07) is
-**not implemented**: the `egress_denied` reason exists in the closed set of the journal and is never
-emitted (open item E1).
+A call may be emitted by any context of the instance and by an element of its user interface
+(`@ui_main:/panel`): the other instance is told the context that owns the interface as the origin, and the
+answer — or the error, at once — is delivered back to the element.
+
+A restricted local principal, and any chain admitted from another instance, **cannot send to another
+instance**: the call is answered at once with the canonical refusal and journaled as `egress_denied` under
+the principal's name. A policy that would grant such a route (decision D07) is not implemented (open item
+E1); an unrestricted local component is not subject to it.
 
 ---
 
@@ -748,7 +792,7 @@ Under `as_owner` the provenance stays the caller's. `trace.inspect` can filter o
 what the message contained. One JSON object per line, ≤ 2 KiB; fields supplied by an unauthenticated
 caller are marked `"untrusted": true` and carry no principal. Closed reason set: `unknown_key`,
 `key_inactive`, `principal_inactive`, `expired`, `replay`, `audience_mismatch`, `bad_signature`,
-`capability_denied`, `resource_denied`, `actor_denied`, `egress_denied` (defined, not yet emitted), `wrapper_secret_invalid`,
+`capability_denied`, `resource_denied`, `actor_denied`, `egress_denied`, `wrapper_secret_invalid`,
 `payload_limit`, `unsupported`, `quota_exceeded`, `internal`.
 
 It never blocks the hot path (one non-blocking send; a full 4096 queue is counted and written as a
@@ -773,45 +817,105 @@ of its context, and about `tls_insecure_skip_verify` (which signed traffic refus
 
 ## 11. Operating the instance
 
-### 11.1 The security directory
+### 11.1 Where the security lives
+
+An instance is a private tree, versioned and run on a machine by its owner. Its security has two
+parts, and the line between them is **what is secret or belongs to one machine**.
 
 ```text
-security/
-  source/access.json              the access source (0600) — what you edit
-  source/peers.json               outbound peers (0600), merged into the next generation
-  source/bootstrap.template.json
-  keys/message-signer.pem         instance message key (0400)
-  authority/policy-authority.pem  policy authority key (0400), solo mode only
-  generations/g000001/            bootstrap.json + trust-policy.json, one per revision
-  activation-state.json           written by the engine (durable generation, time floor)
-  replay.journal                  written by the engine (§6.4)
-  audit/                          written by the engine (§10.1)
-  engine.pid                      locked and written by the engine
-  reload.request                  windows only: rewritten by `apply --reload`
-  .admin.lock                     held by every mutating brique-sec command
+<instance>/security/access.json         travels with the instance (git), ordinary permissions:
+                                        principals, their public keys, grants, peers
+<instance>/root/                        the root context (what -root_path names)
 ```
 
-Directories `0700`, files `0600` or `0400`; on windows the owner is the current user, the
-administrators or the system and no other principal has write (for a file, read) access. `brique-sec
-doctor` reports anything the engine would refuse.
+```text
+~/.brique/<instance name>/              this machine only (%APPDATA%\Brique\<name> on windows), never versioned
+  keys/message-signer.pem               the instance's private message key (0400)
+  tls/cert.pem, tls/key.pem             the HTTPS certificate and its key (0600)
+  tls/trusted.pem                       certificates of peers that use their own (0600)
+  authority/policy-authority.pem        this machine's authority key (0400), solo arrangement
+  source/bootstrap.template.json        signers and the trust anchor
+  generations/g000001/                  bootstrap.json + trust-policy.json: the access source, compiled and signed here
+  activation-state.json                 written by the engine: durable generation, time floor
+  replay.journal                        written by the engine (§6.4)
+  audit/                                written by the engine (§10.1)
+  engine.pid, reload.request            engine / brique-sec signalling
+  .admin.lock                           held by every mutating brique-sec command
+```
+
+**Where `security/` is.** `<instance>` is the directory that holds the root context directory next to
+its wrappers (`<instance>/root`, `<instance>/wrapper`, …). The security folder is a **sibling of
+`root/`, not inside it**: the engine confines every context to its own directory, so nothing in the tree
+of contexts — a capacity, a document, a name with `..` — can reach it.
+
+**Finding them.** The engine is given the root context (`-root_path <instance>/root`) and nothing else:
+if `<instance>/security/access.json` exists it takes the instance name from it and uses
+`~/.brique/<name>`. `-security_dir`, then `BRIQUE_SECURITY_DIR`, name another directory for the
+machine's part. An instance without a `security/` folder has no signed communication unless a
+directory is given explicitly; the environment variable alone never switches it on. A launcher such as
+the editor extension needs no configuration. The first start uses the newest generation the machine
+holds.
+
+**The template.** `templates/instance/security/access.json` is an empty, valid access source under the
+reserved name `my-brique-instance`. An instance made from the template starts locally, with no signed
+communication, until `brique-sec --root <instance>/root init --instance <name>` gives it a name of its own
+(`init` refuses the reserved name and renames only a source that is still empty); two instances made from
+the template can therefore never share a directory on a machine.
+
+**The policy changes when the owner says so.** The engine acts on the generation signed on the machine.
+Editing `access.json`, or pulling a change to it, changes nothing until `brique-sec apply` is run on the
+machine; `brique-sec diff` shows what is pending. So a change that arrives through the instance cannot
+widen anyone's access by itself, and the history of who may do what is the history of one readable file.
+
+**A lost machine** is replaced by checking the instance out and running `brique-sec --root <instance>/root
+init`: it makes new keys, compiles and signs the source it finds, and keeps every principal, grant and
+peer. Nothing has to be remembered. What changes is the instance's own message key, so peers must register
+the new public key (`brique-sec key show`). Back up `~/.brique/<name>` if you want to keep the same key.
+
+**No capacity reaches it.** Elements are files named by a single name (a capacity, schema, document,
+matter or structure name or identifier is one file name: no separator, no `..`), so a caller who may
+define or write in a context cannot name a path into `security/` or into another context. The
+structure of a context lists its declared children and its own elements only.
+
+Machine directories are `0700`, files `0600` or `0400`; on windows the owner is the current user, the
+administrators or the system and no other principal has write (for a file, read) access. The files of
+`<instance>/security/` have the ordinary permissions of a versioned file and are never followed through
+a symbolic link. A directory given explicitly with no `security/` folder in the instance keeps
+**everything** in that one protected directory, as before. `brique-sec doctor` reports anything the
+engine would refuse.
+
+**Anchored arrangement (very sensitive instances).** `brique-sec --root <instance>/root init --strict
+--authority-public <key>` makes the authority external: its private key never touches the machine,
+policies are signed offline (`compile --out`, `sign`, `apply --signed`) and the signed generations
+(`<instance>/security/generations/g000001/trust-policy.json`, …) travel with the instance next to the
+source, with a single `bootstrap.json` on the machine that names the trust anchor. A machine that checks
+such an instance out must be told the authority's public key (`init --strict --authority-public <key>`,
+printed by `brique-sec key show` where the authority lives) and adopts the newest generation after
+verifying its signature. A policy file changed in the instance — a grant widened, a signature replaced,
+an emptied file — is refused, because only the anchor on the machine verifies. The price is that the
+authority's public key must be kept somewhere outside the instance.
 
 ### 11.2 Three commands for a catalog reader
 
 ```sh
-brique-sec --dir ./security init --instance prod-a
-brique-sec --dir ./security principal add partner-a --kind instance --key <base64url Ed25519 public key>
-brique-sec --dir ./security grant add partner-a read '/root/catalog/**' --except '/root/catalog/secrets/**'
-brique-sec --dir ./security apply --reload
+brique-sec --root ./my-instance/root init --instance prod-a
+brique-sec --root ./my-instance/root principal add partner-a --kind instance --key <base64url Ed25519 public key>
+brique-sec --root ./my-instance/root grant add partner-a read '/root/catalog/**' --except '/root/catalog/secrets/**'
+brique-sec --root ./my-instance/root apply --reload
 ```
 
-Quote targets that contain `**`. Start the engine with `-security_dir ./security -security_generation g000001`.
+Quote targets that contain `**`. Start the engine with `-root_path ./my-instance/root`. `--root` is that same root
+context directory; `--dir` (or `BRIQUE_SECURITY_DIR`) overrides the machine's directory. `--dir` alone, with no
+`--root`, keeps everything in one directory.
 
 | Command | Role |
 |---|---|
 | `init [--strict --authority-public k]` | directory, instance key, authority, bootstrap, generation `g000001` |
+| `key show` | the public keys of this instance (message key, policy authority), and the `principal add` line to run on a peer |
+| `tls init\|trust\|show` | the HTTPS certificate of this machine and the interface that uses it; trust a peer's certificate; show what a peer needs |
 | `principal add\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates `local.<wrapper>` without a key |
 | `grant add\|remove\|list [--actor a] [--except t] [--as-owner local.x]` | edit grants; the rank is the position in `grant list` |
-| `peer add\|remove\|list` | outbound peers: `--audience`, `--interface`, `--target https://…` |
+| `peer add\|remove\|list` | where a principal is reached: `--audience`, `--interface`, `--target https://…`; part of the signed policy |
 | `compile [--out f]` | source to unsigned policy; prints warnings |
 | `simulate <principal> <verb> <target> [--actor a]` | `PERMIS`/`REFUSÉ`, the deciding rule and its rank (the reference evaluator) |
 | `diff` | source compiled against the active policy |
@@ -829,13 +933,87 @@ Guarantees: an invalid change is never written; `apply` replays the engine's acc
 throwaway runtime and refuses before installing; a generation appears with one rename; every mutating
 command holds the admin lock for its whole read-modify-write; a stale or reused PID is never signalled.
 
-### 11.3 Façade and peer recipes
+### 11.3 Recipes
 
-* *Restrict a wrapper:* `principal add local.worker --kind local`, then `grant add local.worker …`.
-* *A façade:* `principal add local.reports --kind local`; give it its `read`/`write`; then
-  `grant add partner-a call '/root/reports#capacity:report.generate' --as-owner local.reports`.
-* *A peer:* `principal add partner-a --kind instance --key …`, `grant …`, and, to send **to** it,
-  `peer add partner-a --audience prod-b --interface secure-partner-a --target https://partner.example/brique`.
+Every command takes `--root <instance>/root`, the same path as the engine's `-root_path`; the examples
+write it `$ROOT`. A change is not active until `brique-sec --root $ROOT apply --reload`.
+
+**Set up an instance (once).**
+
+```sh
+brique-sec --root $ROOT init --instance monsite     # names it; makes the keys on this machine
+./brique-engine -root_path $ROOT                    # signed communication is on
+```
+
+`init` creates `<instance>/security/access.json` (versioned with the instance) and
+`~/.brique/monsite/` (keys, signed policy, state; never versioned). Until `init`, an instance made from
+the template runs locally only.
+
+**Let another instance talk to this one.** Both sides do the same, exchanging three things: the
+**instance name**, the **public key** (`brique-sec --root $ROOT key show`) and the **HTTPS address**.
+
+1. Give the machine an HTTPS certificate and the instance an HTTPS interface:
+
+   ```sh
+   brique-sec --root $ROOT tls init --host monsite.example --host 203.0.113.7 --addr 0.0.0.0:8443
+   ```
+
+   This makes a self-signed certificate and its private key in `~/.brique/<name>/tls/` (the key never
+   leaves the machine), valid for the names and addresses given (365 days, `--days` to change), and adds an
+   `outerCtx` HTTPS interface to the root `context.json` if it has none. The `context.json` names no
+   certificate and no path of the machine: the engine looks in the machine's directory, so the file stays
+   valid on any machine. Restart the engine once for it to open the interface. Give the other side the
+   certificate it prints (`tls show`), and trust the certificate it gives you:
+
+   ```sh
+   brique-sec --root $ROOT tls trust alice-cert.pem
+   ```
+
+   The certificates you trust are added to the system's, never substituted for them. A certificate from a
+   public authority (Let's Encrypt, …) needs none of this: name its files in the interface
+   (`tls_cert_file`, `tls_key_file`) and peers verify it as they verify any website.
+2. Register the other instance, decide what it may do, and say where to reach it:
+
+   ```sh
+   brique-sec --root $ROOT principal add alice --kind instance --key <alice's public key>
+   brique-sec --root $ROOT grant add alice call '/root/tools#capacity:*'
+   brique-sec --root $ROOT grant add alice read '/root/docs/**' --except '/root/docs/private/**'
+   brique-sec --root $ROOT peer add alice --audience <alice's instance name> --interface outerCtx --target https://alice.example:8443/brique
+   brique-sec --root $ROOT apply --reload
+   ```
+
+   `--interface` is the name of the local HTTPS interface of step 1. The peer is needed in both
+   directions: it is where answers to Alice are sent and where calls to her go. Check a right before
+   applying with `brique-sec --root $ROOT simulate alice call '/root/tools#capacity:echo'`.
+3. Alice does the same with your name, key and address. An external address is
+   `@ext_<principal name>:/path`, with the name each side chose for the other: you call her as
+   `@ext_alice:/root/tools`, she calls you under the name she registered for you.
+
+What she cannot do is refused identically to what does not exist; every refusal is in the journal
+(`brique-sec --root $ROOT denials --principal alice`).
+
+**Renew or regenerate the certificate.** `brique-sec --root $ROOT tls init --host … --force` makes a new
+pair; the engine serves it within a couple of seconds, with no restart. Peers who trust certificates
+with `tls trust` add the new one the same way, and their engine picks it up as it changes. (A
+certificate has its own life, apart from the instance's identity key: regenerating it does not change who
+the instance is.)
+
+**Edit by hand.** `security/access.json` is the source the commands write; you may edit it yourself and
+then run `apply`. It is read strictly (an unknown field is an error and nothing is installed), validated
+as the commands do, and `brique-sec --root $ROOT diff` shows what the change would do. Changing a
+principal's keys (several keys, `active` / `retired` / `revoked`) is done only this way.
+
+**Replace a lost machine.** Check the instance out and run `brique-sec --root $ROOT init`. It makes new
+keys on this machine, compiles and signs the source it finds and keeps every principal, grant and peer;
+nothing has to be remembered from the lost machine. The instance's own message key is new, so peers must
+register the new public key (`key show`). To keep the same key, restore `~/.brique/<name>` from a backup.
+Instances that carry signed policies (anchored arrangement, §11.1) additionally need the authority's
+public key.
+
+**Restrict a wrapper.** `principal add local.worker --kind local`, then `grant add local.worker …`.
+
+**A façade.** `principal add local.reports --kind local`; give it its `read`/`write`; then
+`grant add partner-a call '/root/reports#capacity:report.generate' --as-owner local.reports`.
 
 ### 11.4 Runbook
 
@@ -878,6 +1056,14 @@ broken (most were checked by deliberately breaking it).
 | For any configuration (verbs, subtrees, sub-contexts, named elements, genres, exceptions inside granted subtrees), the decision on a REAL request — the family's door plus the resources its real extractor returns — equals an independent evaluator; the extractors themselves are compared with a hand-written model of what each capacity touches | `TestDoorDecisionsMatchAnIndependentEvaluatorForAnyConfiguration` (all 39 Matter and Reflexive capacities × 6 contexts × random sources; 1.2 million decisions at 3000 sources via `BRIQUE_PROPERTY_ITERATIONS`); mutations of five extractors are caught |
 | Under a restrictive policy, over real signed HTTPS between two instances: a grant is honored and everything else is refused alike; a reload or a key rotation during a call cuts only the new calls; a restart of the callee during a call is never answered as a success and the same intention is not served twice; a burst of 150 calls gets exactly one terminal answer each (about half served, half refused by back-pressure); a full key rotation (callee then caller) serves the new key and keeps the old one refused; a restart of the caller during a call ends its wait with `response_state_lost`, delivers nothing to the new instance and does not replay; the whole N7 catalogue (41 flows) passes under a verb policy confined to the peer's subtree, and the flows that rebuild the remote projection are refused without `control`; a format-2 (verbs) policy is honored, and an exception added by a reload makes the context answer as absent; a DSL flow follows what the peer grants | `TestEngine_N5_POLICY_01` to `_11`, `TestEngine_N7_ENG_POLICY_01`/`_02`, `TestEngine_N7_WholeCatalogueUnderARestrictivePolicy` |
 | An absent, zero or invalid admission, or a missing runtime, authorizes nothing, reads nothing and journals nothing as a caller; a restricted local admission is built only for its own wrapper | `TestAnAbsentOrInvalidAdmissionOrRuntimeRefusesEverything`, `TestRestrictedLocalAdmissionRefusesAnythingButItsOwnWrapper` (mutations caught) |
+| A Go wrapper passes the default same-origin policy of the listener without widening `allowed_origins`: it presents the engine's own host as `Origin` | `TestDialOriginIsTheEnginesOwnHost`, `TestConnectPassesTheEnginesSameOriginPolicy` (go wrapper library); verified with a compiled Go wrapper started by the engine |
+| With two real engine processes configured only with `brique-sec`, real HTTPS between them and real Python wrappers: a wrapper calls a wrapper of the other instance in both directions; an ungranted capacity is refused exactly like a missing one; a chain through a second wrapper runs with the original caller's rights, and a derived call it does not hold is answered at once with the canonical refusal; a wrapper connection without the launch secret gets 404; restricted local principals act as themselves toward each other and their refusals are read with `brique-sec denials` under their name; a restricted wrapper cannot reach another instance (answered at once, `egress_denied` journaled); a grant added or removed with `apply --reload` applies to the next call of a connected wrapper; the peer is registered with the key printed by `brique-sec key show` | `TestRealProcesses_TwoInstancesWrappersAndLocalPrincipals` (builds the binaries; skipped with `-short`) |
+| By default the instance carries only the access source and the machine signs it itself: a new machine rebuilds every principal, grant and peer from the source alone, with keys of its own and no authority key to remember; a change to the source in the instance changes nothing until `apply`; the engine finds both directories from `-root_path` alone | `TestTheInstanceCarriesOnlyWhoMayDoWhat`, `TestANewMachineRebuildsThePolicyFromTheSourceAlone`, `TestChangingTheSourceInTheInstanceChangesNothingUntilApply`, `TestAnInstanceThatCarriesItsPolicyFindsItsMachineDirectoryByName`, `TestTheInstanceTemplateShipsAnInitializedEmptyAccessSource`, the real-process test |
+| In the anchored arrangement the signed policies travel with the instance: the engine runs from the instance's policy and the machine's keys, a machine that never ran the instance adopts its newest generation, a policy file changed in the instance (a grant widened, a signature replaced, an emptied file) is refused, a peer address cannot change without a new signature, and the instance holds no key, bootstrap, journal or activation state | `TestTheInstanceCarriesThePolicyAndNeverASecret`, `TestTheEngineRunsFromTheInstancePolicyAndTheMachineKeys`, `TestAPolicyChangedInTheInstanceWithoutTheAuthorityIsRefused`, `TestANewMachineAdoptsAnInstanceThatAlreadyCarriesAPolicy`, `TestAdoptionStartsFromTheNewestGenerationAndOnlyOnAFreshRuntime`, `TestExternalPeersAreSignedWithThePolicy` |
+| A capacity, schema, document, matter or structure name that is a path (`../security/x`, `a/b`, `..`) is refused everywhere it would become a file name, so no caller reaches `<instance>/security/` or another context's definitions | `TestValidElementName`, `TestEngine_N6_ReflexiveNamesCannotReachOtherFolders`, `TestEngine_N6_MatterIdentifiersCannotReachOtherFolders` |
+| The HTTPS side comes from commands, with nothing of the machine in the versioned `context.json`: `tls init` makes a certificate the engine loads and peers accept for every name and address given, refuses to overwrite it without `--force`, and adds the interface to `context.json` changing only the lines it adds; `tls trust` adds a peer's certificate once; the engine finds its files in the machine's directory, serves a regenerated certificate and trusts a newly trusted one with no restart, and keeps the last good pair when a new one does not load | `TestTLSInitMakesACertificateTheEngineAndPeersAccept`, `TestTLSTrustAddsAPeersCertificateOnce`, `TestEnsureOuterInterfaceOnlyAddsTheInterface`, `TestEnsureOuterInterfaceOnTheRealTemplate`, `TestTheHTTPSInterfaceFindsItsFilesInTheMachineDirectory`, `TestTheCertificateIsReloadedWhenItsFilesChange`, `TestTheClientTrustsANewCertificateWithoutARestart`, `TestTLSCommandsMakeTheHTTPSInterfaceWork`, the real-process test (certificate regenerated while the engines run) |
+| The user interface can send an intention to another instance and receives the answer, in both directions; an unknown peer is answered to the interface at once, and what the other instance did not grant is refused to it like to anyone | the real-process test (user interface sends an intention to another instance) |
+| `brique-sec key show` prints the public key a peer registers, derived from the key the engine signs with, and no private material | `TestIdentityGivesThePeerTheKeyTheInstanceSignsWith`, `TestKeyShowGivesTheOtherInstanceWhatItNeeds` |
 | Every engine capacity has exactly one class; a new capacity is unreachable until classified | `TestEveryClassifiedCapacityHasExactlyOneKnownClass`, `access.NewFamilyRegistry` |
 | No family has a bare-message inbox; the only route in is the delivery channel | `TestNoFamilyLoopOwnsABareMessageInbox` |
 | This document's capacity matrix is current | `TestSecurityDocCapacityMatrixIsCurrent` |
@@ -923,7 +1109,7 @@ Apple M4, APFS, single runs.
 | V6 | Low | A published corpus of signed-envelope vectors (only the wrapper frame has one) |
 | V7 | Low | Provenance is best effort (a bounded book): an evicted root leaves its events without a principal |
 | V8 | Info | HPKE confidentiality is not implemented (§6.9); the operator runbook (§11.4) has not been exercised by someone other than its author |
-| E1 | Medium | Egress control (D07): no policy decision on what a local or restricted component may send to an external peer; `egress_denied` is never emitted |
+| E1 | Medium | Egress control (D07): no grant lets a restricted local principal (or an admitted chain) send to an external peer; they are refused (`egress_denied`) |
 | R1 | — | An **independent review** that traces every externally reachable side effect from envelope to durable replay has not been done; §4.1 and the denial journal are written to make it possible |
 
 ---
@@ -940,7 +1126,7 @@ The model was settled decision by decision; this is the surviving list.
 | D04 | The right to data is independent of the channel (direct call, subscription, HTTP access to the substance) |
 | D05 | Cross-tree discovery is filtered by the caller's rights |
 | D06 | A refused element is indistinguishable from a missing one |
-| D07 | Egress to an external instance is controlled (decided; **not implemented**, open item E1) |
+| D07 | Egress to an external instance is controlled: refused by default for restricted principals and admitted chains; a grant that opens a route is **not implemented** (open item E1) |
 | D08 | No time windows on rights. Rates are not limited; a **share of the replay ledger** per principal is (added later) |
 | D09 | Creating gives no right on the result |
 | D10 | Elements created later in a granted subtree are covered; the compiler needs no capacity catalog |
@@ -960,6 +1146,9 @@ The model was settled decision by decision; this is the surviving list.
 | D24 | `as_owner` is included: a façade runs as a named local owner, bounded to the capacity's subtree |
 | D25 | `create` is a separate verb from `write` for data |
 | D26 | Engine capacities are authorized by verb and class, with no capacity names anywhere in a policy |
+| D27 | An instance carries its access source and its peers (versioned with it); private keys, the signed policy, the trust anchor and durable state stay on the machine. Carrying the signed policy too is the anchored arrangement, for instances that need an authority kept outside |
+| D28 | Peer addresses are part of the access source and of the signed policy |
+| D29 | An element name or identifier is one file name, never a path |
 
 ## Appendix B. Package map
 
@@ -976,6 +1165,7 @@ The model was settled decision by decision; this is the surviving list.
 | `security/runtime` | one atomically published complete runtime (signers, trust, replay, peers) |
 | `security/signer`, `signer/file` | signer boundary and the file provider |
 | `security/bootstrap` | protected bootstrap loader |
+| `security/hostdir` | where the instance's security folder and the machine's directory are, found from the instance alone |
 | `security/activation` | durable activation state |
 | `security/manager` | startup, reload, shutdown of the runtime |
 | `security/catalog` | resource kinds and actions the policy is compiled against |
@@ -985,4 +1175,4 @@ The model was settled decision by decision; this is the surviving list.
 | `junction` | `Delivery`, derivation, response permits, wrapper secrets and delegation, provenance |
 | `communication` | signed ingress and egress, routing, restricted wrappers |
 | `execution`, `matter`, `reflexive`, `context`, `trace` | the families and their doors |
-| `shared` | protected files (unix and windows), atomic replace |
+| `shared` | protected files (unix and windows), instance files, element names, atomic replace |

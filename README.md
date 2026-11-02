@@ -274,6 +274,99 @@ or:
 Brique: Open Workspace Context
 ```
 
+### Run an instance from the command line
+
+An instance is a directory that holds the root Context next to its wrappers:
+
+```text
+my-instance/
+  root/        the root Context and the Contexts below it   ← what the engine is given
+  wrapper/     the runtime libraries of the wrappers
+  security/    who may do what (created when the instance is given an identity, see below)
+```
+
+Without the extension, build the engine and start it on the root Context:
+
+```bash
+npm run build:brique          # writes bin/brique (the engine) and bin/brique-sec (see below)
+./bin/brique -root_path my-instance/root
+```
+
+An instance runs locally with no further setup.
+
+### Share a Context as a Git submodule
+
+A Context may live in its own Git repository and be mounted at its normal path in an instance as a
+submodule. Brique does not need a special command or runtime concept for this: after Git has populated
+the submodule, the engine still sees an ordinary directory containing `context.json` and the complete
+Context tree below it.
+
+This separates two useful notions:
+
+* the instance is each person's executable assembly of Contexts;
+* a shared Context is an independently versioned repository;
+* the instance repository records the exact commit of that Context that it executes.
+
+Before publishing a Context, review its `.gitignore`. Commit its architectural definition — including
+`context.json`, element descriptors, code, wrapper bindings, UI sources, and shareable child Contexts —
+but exclude generated or machine-local state such as `projection/`, `trace/*.jsonl`, `.spark/`, build
+outputs, caches, local environments, credentials, private keys, and non-shareable Matter substance.
+Stop the engine during the initial conversion so that it cannot generate files while the first commit
+is being assembled.
+
+Assume the instance itself is already a Git repository, the Context is at
+`root/shared-context`, and an empty remote repository has been created. Convert the existing directory
+in place:
+
+```bash
+cd my-instance/root/shared-context
+git init -b main
+git add .
+git commit -m "Publish shared Context"
+git remote add origin git@github.com:example/shared-context.git
+git push -u origin main
+
+cd ../..
+git rm -r --cached root/shared-context
+git submodule add --force git@github.com:example/shared-context.git root/shared-context
+git submodule absorbgitdirs root/shared-context
+git add .gitmodules root/shared-context
+git commit -m "Mount shared Context as a submodule"
+```
+
+`git rm --cached` removes the old files only from the parent repository's index; it does not delete the
+working directory. `git submodule add --force` then registers the repository already present at that
+same path. Check `git status` and the submodule's remote before committing the conversion. If the
+Context was never tracked by the instance repository, omit the `git rm --cached` step.
+
+Clone an instance and all its shared Contexts with:
+
+```bash
+git clone --recurse-submodules git@github.com:example/my-instance.git
+```
+
+For an instance that is already cloned:
+
+```bash
+git submodule update --init --recursive
+```
+
+Work on the shared Context inside its repository, on an explicit branch, then record the selected
+commit in the instance:
+
+```bash
+git -C root/shared-context switch main
+git -C root/shared-context pull --ff-only
+# edit, commit, and push inside root/shared-context when contributing to it
+
+git add root/shared-context
+git commit -m "Update shared Context"
+```
+
+The last commit changes only the instance's pointer to the shared Context. Other instances remain on
+their previously selected commit until their owners deliberately update it. A Context repository may
+itself contain submodule Contexts; use the recursive clone/update forms above for that fractal case.
+
 ### Connect through MCP
 
 Once an instance is open, use the `MCP` button in the Brique editor to start its MCP server.
@@ -289,5 +382,56 @@ Through MCP, a connected client can:
 * observe Responses and Trace;
 * contribute to the architecture from the persistent state of the instance rather than from conversational memory alone.
 
+## Give an instance an identity and connect it to others
 
+Instances talk to each other over HTTPS, and every message is signed. For that an instance needs a
+**name**, a **key pair** that identifies it, and an **HTTPS certificate**. `brique-sec` creates all
+three and manages who may do what. It is built with the engine (`bin/brique-sec`).
 
+```bash
+# 1. Once per instance: a name, and the keys of this machine
+./bin/brique-sec --root my-instance/root init --instance monsite
+
+# 2. Once per machine: the HTTPS certificate, and the HTTPS interface in the instance
+./bin/brique-sec --root my-instance/root tls init --host mon-hote.exemple --addr 0.0.0.0:8443
+
+# 3. What to give the other instance, and what to ask of it
+./bin/brique-sec --root my-instance/root key show      # your name and public key
+./bin/brique-sec --root my-instance/root tls show      # your certificate (the file to hand over)
+
+# 4. For each instance you want to talk to (alice here): who she is, what she may do, where she is
+./bin/brique-sec --root my-instance/root tls trust alice-cert.pem
+./bin/brique-sec --root my-instance/root principal add alice --kind instance --key <alice's public key>
+./bin/brique-sec --root my-instance/root grant add alice call '/root/tools#capacity:*'
+./bin/brique-sec --root my-instance/root grant add alice read '/root/docs/**' --except '/root/docs/private/**'
+./bin/brique-sec --root my-instance/root peer add alice --audience <alice's instance name> --interface outerCtx --target https://alice.example:8443/brique
+
+# 5. Make it active, then (re)start the engine the first time
+./bin/brique-sec --root my-instance/root apply --reload
+```
+
+Alice does the same with your name, public key and certificate. Nothing is active until `apply`, and
+whatever she is not granted is refused exactly like something that does not exist.
+
+**What is where.**
+
+| Where | What | Versioned with the instance? |
+|---|---|---|
+| `my-instance/security/access.json` | who may do what: instances, their public keys, their rights, their addresses | yes |
+| `~/.brique/<name>/` | this machine's private key, HTTPS certificate and key, the signed policy, the journal of refusals | **no, never** |
+
+You can edit `security/access.json` by hand and run `apply`, or use the commands: both end in the same
+file, and `brique-sec diff` shows what a change would do before you apply it. Changing the file, or
+pulling a change to it, changes nothing until `apply` is run on the machine. The engine finds both
+places from `-root_path` alone, so the extension needs no configuration.
+
+**Keys.** The key that identifies the instance never leaves the machine; only its public half is given
+away. The HTTPS certificate is separate: it encrypts the connection, and a regenerated one
+(`tls init --force`, then `tls trust` on the other side) takes effect without restarting either engine.
+
+**If you lose the machine**, check the instance out on a new one and run `init` again: the new machine
+makes its own keys and rebuilds the policy from `security/access.json`, so nothing has to be remembered.
+Your peers register your new public key (`key show`). To keep the same identity, back up `~/.brique/<name>/`.
+
+The full model — rights, restricted wrappers, the signed protocol, what has been proven — is in
+[engine/SECURITY.md](engine/SECURITY.md); the commands and recipes are in its section 11.
