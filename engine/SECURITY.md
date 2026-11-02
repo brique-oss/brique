@@ -240,6 +240,50 @@ verb (`control` names whole contexts only), and that no key is shared between pr
 
 ---
 
+### 3.7 `encryption`
+
+`"encryption"` says how the messages of a principal that speaks over the network travel (§6.9):
+
+| Value | Meaning |
+|---|---|
+| absent | an `instance` principal is sealed; a `service` or `user` principal is in the clear |
+| `"required"` | sealed, whatever the kind (not for a local principal) |
+| `"none"` | in the clear, with a peer that cannot or must not seal |
+
+It compiles to the principal's `content_mode` in the signed policy, so it is part of what `apply`
+signs and `diff` shows. `brique-sec principal encryption <id> required|none|default` edits it.
+
+### 3.8 `limits`
+
+A principal that babbles — a peer in a loop, an agent that calls itself — must not take the instance
+from the others. Every principal has a request budget: a sustained rate and a burst above it.
+
+```json
+"limits": { "rate_per_second": "20", "burst": "40" }
+```
+
+| Setting | Meaning |
+|---|---|
+| absent | the default: 20 requests per second with a burst of 40 for a principal that calls over the network, 100 and 200 for a restricted local principal (a wrapper); 256 derived calls and a depth of 16 for each request it makes |
+| `rate_per_second`, `burst` | strings, like every number of a source; the burst is at least the rate |
+| `chain_calls`, `chain_depth` | strings; what one admitted request may set off inside this instance (below) |
+| `"unlimited": true` | no limit; it has to be written, an absent setting never lifts it |
+
+`brique-sec principal limits <id> default|unlimited|<rate> [<burst>]` edits it (the burst defaults to
+twice the rate; `principal limits <id> chain <calls> [--depth <n>]` sets the chain budget and leaves the
+rate alone; `default` removes all of it). It is part of the signed policy, so `apply` signs it and
+`diff` shows it.
+
+**The chain budget.** A request that was admitted can make a wrapper or a DSL step call others, which
+call others. A wrapper's delegation already allows 128 derived calls and lives five minutes, but each
+call that is delegated in turn gets a delegation of its own, so nothing bounded the total. Each
+admitted request now carries one counter, shared by every call derived from it: the calls in all
+(`chain_calls`) and how deep they nest (`chain_depth`). The call that goes over is refused where it is
+created, journaled against the principal (`chain_budget`), and answered to a waiting wrapper as
+`unavailable` ("call chain budget exceeded"); a DSL step gets the canonical refusal. The budget
+belongs to the request: another request of the same principal starts again, and a refused call is
+not counted. `unlimited` lifts it with the rate.
+
 ## 4. How a request is decided
 
 ### 4.1 The doors
@@ -466,8 +510,9 @@ An external message is a strict JSON object with exactly three members:
 | `key_id` | derived id of an active trusted key; the **algorithm is not chosen by the message** (Ed25519) |
 | `issued_at_ms`, `expires_at_ms` | decimal strings |
 | `intention_id` | canonical lowercase UUIDv4 |
-| `content_mode` | `clear` (the only mode shipped, §6.9) |
-| `payload_encoding`, `payload_size`, `payload_hash` | `base64url`; exact decoded size; hash of the exact payload bytes |
+| `content_mode` | `clear`, or `hpke` when the payload is sealed to the recipient (§6.9) |
+| `recipient_key_id` | with `hpke` only: the key the payload is sealed to; signed, so a message cannot be redirected |
+| `payload_encoding`, `payload_size`, `payload_hash` | `base64url`; exact decoded size; hash of the exact payload bytes (the ciphertext, when sealed) |
 | `actor_id` | optional, intentions only: `[a-z][a-z0-9._-]{0,63}`, signed with the rest; a receiver that predates it rejects a message that carries one |
 | `request_hash`, `response_sequence`, `response_phase` | response only (below) |
 
@@ -565,11 +610,64 @@ payload bound is 3 MiB); larger content goes through Matter. Top-level and prote
 field lengths and decoded lengths are checked before allocation. The pending-response registry holds
 at most 4096 waits, each silent at most 30 minutes and at most 24 hours in all.
 
+### 6.8.1 Request rate
+
+Two budgets bound what a caller makes the instance do, each in memory and bounded in size:
+
+- **By address, before the queue.** The signed listener gives each remote address (an IPv6 address
+  counts by its /64) 200 requests per second with a burst of 400, and answers `429` above it. A
+  stranger with no key therefore cannot fill the queue every peer shares. The budget is generous,
+  because several instances can sit behind one gateway.
+- **By principal, after the signature.** A request over the budget of its authenticated principal
+  (§3.8) is not run. A caller that waits for an answer gets the one a saturated instance gives
+  (`unavailable`, "request rate exceeded"), through the replay ledger like any admitted request; a
+  request nobody waits for is dropped. The refusal is journaled against the principal
+  (`rate_limited`). A responses stream is not limited: the pending-response registry bounds it.
+
+A restricted local principal is limited the same way, by the budget of its policy entry; its
+over-budget request is dropped and journaled (`rate_limited`). A wrapper with no entry keeps the
+trust of its context, and no budget.
+
 ### 6.9 Confidentiality
 
-Only `content_mode=clear` ships; the engine refuses anything else. An HPKE mode (end-to-end
-confidentiality of the payload, key rotation of recipients, no downgrade) is **designed but not
-implemented**: the requirement is that a message can never downgrade the mode a policy requires.
+The content of a message is sealed to the key of its recipient and opened with the recipient's
+private key, so that the HTTPS connection, a proxy that terminates it, or anything between two
+instances sees the envelope's header and nothing of what the message asks or answers.
+
+**One key.** There is no second key to exchange: the Ed25519 key that identifies an instance is also
+its encryption key, through the standard conversion of an Ed25519 key to the X25519 key of the same
+pair (`security/seal`). Content is encrypted with HPKE (RFC 9180: DHKEM X25519, HKDF-SHA256,
+ChaCha20-Poly1305), in a context separated from signing by its own domain string. The signer
+provider opens: the private key stays where it is and only the plaintext leaves it.
+
+**Sign, then seal, bind.** The sender seals the payload to the recipient and signs the header, which
+names the recipient key (`recipient_key_id`) and carries the hash and size of the ciphertext. The HPKE
+context is bound to that header (without the two ciphertext fields), so a ciphertext cannot be moved
+into another message, even one the same sender signs. The receiver verifies the signature first and
+decrypts only for an authenticated, active principal; a payload that is still sealed reads as empty,
+so a caller that forgets to open never treats ciphertext as content.
+
+**What the policy requires.** A principal carries a minimum `content_mode`:
+
+- `hpke`: its messages are accepted only sealed. A clear message from it is refused although its
+  signature is good, and the refusal is journaled against the principal (`encryption_required`).
+  Calls to it are sealed to its active key (the longest-standing one during a rotation overlap),
+  and its answer must come back sealed, else the pending call does not accept it.
+- absent or `clear`: either is accepted; a sealed message is opened, and answered sealed.
+
+A response is sealed to the key that signed its request. A message that cannot be opened is journaled
+(`decrypt_failed`) and answered with nothing. In the access source an instance principal is `hpke` by
+default; `"encryption": "none"` opts it out, and a service or user principal is sealed with
+`"encryption": "required"` (§3.7). Local principals do not use the network and have no mode.
+
+**What stays visible.** The header: who signs (key id), who it is for, the times, the intention id,
+the sizes and the purpose; the traffic's size and rhythm; and, on the receiving instance, the content
+once opened (traces follow the rights of §3.2). Sealing hides what is asked and answered, not that
+two instances talk.
+
+**Forward secrecy.** Each message uses a fresh ephemeral key, so recording traffic does not help
+decrypt a later one; but a recipient's key that is later compromised opens what was recorded for it.
+Rotating a key (§7.6) limits that to the messages sealed to it.
 
 ---
 
@@ -670,8 +768,8 @@ instance sent it*; its public half is what a peer registers with `principal add`
 certificate** and its key (`tls_cert_file`, `tls_key_file`) encrypt the connection and say *which
 server this is*; they are ordinary X.509, from a public authority or made by `brique-sec tls init`
 (self-signed, ECDSA P-256), and they say nothing about Brique principals. The engine uses no client
-certificate: a caller authenticates by signing. Messages are not encrypted at the message level (§6.9),
-so the connection's TLS is what protects their content in transit.
+certificate: a caller authenticates by signing. The content of a message is also sealed to the
+recipient's message key (§6.9), so it stays unreadable to a party that terminates the connection.
 
 When the interface names no file, the engine uses `<machine>/tls/cert.pem` and `key.pem`, and adds
 `<machine>/tls/trusted.pem` to the certificates it accepts from the peers it calls (the system's are kept).
@@ -913,7 +1011,7 @@ context directory; `--dir` (or `BRIQUE_SECURITY_DIR`) overrides the machine's di
 | `init [--strict --authority-public k]` | directory, instance key, authority, bootstrap, generation `g000001` |
 | `key show` | the public keys of this instance (message key, policy authority), and the `principal add` line to run on a peer |
 | `tls init\|trust\|show` | the HTTPS certificate of this machine and the interface that uses it; trust a peer's certificate; show what a peer needs |
-| `principal add\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates `local.<wrapper>` without a key |
+| `principal add\|encryption\|limits\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates `local.<wrapper>` without a key; `--encryption required\|none` on `add`, or `principal encryption <id> required\|none\|default`, chooses how its messages travel (§3.7); `principal limits <id> default\|unlimited\|<rate> [<burst>]` sets its request budget (§3.8) |
 | `grant add\|remove\|list [--actor a] [--except t] [--as-owner local.x]` | edit grants; the rank is the position in `grant list` |
 | `peer add\|remove\|list` | where a principal is reached: `--audience`, `--interface`, `--target https://…`; part of the signed policy |
 | `compile [--out f]` | source to unsigned policy; prints warnings |
@@ -1064,6 +1162,12 @@ broken (most were checked by deliberately breaking it).
 | The HTTPS side comes from commands, with nothing of the machine in the versioned `context.json`: `tls init` makes a certificate the engine loads and peers accept for every name and address given, refuses to overwrite it without `--force`, and adds the interface to `context.json` changing only the lines it adds; `tls trust` adds a peer's certificate once; the engine finds its files in the machine's directory, serves a regenerated certificate and trusts a newly trusted one with no restart, and keeps the last good pair when a new one does not load | `TestTLSInitMakesACertificateTheEngineAndPeersAccept`, `TestTLSTrustAddsAPeersCertificateOnce`, `TestEnsureOuterInterfaceOnlyAddsTheInterface`, `TestEnsureOuterInterfaceOnTheRealTemplate`, `TestTheHTTPSInterfaceFindsItsFilesInTheMachineDirectory`, `TestTheCertificateIsReloadedWhenItsFilesChange`, `TestTheClientTrustsANewCertificateWithoutARestart`, `TestTLSCommandsMakeTheHTTPSInterfaceWork`, the real-process test (certificate regenerated while the engines run) |
 | The user interface can send an intention to another instance and receives the answer, in both directions; an unknown peer is answered to the interface at once, and what the other instance did not grant is refused to it like to anyone | the real-process test (user interface sends an intention to another instance) |
 | With the user interface made of the real parts — Spark starts each engine on its instance, the interface is a Pulse runtime on Spark's relay (`spark/test/e2e/uiDriver.ts`) — two instances with an identity and an HTTPS certificate of their own, made and exchanged only with `brique-sec`: a button sends an intention to the other instance in both directions and the answer is delivered to the button's place in the interface with Pulse's flow in the `success` state; a button asks a wrapper to call the other instance; what is not granted or not known is refused to the interface at once and identically; the refusals are in the other instance's journal under the caller's name; a certificate regenerated while everything runs is trusted with no restart | `TestRealProcesses_SparkAndPulseDriveTwoInstancesWithTheirOwnIdentities` (needs `node`, `python3` and `npm install`; skipped with `-short`) |
+| The content of a message is sealed to the recipient's key and opened with its own, with the one Ed25519 key: the conversion of the public and private halves agree for any key, only the recipient opens, a ciphertext altered at any byte, truncated, opened under another header or by another key is refused, and random input never opens | `TestTheTwoConversionsAgree`, `TestSealThenOpen`, `TestOnlyTheRecipientOpensWhatIsBoundToTheRightHeader`, `FuzzOpen` |
+| A sealed message shows no plaintext, a payload not yet opened reads as empty, a ciphertext lifted into another signed message does not open, and the header rules (recipient present exactly when sealed, matching its key) hold | `TestSealedIntentionRoundTrip`, `TestSealedResponseRoundTrip`, `TestSealedContentCannotBeMovedToAnotherMessage`, `TestSealedHeaderRules` |
+| Between two engines over signed HTTPS: sealed both ways is served and answered; a clear message is refused where sealing is required; a sealed message to a peer that also accepts clear is served; a change of the encryption alone is a change to `apply` | `TestEngine_N5_SEAL_01` to `_03`, `TestChangingOnlyTheEncryptionIsAChangeToApply`, `TestAnInstancePrincipalIsSealedByDefaultAndTheOperatorCanChangeIt` |
+| With two real engine processes whose only link is an intercepting HTTPS relay that both trust: the relay captures the exchange and finds neither the question, the answer nor the capacity called; once the operator opts the peers out, the same relay reads the clear exchange | `TestRealProcesses_AnInterceptingRelayReadsNothingOfASealedExchange` |
+| A principal that babbles is slowed to its budget and told so (the excess is answered `unavailable`, the burst is honored, a principal with no setting is limited, `unlimited` lifts it); a neighbour keeps its own budget; a lowered rate applies at once; memory stays bounded under a flood of keys; the policy and command validate the numbers | `TestABurstThenTheSustainedRate`, `TestOneCallerBabblingDoesNotTakeTheOthersTokens`, `TestALoweredRateAppliesAtOnce`, `TestInvalidRatesAllowNothingAndMemoryIsBounded`, `TestRateLimitDefaultsExplicitAndUnlimited`, `TestTheOperatorSetsLiftsAndResetsAPrincipalsRate`, `TestEngine_N5_RATE_01`/`_02` (over signed HTTPS between two engines) |
+| One admitted request cannot set off more derived calls than its budget or nest them deeper; the call over is cut with `ErrChainBudget`, the budget belongs to the request, and the operator sets it with `principal limits <id> chain` without touching the rate | `TestOneRequestCannotSetOffMoreCallsThanItsBudget`, `TestOneRequestCannotNestCallsDeeperThanItsBudget`, `TestTheBudgetBelongsToTheRequest`, `TestTheOperatorBoundsWhatOneRequestSetsOff` |
 | `brique-sec key show` prints the public key a peer registers, derived from the key the engine signs with, and no private material | `TestIdentityGivesThePeerTheKeyTheInstanceSignsWith`, `TestKeyShowGivesTheOtherInstanceWhatItNeeds` |
 | Every engine capacity has exactly one class; a new capacity is unreachable until classified | `TestEveryClassifiedCapacityHasExactlyOneKnownClass`, `access.NewFamilyRegistry` |
 | No family has a bare-message inbox; the only route in is the delivery channel | `TestNoFamilyLoopOwnsABareMessageInbox` |
@@ -1104,12 +1208,12 @@ Apple M4, APFS, single runs.
 |---|---|---|
 | W1 | High for portability | Run the whole suite on windows; the port is written, not run |
 | V2 | Medium | Power loss is not modelled (the campaigns kill the process; they do not drop unsynced writes); the egress commit of a cached answer is not killed mid-way |
-| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A does not retry a 503 automatically; a client that bursts must retry `unavailable` itself |
+| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst, with the request budget lifted: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A does not retry a 503 automatically; a client that bursts must retry `unavailable` itself |
 | V4 | Low | Replay recovery allocates about 280 times per entry (1 GiB at the maximum) |
 | V5 | Low | Fuzz follow-ups: UUID and `@` address parsing, extractor normalization, WebSocket framing; continuous fuzzing in CI |
 | V6 | Low | A published corpus of signed-envelope vectors (only the wrapper frame has one) |
 | V7 | Low | Provenance is best effort (a bounded book): an evicted root leaves its events without a principal |
-| V8 | Info | HPKE confidentiality is not implemented (§6.9); the operator runbook (§11.4) has not been exercised by someone other than its author |
+| V8 | Info | The operator runbook (§11.4) has not been exercised by someone other than its author |
 | E1 | Medium | Egress control (D07): no grant lets a restricted local principal (or an admitted chain) send to an external peer; they are refused (`egress_denied`) |
 | R1 | — | An **independent review** that traces every externally reachable side effect from envelope to durable replay has not been done; §4.1 and the denial journal are written to make it possible |
 
@@ -1150,6 +1254,9 @@ The model was settled decision by decision; this is the surviving list.
 | D27 | An instance carries its access source and its peers (versioned with it); private keys, the signed policy, the trust anchor and durable state stay on the machine. Carrying the signed policy too is the anchored arrangement, for instances that need an authority kept outside |
 | D28 | Peer addresses are part of the access source and of the signed policy |
 | D29 | An element name or identifier is one file name, never a path |
+| D30 | The message key is also the encryption key (Ed25519 converted to X25519); the content is sealed with HPKE to the recipient, bound to the signed header; an instance principal is sealed by default and the operator opts it out explicitly |
+| D31 | Every principal has a request budget by default; lifting it is an explicit setting. An over-budget request is answered `unavailable` when its caller waits, dropped when nobody does |
+| D32 | The calls one admitted request sets off inside the instance are counted in all and by depth, in a counter every derived delivery shares; the call over the budget is refused where it is created |
 
 ## Appendix B. Package map
 

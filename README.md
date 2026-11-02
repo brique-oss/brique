@@ -429,6 +429,12 @@ places from `-root_path` alone, so the extension needs no configuration.
 away. The HTTPS certificate is separate: it encrypts the connection, and a regenerated one
 (`tls init --force`, then `tls trust` on the other side) takes effect without restarting either engine.
 
+**Messages are encrypted end to end.** What an instance asks another, and what comes back, is signed
+with its key and sealed to the key of the instance it is for, so a proxy or anything else between
+the two sees who talks to whom and nothing of the content. There is no second key: the same key that
+identifies the instance is used. An instance you register with `principal add --kind instance` is
+sealed by default; for a peer that cannot, `principal encryption <id> none`, then `apply`.
+
 **If you lose the machine**, check the instance out on a new one and run `init` again: the new machine
 makes its own keys and rebuilds the policy from `security/access.json`, so nothing has to be remembered.
 Your peers register your new public key (`key show`). To keep the same identity, back up `~/.brique/<name>/`.
