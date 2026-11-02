@@ -26,6 +26,8 @@ const outputDir = path.join(rootDir, "bin");
 // Keep in sync with util/briqueBinaryName.ts (this script runs standalone,
 // outside the tsc/dist pipeline, so it cannot import compiled TS output).
 const outputBin = path.join(outputDir, process.platform === "win32" ? "brique.exe" : "brique");
+// The administration tool of an instance's security (identity, keys, access rights, HTTPS).
+const securityBin = path.join(outputDir, process.platform === "win32" ? "brique-sec.exe" : "brique-sec");
 
 if (spawnSync("go", ["version"], { stdio: "ignore" }).error) {
   console.error("go is required to build Brique");
@@ -51,8 +53,19 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
+console.log("Building brique-sec...");
+const buildSecurity = spawnSync("go", ["build", "-C", engineDir, "-o", securityBin, "./cmd/brique-sec"], {
+  stdio: "inherit",
+});
+
+if (buildSecurity.status !== 0) {
+  process.exit(buildSecurity.status ?? 1);
+}
+
 if (process.platform !== "win32") {
   chmodSync(outputBin, 0o755);
+  chmodSync(securityBin, 0o755);
 }
 
 console.log(`Brique binary ready: ${outputBin}`);
+console.log(`brique-sec ready: ${securityBin}`);

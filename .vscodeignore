@@ -29,6 +29,8 @@ tsconfig.json
 
 !bin/brique
 !bin/brique.exe
+!bin/brique-sec
+!bin/brique-sec.exe
 !README.md
 
 dist/**
