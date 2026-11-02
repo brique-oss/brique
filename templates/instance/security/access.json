@@ -1,0 +1,7 @@
+{
+  "format": "brique-access-source",
+  "version": "1",
+  "instance_id": "my-brique-instance",
+  "policy_id": "main",
+  "principals": {}
+}
