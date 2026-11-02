@@ -53,6 +53,7 @@ type wrapperProc struct {
 	cmd    *exec.Cmd
 	group  bool          // started in its own process group (pgid == pid)
 	exited chan struct{} // closed once the process has been reaped
+	log    *wrapperLog   // nil unless run.log.enabled
 }
 
 func (l *ExecutionLoop) registerProc(name string, p *wrapperProc) {
@@ -97,9 +98,11 @@ func (l *ExecutionLoop) watchWrapperProc(name string, pid int) {
 	}
 	go func() {
 		_ = p.cmd.Wait()
+		p.log.Marker("exit pid=%d %s", p.pid, exitDescription(p.cmd))
 		close(p.exited)
 		l.onWrapperExit(name, pid)
 		l.dropProc(name, p)
+		p.log.Close()
 	}()
 }
 
@@ -140,10 +143,11 @@ func (l *ExecutionLoop) onWrapperExit(name string, pid int) {
 	st.SetStarting(false)
 
 	if !requested {
-		err := fmt.Errorf("wrapper %s: process exited unexpectedly", name)
+		detail := l.exitDetail(name, pid)
+		err := fmt.Errorf("wrapper %s: process exited unexpectedly%s", name, detail)
 		st.LastError = err
 		if !wasReady && st.ReadyErr == nil {
-			st.ReadyErr = fmt.Errorf("wrapper %s: process exited before ready", name)
+			st.ReadyErr = fmt.Errorf("wrapper %s: process exited before ready%s", name, detail)
 		}
 	}
 	if ch := st.GetReadyCh(); ch != nil {
@@ -303,4 +307,27 @@ func (l *ExecutionLoop) emitToCommShutdown(msg circulation.Message) {
 	case commCh <- l.frame.MustDelivery(msg):
 	case <-t.C:
 	}
+}
+
+// exitDescription reports how a reaped process ended.
+func exitDescription(cmd *exec.Cmd) string {
+	if cmd == nil || cmd.ProcessState == nil {
+		return "exit unknown"
+	}
+	return "status=" + cmd.ProcessState.String()
+}
+
+// exitDetail is the suffix of an exit error when the wrapper has a log: its exit
+// status and the last lines it wrote. Empty when the log is off, so the message
+// is unchanged for a wrapper that does not ask for one.
+func (l *ExecutionLoop) exitDetail(name string, pid int) string {
+	p := l.lookupProc(name, pid)
+	if p == nil || p.log == nil {
+		return ""
+	}
+	detail := " (" + exitDescription(p.cmd) + ")"
+	if tail := p.log.Tail(); tail != "" {
+		detail += ": " + tail
+	}
+	return detail
 }

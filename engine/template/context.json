@@ -130,6 +130,11 @@
               "_cwd_note": "Optional. Working directory for the process. Defaults to the context directory.",
               "env_name": "",
               "_env_name_note": "Optional. Name of a shared Python virtualenv to run this wrapper under, hand-maintained (pip install -r requirements.txt) outside the engine. When cmd[0] is 'python3' or 'python', the engine rewrites it to that venv's interpreter. Empty => <instance_root_parent>/venv/<bin-dir>/<python-exe> (single default env, if it exists). Non-empty (e.g. 'data_science') => <instance_root_parent>/envs/data_science/venv/<bin-dir>/<python-exe> (named env, for wrappers whose dependencies conflict with the default env). <bin-dir> is 'Scripts' and <python-exe> is 'python.exe' on Windows; <bin-dir> is 'bin' and <python-exe> is 'python3' on macOS/Linux. instance_root_parent is the directory sibling to the context whose brique.ctx_type == \"root\", found by walking up from this context. If the resolved venv bin directory does not exist, the engine falls back to the system interpreter unchanged.",
+              "log": {
+                "enabled": false,
+                "max_bytes": 1048576,
+                "_log_note": "Optional, off by default (the output of the wrapper is then discarded). When enabled is true, the stdout and stderr of the wrapper process are written to <context>/tmp/wrapper_<wrapper_name>/wrapper.log, with a marker line at each launch and exit. The live file is bounded by max_bytes (default 1048576); when it would exceed it, it is renamed wrapper.log.1 (one previous file kept). A launch secret (/k/<secret>) is never written. When a wrapper exits before it is ready, the exit status and the last lines of its output are appended to ready_error, so the editor shows the cause."
+              },
               "env": {
                 "BRIQUE_WRAPPER_NAME": "my_wrapper",
                 "_env_note": "Free-form environment variables injected into the wrapper process, in addition to BRIQUE_WS_ADDR/BRIQUE_WS_URL which the engine always injects automatically."

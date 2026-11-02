@@ -73,6 +73,9 @@
               "env": {
                 "BRIQUE_WRAPPER_NAME": "mcp_server_go"
               },
+              "log": {
+                "enabled": false
+              },
               "shell": false
             },
             "stop_timeout_ms": 500,

@@ -102,6 +102,7 @@ type RunCfg struct {
 	Env     map[string]string
 	Shell   bool
 	EnvName string // optional: name of the shared envs/<env_name> virtualenv to run under
+	Log     WrapperLogCfg
 }
 
 // CtxRegistry binds capName => CapEntry.
@@ -267,6 +268,14 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 				}
 				if v, ok := rm[configuration.KeyWrpEnvName].(string); ok {
 					r.EnvName = v
+				}
+				if lm, ok := rm[configuration.KeyWrpLog].(map[string]any); ok && lm != nil {
+					if v, ok := lm[configuration.KeyWrpLogEnabled].(bool); ok {
+						r.Log.Enabled = v
+					}
+					if v, ok := shared.AnyToInt(lm[configuration.KeyWrpLogMaxBytes]); ok && v > 0 {
+						r.Log.MaxBytes = int64(v)
+					}
 				}
 				if envm, ok := rm[configuration.KeyWrpEnv].(map[string]any); ok && envm != nil {
 					r.Env = map[string]string{}

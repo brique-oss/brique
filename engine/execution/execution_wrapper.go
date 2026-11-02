@@ -742,17 +742,31 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 
+	// Opt-in (run.log.enabled): keep the output of the wrapper in a bounded file of
+	// its work dir. A log that cannot be opened never prevents the launch.
+	var wlog *wrapperLog
+	if run.Log.Enabled {
+		if opened, err := openWrapperLog(workDir, run.Log); err == nil {
+			wlog = opened
+			cmd.Stdout, cmd.Stderr = wlog, wlog
+			cmd.WaitDelay = 2 * time.Second // a descendant holding the pipe open must not block the reaper
+			wlog.Marker("launch cmd=%s", strings.Join(run.Cmd, " "))
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
+		wlog.Close()
 		return 0, fmt.Errorf("wrapper %s: start failed: %w", cfg.Name, err)
 	}
 	if cmd.Process == nil {
+		wlog.Close()
 		return 0, fmt.Errorf("wrapper %s: started but no process handle", cfg.Name)
 	}
 	pid = cmd.Process.Pid
 	// The handle is kept (no Release): the process must be reaped once it exits
 	// and killed as a group when it runs under a shell. The caller records the
 	// pid in the wrapper state and then calls watchWrapperProc.
-	l.registerProc(cfg.Name, &wrapperProc{pid: pid, cmd: cmd, group: run.Shell, exited: make(chan struct{})})
+	l.registerProc(cfg.Name, &wrapperProc{pid: pid, cmd: cmd, group: run.Shell, exited: make(chan struct{}), log: wlog})
 	return pid, nil
 }
 

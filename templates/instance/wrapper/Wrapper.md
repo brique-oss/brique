@@ -506,6 +506,8 @@ preserves the opaque delegation frame and never interprets or widens it.
 
 **Filesystem model** — canonical layout is `code/<wrapper_name>/`, `build/<wrapper_name>/`, `tmp/wrapper_<wrapper_name>/`.
 
+**Wrapper log** — the output of a wrapper process is discarded unless its entry asks for a log: `"run": { "log": { "enabled": true, "max_bytes": 1048576 } }` (per wrapper; `enabled` defaults to `false`, `max_bytes` to 1 MiB). The engine then writes the stdout and stderr of the process to `tmp/wrapper_<wrapper_name>/wrapper.log`, with a marker line at each launch and exit. The live file never exceeds `max_bytes`: it is renamed `wrapper.log.1` (one previous file kept) and restarted. The per-launch secret (`/k/<secret>`) is replaced by `/k/<redacted>`. When the wrapper exits before it is ready, `ready_error` (and `last_error`) carry the exit status and the last lines of that launch, so the editor shows the cause instead of `process exited before ready`. With the option off, these messages are unchanged.
+
 **Parameter forms** — a parameter reaches a capacity as a value, `@matter`, `@file` or `@object`. The runtime resolves it when hosted code asks for it, so hosted code never depends on the form (see §17.3).
 
 **Wrapper-owned files** — durable state private to one wrapper is an `ext_ref` matter whose file that wrapper manages (see §17.2).
