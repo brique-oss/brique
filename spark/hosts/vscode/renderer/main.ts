@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { PulseRuntime } from "../../../../pulse/runtime/index.js";
 import type { PulseAdapterRenderer } from "../../../../pulse/adapters/renderer.js";
 import type { SparkRendererPayload } from "../../rendererPayload.js";
+import { createRendererPulse } from "../../rendererTransport.js";
 
 async function bootstrap() {
   const payload = readRendererPayload();
@@ -31,12 +31,7 @@ async function bootstrap() {
     ].join(" ")
   );
 
-  const pulse = new PulseRuntime({
-    webSocketUrl: payload.uiTransportUrl,
-    transportName: payload.uiName,
-    uiName: payload.uiName,
-    uiAddressPrefix: payload.uiAddressPrefix,
-  });
+  const pulse = createRendererPulse(payload);
 
   const adapterRenderer = await import(payload.adapterRendererPath) as PulseAdapterRenderer;
   if (typeof adapterRenderer.mountPulseRoot !== "function") {

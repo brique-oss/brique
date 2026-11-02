@@ -17,9 +17,12 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
+import { isIP } from "net";
+import WebSocket from "ws";
 
 import type { SparkHostHandle, SparkHostInput, SparkHostRunner } from "../hosts/types.js";
 import { launchBrique } from "../launchers/BriqueLauncher.js";
+import type { BriqueLaunchOptions } from "../launchers/BriqueLauncher.js";
 import { resolveUI } from "../ui/UIResolver.js";
 import { briqueBinaryName } from "../util/briqueBinaryName.js";
 import { waitForWebSocket } from "../util/waitForWebSocket.js";
@@ -55,10 +58,14 @@ export type ContextUIBuilder = (
 ) => Promise<ContextUIBuildOutput>;
 
 export type SparkDeps = {
-  launchBrique?: (binaryPath: string, contextPath: string) => BriqueHandle;
+  launchBrique?: (binaryPath: string, contextPath: string, options?: BriqueLaunchOptions) => BriqueHandle;
   buildContextUI?: ContextUIBuilder;
   startHost?: (input: SparkHostInput) => SparkHostHandle | Promise<SparkHostHandle>;
   waitForWebSocket?: (url: string) => Promise<void>;
+  probeExistingBriqueEngine?: (
+    uiTransportUrl: string,
+    expectedContextDir: string
+  ) => Promise<BriqueEngineProbe>;
 };
 
 export async function startSpark(
@@ -72,6 +79,7 @@ export async function startSpark(
     uiConfig: uiConfigOverride,
     host: hostOverride,
     hostConfig,
+    security,
   } = options;
   const absContextPath = path.resolve(contextPath);
   const context = await loadContext(absContextPath);
@@ -114,7 +122,8 @@ export async function startSpark(
   const uiRuntime = resolveUIRuntime(context);
   const uiTransportUrl = uiRuntime.transportUrl;
 
-  const attachState = await probeExistingBriqueEngine(uiTransportUrl, path.dirname(absContextPath));
+  const probe = deps.probeExistingBriqueEngine ?? probeExistingBriqueEngine;
+  const attachState = await probe(uiTransportUrl, path.dirname(absContextPath));
   if (attachState.kind === "mismatch") {
     throw new Error(
       `Brique engine already running at ${uiTransportUrl} for ${attachState.actualContextDir}; expected ${attachState.expectedContextDir}`
@@ -122,7 +131,12 @@ export async function startSpark(
   }
   const brique = attachState.kind === "matching"
     ? createAttachedBriqueHandle(uiTransportUrl)
-    : launch(briqueBinaryPath, absContextPath);
+    : launch(briqueBinaryPath, absContextPath, {
+        securityDirectory: security?.directory,
+        securityGeneration: security?.initialGeneration,
+        auditMaxFileMiB: security?.auditMaxFileMiB,
+        auditRetentionDays: security?.auditRetentionDays,
+      });
   let host: SparkHostHandle | null = null;
 
   try {
@@ -169,7 +183,7 @@ export async function startSpark(
   };
 }
 
-type BriqueEngineProbe =
+export type BriqueEngineProbe =
   | { kind: "none" }
   | { kind: "matching"; contextDir: string }
   | { kind: "mismatch"; expectedContextDir: string; actualContextDir: string };
@@ -346,17 +360,32 @@ export function resolveUIWebSocketUrl(context: SparkContextConfig): string {
 
 export function resolveUIRuntime(context: SparkContextConfig, uiConfigOverride?: { ws_addr?: string; ws_path?: string; name?: string }): SparkUIRuntimeConfig {
   const uiConfig = uiConfigOverride ?? context.brique.ui_config;
-  const addr = resolveSharedWebSocketListenerAddr(context) ?? uiConfig?.ws_addr ?? ":8080";
+  const addr = resolveSharedWebSocketListenerAddr(context) ?? uiConfig?.ws_addr ?? "127.0.0.1:8080";
   const wsPath = uiConfig?.ws_path ?? "/ws";
-  const host = addr.startsWith(":") ? `localhost${addr}` : addr;
   const uiName = normalizeUIName(uiConfig?.name ?? "main");
 
   return {
     uiName,
     uiAddressPrefix: `@ui_${uiName}`,
     rootContextId: "/root",
-    transportUrl: `ws://${host}${wsPath}`,
+    transportUrl: resolveLocalUIWebSocketUrl(addr, wsPath),
   };
+}
+
+export function resolveLocalUIWebSocketUrl(addr: string, wsPath: string): string {
+  const host = addr.startsWith(":") ? `127.0.0.1${addr}` : addr;
+  const url = new URL(`ws://${host}${wsPath.startsWith("/") ? wsPath : `/${wsPath}`}`);
+  const hostname = url.hostname.replace(/^\[|\]$/gu, "");
+  const ipVersion = isIP(hostname);
+  const loopback = hostname.toLowerCase() === "localhost" ||
+    (ipVersion === 4 && hostname.startsWith("127.")) ||
+    (ipVersion === 6 && hostname === "::1");
+  if (!loopback) {
+    throw new Error(
+      `Spark UI requires a loopback websocket listener; remote UI authentication is not implemented (${addr})`
+    );
+  }
+  return url.toString();
 }
 
 function resolveSharedWebSocketListenerAddr(context: SparkContextConfig): string | undefined {

@@ -22,15 +22,40 @@ export type BriqueProcess = {
   stop: () => void;
 };
 
+export type BriqueLaunchOptions = {
+  securityDirectory?: string;
+  securityGeneration?: string;
+  auditMaxFileMiB?: number;
+  auditRetentionDays?: number;
+};
+
 export function launchBrique(
   binaryPath: string,
-  contextPath: string
+  contextPath: string,
+  options: BriqueLaunchOptions = {},
 ): BriqueProcess {
   const absBinary = path.resolve(binaryPath);
   const absContext = path.resolve(contextPath);
   const rootDir = path.dirname(absContext);
 
-  const proc = spawn(absBinary, ["-root_path", rootDir], {
+  if (options.securityGeneration && !options.securityDirectory) {
+    throw new Error("securityGeneration requires securityDirectory");
+  }
+  const args = ["-root_path", rootDir];
+  if (options.securityDirectory) {
+    args.push("-security_dir", path.resolve(options.securityDirectory));
+  }
+  if (options.securityGeneration) {
+    args.push("-security_generation", options.securityGeneration);
+  }
+  if (options.auditMaxFileMiB !== undefined) {
+    args.push("-audit_max_file_mib", String(options.auditMaxFileMiB));
+  }
+  if (options.auditRetentionDays !== undefined) {
+    args.push("-audit_retention_days", String(options.auditRetentionDays));
+  }
+
+  const proc = spawn(absBinary, args, {
     stdio: ["ignore", "pipe", "pipe"],
   });
 

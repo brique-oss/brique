@@ -18,9 +18,18 @@
 
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 async function main() {
   await app.whenReady();
+
+  const transportUrl = process.env.SPARK_UI_TRANSPORT_URL;
+  if (!transportUrl) throw new Error('Missing SPARK_UI_TRANSPORT_URL');
+  const relayModuleUrl = pathToFileURL(
+    path.resolve(__dirname, '..', 'LocalWebSocketRelay.js')
+  ).href;
+  const { LocalWebSocketRelay } = await import(relayModuleUrl);
+  const relay = new LocalWebSocketRelay(transportUrl);
 
   ipcMain.handle('spark:showOpenDialog', async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(options);
@@ -39,6 +48,19 @@ async function main() {
     },
   });
 
+  const unsubscribeMessage = relay.subscribe((data) => {
+    if (!win.isDestroyed()) win.webContents.send('spark:transport:message', data);
+  });
+  const unsubscribeState = relay.subscribeToConnectionState((state) => {
+    if (!win.isDestroyed()) win.webContents.send('spark:transport:state', state);
+  });
+  ipcMain.on('spark:transport:open', () => relay.open());
+  ipcMain.on('spark:transport:close', () => relay.close());
+  ipcMain.handle('spark:transport:send', async (_event, data) => {
+    if (typeof data !== 'string') throw new Error('Invalid Spark transport payload');
+    await relay.send(data);
+  });
+
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     const prefix = ['[renderer:verbose]', '[renderer:info]', '[renderer:warn]', '[renderer:error]'][level] ?? '[renderer]';
     console.log(`${prefix} ${message} (${sourceId}:${line})`);
@@ -55,6 +77,10 @@ async function main() {
   await win.loadFile(rendererPath);
 
   win.on('closed', () => {
+    unsubscribeMessage();
+    unsubscribeState();
+    relay.close();
+    ipcMain.removeHandler('spark:transport:send');
     app.quit();
   });
 }

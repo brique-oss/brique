@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import { PulseRuntime } from "../../../../pulse/runtime/index.js";
 import type { PulseAdapterRenderer } from "../../../../pulse/adapters/renderer.js";
 import type { SparkRendererPayload } from "../../rendererPayload.js";
+import { createRendererPulse } from "../../rendererTransport.js";
 
 async function bootstrap() {
   const payload = readRendererPayload();
+  installElectronTransportBridge();
   console.info(
     [
       "[spark-renderer] payload",
@@ -31,12 +32,7 @@ async function bootstrap() {
     ].join(" ")
   );
 
-  const pulse = new PulseRuntime({
-    webSocketUrl: payload.uiTransportUrl,
-    transportName: payload.uiName,
-    uiName: payload.uiName,
-    uiAddressPrefix: payload.uiAddressPrefix,
-  });
+  const pulse = createRendererPulse(payload);
 
   const adapterRenderer = await import(payload.adapterRendererPath) as PulseAdapterRenderer;
   if (typeof adapterRenderer.mountPulseRoot !== "function") {
@@ -61,6 +57,40 @@ async function bootstrap() {
     rootViewName: payload.rootViewName,
     rootViewPath: payload.rootViewPath,
   });
+}
+
+function installElectronTransportBridge(): void {
+  const nodeRequire = (globalThis as { require?: NodeRequire }).require;
+  if (!nodeRequire) throw new Error("Electron Node bridge is unavailable");
+  const { ipcRenderer } = nodeRequire("electron") as typeof import("electron");
+  const messageSubscribers = new Set<(data: string) => void>();
+  const stateSubscribers = new Set<(state: "connected" | "disconnected") => void>();
+  let state: "connected" | "disconnected" = "disconnected";
+
+  ipcRenderer.on("spark:transport:message", (_event, data: unknown) => {
+    if (typeof data !== "string") return;
+    for (const subscriber of messageSubscribers) subscriber(data);
+  });
+  ipcRenderer.on("spark:transport:state", (_event, next: unknown) => {
+    if (next !== "connected" && next !== "disconnected") return;
+    state = next;
+    for (const subscriber of stateSubscribers) subscriber(state);
+  });
+
+  (globalThis as { __SPARK_TRANSPORT_BRIDGE__?: unknown }).__SPARK_TRANSPORT_BRIDGE__ = {
+    open() { ipcRenderer.send("spark:transport:open"); },
+    send(data: string) { return ipcRenderer.invoke("spark:transport:send", data) as Promise<void>; },
+    subscribe(callback: (data: string) => void) {
+      messageSubscribers.add(callback);
+      return () => { messageSubscribers.delete(callback); };
+    },
+    subscribeToConnectionState(callback: (next: "connected" | "disconnected") => void) {
+      stateSubscribers.add(callback);
+      callback(state);
+      return () => { stateSubscribers.delete(callback); };
+    },
+    close() { ipcRenderer.send("spark:transport:close"); },
+  };
 }
 
 function createElectronHostBridge(rootContextPath: string) {

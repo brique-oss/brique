@@ -106,6 +106,7 @@ function makeDefaultDeps(overrides: Record<string, unknown> = {}) {
     }),
     startHost: () => makeHostMock(),
     waitForWebSocket: noopWait,
+    probeExistingBriqueEngine: async () => ({ kind: "none" as const }),
     ...overrides,
   };
 }
@@ -320,6 +321,36 @@ test("D: calls Brique launcher with correct context path", async () => {
   handle.stop();
 });
 
+test("D: forwards host-local security and audit launch options", async () => {
+  let capturedOptions: unknown = null;
+  const contextPath = await writeTempContext(validContext);
+  const handle = await startSpark(
+    {
+      contextPath,
+      security: {
+        directory: "/protected/security",
+        initialGeneration: "generation-1",
+        auditMaxFileMiB: 32,
+        auditRetentionDays: 7,
+      },
+    },
+    makeDefaultDeps({
+      launchBrique: (_binary: string, _context: string, options: unknown) => {
+        capturedOptions = options;
+        return makeBriqueMock();
+      },
+    })
+  );
+
+  assert.deepEqual(capturedOptions, {
+    securityDirectory: "/protected/security",
+    securityGeneration: "generation-1",
+    auditMaxFileMiB: 32,
+    auditRetentionDays: 7,
+  });
+  handle.stop();
+});
+
 test("D: exposes Brique stop handle", async () => {
   const briqueMock = makeBriqueMock();
   const contextPath = await writeTempContext(validContext);
@@ -341,7 +372,7 @@ test("D: exposes Brique stop handle", async () => {
 test("E: extracts UI WebSocket URL from ui_config", async () => {
   const contextPath = await writeTempContext(validContext);
   const handle = await startSpark({ contextPath }, makeDefaultDeps());
-  assert.equal(handle.uiTransportUrl, "ws://localhost:9000/ws");
+  assert.equal(handle.uiTransportUrl, "ws://127.0.0.1:9000/ws");
   handle.stop();
 });
 
@@ -365,11 +396,11 @@ test("E: resolves UI runtime from ui_config ws fields", () => {
     uiName: "inspector",
     uiAddressPrefix: "@ui_inspector",
     rootContextId: "/root",
-    transportUrl: "ws://localhost:7777/ui",
+    transportUrl: "ws://127.0.0.1:7777/ui",
   });
 });
 
-test("E: defaults address to :8080", () => {
+test("E: defaults address to explicit loopback 127.0.0.1:8080", () => {
   const ctx = {
     brique: {
       ...validContext.brique,
@@ -391,24 +422,24 @@ test("E: defaults path to /ws", () => {
   assert.ok(url.endsWith("/ws"));
 });
 
-test("E: converts :8080 to ws://localhost:8080/ws", () => {
+test("E: converts legacy :8080 to explicit loopback", () => {
   const ctx = {
     brique: {
       ...validContext.brique,
       ui_config: { root_view: "EditorRoot", adapter: "react", host: "electron", ws_addr: ":8080", ws_path: "/ws" },
     },
   };
-  assert.equal(resolveUIWebSocketUrl(ctx), "ws://localhost:8080/ws");
+  assert.equal(resolveUIWebSocketUrl(ctx), "ws://127.0.0.1:8080/ws");
 });
 
-test("E: preserves explicit host address", () => {
+test("E: refuses a remote UI listener until authenticated remote UI exists", () => {
   const ctx = {
     brique: {
       ...validContext.brique,
       ui_config: { root_view: "EditorRoot", adapter: "react", host: "electron", ws_addr: "192.168.1.5:4000", ws_path: "/ws" },
     },
   };
-  assert.equal(resolveUIWebSocketUrl(ctx), "ws://192.168.1.5:4000/ws");
+  assert.throws(() => resolveUIWebSocketUrl(ctx), /requires a loopback websocket listener/i);
 });
 
 test("E: defaults uiName to main when name not set", () => {
@@ -493,7 +524,7 @@ test("F: passes UI transport URL to host", async () => {
     })
   );
 
-  assert.equal(capturedUrl, "ws://localhost:9000/ws");
+  assert.equal(capturedUrl, "ws://127.0.0.1:9000/ws");
   handle.stop();
 });
 
@@ -529,7 +560,7 @@ test("F: passes resolved UI runtime to host", async () => {
     uiName: "panel",
     uiAddressPrefix: "@ui_panel",
     rootContextId: "/root",
-    transportUrl: "ws://localhost:9091/panel",
+    transportUrl: "ws://127.0.0.1:9091/panel",
   });
   assert.deepEqual(handle.uiRuntime, capturedRuntime);
   handle.stop();
@@ -797,6 +828,8 @@ test("F2: buildWebviewHtml injects common renderer payload and import map", () =
   const html = buildWebviewHtml(input as never, panel, deps);
 
   assert.match(html, /window\.__SPARK_RENDERER_PAYLOAD__/);
+  assert.match(html, /window\.__SPARK_TRANSPORT_BRIDGE__/);
+  assert.match(html, /connect-src 'none'/);
   assert.match(html, /webview:\/abs\/path\/dist\/EditorRoot\.js/);
   assert.match(html, /webview:\/abs\/path\/dist\/pulse\/adapters\/react\/runner\.js/);
   assert.match(html, /webview:\/abs\/path\/dist\/pulse\/adapters\/react\/deps\/react-vendor\.js/);

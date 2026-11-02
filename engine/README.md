@@ -75,7 +75,8 @@ GOOS=windows go vet ./...           # type-checks the windows code and its tests
 
 Some tests need `python3` and a C++ compiler (`c++`, with libcurl) and skip if they are absent. The
 end-to-end tests under `context/engine_real_*` build the engine and `brique-sec`, start separate engines
-as processes and drive them for real (`go test ./context -run TestRealProcesses`).
+as processes and drive them for real; the second one uses Spark and Pulse as the user interface and needs
+`node` and the repository's `npm install` (`go test ./context -run TestRealProcesses`).
 
 * **Fuzz targets** (run each for a while, not only the seed corpus):
   `go test ./security/wire -run xxx -fuzz FuzzVerifyClear`, and likewise `FuzzBootstrapDocument`,

@@ -23,6 +23,8 @@ export * from "./circulation/index.js";
 export * from "./transport/Transport.js";
 export { TransportManager } from "./transport/TransportManager.js";
 export { WebSocketTransport } from "./transport/WebSocketTransport.js";
+export { BridgeTransport } from "./transport/BridgeTransport.js";
+export type { SerializedTransportBridge } from "./transport/BridgeTransport.js";
 
 export { ProjectionState } from "./projection/ProjectionState.js";
 export { PathRegistry } from "./projection/PathRegistry.js";

@@ -23,6 +23,7 @@ import { resolveUI } from "../ui/UIResolver.js";
 
 import {
   resolveUIRuntime,
+  resolveLocalUIWebSocketUrl,
   type ContextUIBuildInput,
   type ContextUIBuildOutput,
   type ContextUIBuilder,
@@ -243,8 +244,7 @@ async function resolveContextTransportUrl(
   const wsPath = uiConfig.ws_path ?? "/ws";
   const addr = (await resolveInstanceSharedWebSocketListenerAddr(instanceRootDir)) ?? uiConfig.ws_addr;
   if (!addr) return fallback;
-  const host = addr.startsWith(":") ? `localhost${addr}` : addr;
-  return `ws://${host}${wsPath}`;
+  return resolveLocalUIWebSocketUrl(addr, wsPath);
 }
 
 async function resolveInstanceSharedWebSocketListenerAddr(

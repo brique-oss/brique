@@ -50,6 +50,12 @@ export type SparkStartOptions = {
   uiConfig?: UIConfig;
   host?: string;
   hostConfig?: unknown;
+  security?: {
+    directory: string;
+    initialGeneration?: string;
+    auditMaxFileMiB?: number;
+    auditRetentionDays?: number;
+  };
 };
 
 export type SparkProjectionPlan = {

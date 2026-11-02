@@ -40,6 +40,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.2",
     "@vscode/vsce": "^3.9.1",
     "electron": "^41.3.0",
     "tailwindcss": "^4.3.0",
@@ -64,7 +65,8 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-resizable-panels": "^4.11.2",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "ws": "^8.22.1"
   },
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
@@ -79,7 +81,7 @@
     "vscode:deploy": "npm run vscode:package && npm run vscode:install",
     "start": "node dist/spark/index.js",
     "start:sandbox": "node dist/spark/index.js spark/test/sandbox/root/context.json",
-    "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts",
+    "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts spark/test/relay.test.ts",
     "test:brique-editor": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test briqueEditorUI/Brique_Substrate/test/brique-substrate.test.ts",
     "start:mcp": "node scripts/start-brique-instance-mcp.mjs"
   }

@@ -22,6 +22,7 @@ import {
   type SparkRendererPayload,
 } from "../rendererPayload.js";
 import type { SparkHostInput } from "../types.js";
+import { LocalWebSocketRelay, type SparkTransportRelay } from "../LocalWebSocketRelay.js";
 import type { VsCodeHostConfig, VsCodeHostHandle } from "./types.js";
 
 export type VsCodeWebviewPanel = {
@@ -57,6 +58,7 @@ export type VsCodeHostRunnerDeps = {
   ) => VsCodeWebviewPanel;
   createUri: (fsPath: string) => VsCodeUri;
   onWebviewMessage?: (message: unknown, respond: (message: unknown) => void) => void;
+  createTransportRelay?: (url: string) => SparkTransportRelay;
 };
 
 export function startVsCodeHost(
@@ -93,22 +95,35 @@ export function startVsCodeHost(
     retainContextWhenHidden: true,
   });
 
+  const relay = deps.createTransportRelay?.(input.uiTransportUrl) ??
+    new LocalWebSocketRelay(input.uiTransportUrl);
+  const relayUnsubscribeMessage = relay.subscribe((data) => {
+    void panel.webview.postMessage?.({ kind: "spark.transport.message", data });
+  });
+  const relayUnsubscribeState = relay.subscribeToConnectionState((state) => {
+    void panel.webview.postMessage?.({ kind: "spark.transport.state", state });
+  });
+
   panel.webview.html = buildWebviewHtml(input, panel, deps);
 
   const disposeListener = panel.onDidDispose(() => {
     for (const callback of exitCallbacks) callback();
   });
-  const messageListener = deps.onWebviewMessage && panel.webview.onDidReceiveMessage
-    ? panel.webview.onDidReceiveMessage((message) => deps.onWebviewMessage?.(
-        message,
-        (response) => { void panel.webview.postMessage?.(response); },
-      ))
+  const messageListener = panel.webview.onDidReceiveMessage
+    ? panel.webview.onDidReceiveMessage((message) => {
+        const respond = (response: unknown) => { void panel.webview.postMessage?.(response); };
+        if (handleTransportMessage(message, relay, respond)) return;
+        deps.onWebviewMessage?.(message, respond);
+      })
     : undefined;
 
   return {
     stop: () => {
       disposeListener.dispose();
       messageListener?.dispose();
+      relayUnsubscribeMessage();
+      relayUnsubscribeState();
+      relay.close();
       panel.dispose();
     },
     onExit: (callback) => {
@@ -141,7 +156,7 @@ export function buildWebviewHtml(
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} https: data:; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${cspSource}; connect-src ws: wss:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} https: data:; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${cspSource}; connect-src 'none';" />
     <title>${escapeHtml(payload.rootViewName)}</title>
 ${styleLinks}
     <script nonce="${nonce}" type="importmap">
@@ -202,6 +217,55 @@ ${escapeScriptJson({ imports: payload.adapterImportMap })}
           });
         }
       };
+      const sparkTransportMessageSubscribers = new Set();
+      const sparkTransportStateSubscribers = new Set();
+      const sparkTransportPending = new Map();
+      let sparkTransportState = "disconnected";
+      window.addEventListener("message", (event) => {
+        const message = event.data;
+        if (message?.kind === "spark.transport.message" && typeof message.data === "string") {
+          for (const subscriber of sparkTransportMessageSubscribers) subscriber(message.data);
+          return;
+        }
+        if (message?.kind === "spark.transport.state" && (message.state === "connected" || message.state === "disconnected")) {
+          sparkTransportState = message.state;
+          for (const subscriber of sparkTransportStateSubscribers) subscriber(message.state);
+          return;
+        }
+        if (message?.kind === "spark.transport.result" && typeof message.requestId === "string") {
+          const pending = sparkTransportPending.get(message.requestId);
+          if (!pending) return;
+          sparkTransportPending.delete(message.requestId);
+          clearTimeout(pending.timeout);
+          if (message.ok) pending.resolve();
+          else pending.reject(new Error(message.error || "Spark transport request failed"));
+        }
+      });
+      function sparkTransportRequest(kind, data) {
+        return new Promise((resolve, reject) => {
+          const requestId = crypto.randomUUID();
+          const timeout = setTimeout(() => {
+            sparkTransportPending.delete(requestId);
+            reject(new Error("Spark transport request timed out"));
+          }, 15000);
+          sparkTransportPending.set(requestId, { resolve, reject, timeout });
+          sparkVsCodeApi?.postMessage({ kind, requestId, data });
+        });
+      }
+      window.__SPARK_TRANSPORT_BRIDGE__ = {
+        open() { sparkVsCodeApi?.postMessage({ kind: "spark.transport.open" }); },
+        send(data) { return sparkTransportRequest("spark.transport.send", data); },
+        subscribe(callback) {
+          sparkTransportMessageSubscribers.add(callback);
+          return () => sparkTransportMessageSubscribers.delete(callback);
+        },
+        subscribeToConnectionState(callback) {
+          sparkTransportStateSubscribers.add(callback);
+          callback(sparkTransportState);
+          return () => sparkTransportStateSubscribers.delete(callback);
+        },
+        close() { sparkVsCodeApi?.postMessage({ kind: "spark.transport.close" }); }
+      };
     </script>
     <script nonce="${nonce}">
       window.__SPARK_RENDERER_PAYLOAD__ = ${escapeScriptJson(payload)};
@@ -254,6 +318,37 @@ function createNonce(): string {
     nonce += chars[Math.floor(Math.random() * chars.length)];
   }
   return nonce;
+}
+
+function handleTransportMessage(
+  value: unknown,
+  relay: SparkTransportRelay,
+  respond: (message: unknown) => void,
+): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const message = value as { kind?: unknown; requestId?: unknown; data?: unknown };
+  if (message.kind === "spark.transport.open") {
+    relay.open();
+    return true;
+  }
+  if (message.kind === "spark.transport.close") {
+    relay.close();
+    return true;
+  }
+  if (message.kind !== "spark.transport.send") return false;
+  if (typeof message.requestId !== "string" || typeof message.data !== "string") {
+    return true;
+  }
+  void relay.send(message.data).then(
+    () => respond({ kind: "spark.transport.result", requestId: message.requestId, ok: true }),
+    (error) => respond({
+      kind: "spark.transport.result",
+      requestId: message.requestId,
+      ok: false,
+      error: error instanceof Error ? error.message : "Spark transport send failed",
+    }),
+  );
+  return true;
 }
 
 export type { SparkRendererPayload };

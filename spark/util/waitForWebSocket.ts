@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import WebSocket from "ws";
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RETRY_INTERVAL_MS = 200;
 
@@ -37,28 +39,26 @@ export async function waitForWebSocket(
 function tryConnect(url: string): Promise<boolean> {
   return new Promise((resolve) => {
     const ws = new WebSocket(url);
+    let settled = false;
 
-    const cleanup = () => {
-      ws.onopen = null;
-      ws.onerror = null;
-      ws.onclose = null;
+    const finish = (connected: boolean) => {
+      if (settled) return;
+      settled = true;
+      ws.removeListener("open", onOpen);
+      ws.removeListener("error", onError);
+      ws.removeListener("close", onClose);
+      resolve(connected);
     };
-
-    ws.onopen = () => {
-      cleanup();
+    const onOpen = () => {
+      finish(true);
       ws.close();
-      resolve(true);
     };
+    const onError = () => finish(false);
+    const onClose = () => finish(false);
 
-    ws.onerror = () => {
-      cleanup();
-      resolve(false);
-    };
-
-    ws.onclose = () => {
-      cleanup();
-      resolve(false);
-    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
   });
 }
 
