@@ -21,6 +21,8 @@ export type UIBlockExampleProps = {
 export function UIBlockExample({ pulse: providedPulse, transportUrl, rootContextId }: UIBlockExampleProps) {
   const pulse = useMemo(() => {
     if (providedPulse) return providedPulse;
+    // Standalone development only. Normal Spark hosts always inject a PulseRuntime
+    // backed by their trusted WebSocket relay; browser renderers do not connect directly.
     return new PulseRuntime({
       webSocketUrl: transportUrl ?? resolveTransportUrl(),
       maxMessagesPerFlow: 20,

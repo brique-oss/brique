@@ -24,7 +24,7 @@ Condensed operational reference. Full rationale: `ui_block/UIBlock.md`. Ready-to
 - `root_view` name must exactly match `brique.ui_config.root_view` in that context's `context.json`.
 - Talks to the engine only via `@spark/pulse` (`PulseRuntime` + React hooks). Never hand-rolls transport messages, never reads matter substance outside `pulse.matter`, never implements business logic that belongs in a capacity.
 - Built by the Spark host (esbuild-wasm) into `<context_dir>/.spark/dist/ui/<root_view>.js` — that output dir is disposable, never hand-edit it, never commit it.
-- Component never reads `context.json` at runtime. Host injects `transportUrl` prop; a `resolveTransportUrl()` fallback (env var, else hardcoded default) exists only for standalone dev.
+- Component never reads `context.json` at runtime. Spark opens the engine WebSocket in its trusted Node host and injects `pulse`; renderer code must not open a direct WebSocket. `transportUrl` is metadata/standalone support only, and a direct browser fallback requires an explicitly allow-listed development origin.
 
 ## `context.json` wiring (read before writing a new block)
 
@@ -52,6 +52,7 @@ export type <Name>Props = { pulse?: PulseRuntime; transportUrl?: string; rootCon
 
 export function <Name>({ pulse: providedPulse, transportUrl, rootContextId }: <Name>Props) {
   const pulse = useMemo(() => providedPulse ?? new PulseRuntime({
+    // Standalone development only. Normal Spark execution always injects pulse.
     webSocketUrl: transportUrl ?? resolveTransportUrl(),
     maxMessagesPerFlow: 20,
     terminalFlowTtlMs: 30000,
@@ -105,6 +106,10 @@ useMatterEvent(address, (event, snapshot) => {...}, options?) → MatterSnapshot
 ```
 Never read/write matter substance any other way from a block.
 
+For bounded reads, pass `dataRange: {unit:"bytes"|"lines", offset, length}` or `{unit, tail}` in the Matter options. Byte coordinates are canonical; line coordinates require a line-framed Matter.
+
+Matter events include `matter_written`, `matter_appended`, `matter_truncated`, and `matter_deleted`. For a low-level durable subscription, pass `durable: true` to `pulse.matter.subscribe`, finish the application effect, then call `pulse.matter.acknowledgeEvent(event)` explicitly. Do not acknowledge before successful processing.
+
 ## Full hook list (import only what you use)
 
 | Hook | Returns |
@@ -124,7 +129,7 @@ Never read/write matter substance any other way from a block.
 ## `PulseRuntime` constructor options
 
 ```ts
-{ webSocketUrl?, transportManager?, transportName?="websocket",
+{ webSocketUrl? /* standalone */, transportManager? /* injected by Spark */, transportName?="websocket",
   maxMessagesPerFlow?=100, terminalFlowTtlMs?=60000,
   uiName?="main", uiAddressPrefix?, responseTimeoutMs?=30000,
   identity?={id:"pulse-ui",kind:"ui"} }

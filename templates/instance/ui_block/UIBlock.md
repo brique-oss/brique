@@ -52,7 +52,7 @@ A UI block belongs to one context. That context declares it in `context.json`:
 }
 ```
 
-`ui_config.root_view` names the component and the file: the source lives at `<context_dir>/ui/<root_view>.tsx`, and exports a component of that same name (default export too). `ws_path` must equal the `path` declared under `communication.interfaces` for the `type: "ui"` entry — this is the physical websocket path the host resolves against the instance's `communication.websocket_listener.addr` at runtime. The component itself never reads `context.json`; the Spark host resolves the full URL and passes it as the `transportUrl` prop when mounting the component. A `resolveTransportUrl()` fallback inside the component (reading `process.env.SPARK_UI_TRANSPORT_URL`, else a hardcoded default matching `ws_path`) exists only for standalone dev/testing, kept in sync with `ws_path` by convention, not read from it.
+`ui_config.root_view` names the component and the file: the source lives at `<context_dir>/ui/<root_view>.tsx`, and exports a component of that same name (default export too). `ws_path` must equal the `path` declared under `communication.interfaces` for the `type: "ui"` entry — this is the physical websocket path the host resolves against the instance's `communication.websocket_listener.addr` at runtime. The component itself never reads `context.json`. Spark resolves the URL, opens the WebSocket from its trusted Node host, and injects an already configured `PulseRuntime` into the component. The renderer does not connect directly to the engine: this preserves the engine's strict WebSocket origin boundary. `transportUrl` remains diagnostic/standalone metadata; a direct browser fallback is only suitable for explicit development configurations whose origin is allow-listed.
 
 Only one root view per context. A context that needs to show state from a child context does so by importing that child's own view component and mounting it inside the parent's tree (see `PhotographieVisionneuse` mounted inside `PhotographieImport` for a real example) — not by declaring a second `ui_config`.
 
@@ -80,13 +80,13 @@ export function MyBlock({ pulse: providedPulse, transportUrl, rootContextId }: M
 }
 ```
 
-The outer component owns the `PulseRuntime` instance (or accepts one already constructed, for embedding/testing) and provides it via context. All actual logic lives in an `Inner` component that consumes the runtime through hooks — never through the outer component's props directly, so any part of the tree can reach the runtime without prop drilling.
+The outer component accepts the host-provided `PulseRuntime` (or constructs one only for explicit standalone development/testing) and provides it via context. All actual logic lives in an `Inner` component that consumes the runtime through hooks — never through the outer component's props directly, so any part of the tree can reach the runtime without prop drilling. In normal Spark execution, `providedPulse` always exists and uses the trusted host bridge.
 
 ### 4.1 `PulseRuntime` constructor
 
 ```ts
 new PulseRuntime({
-  webSocketUrl?: string;              // required unless transportManager given
+  webSocketUrl?: string;              // standalone only; Spark injects transportManager
   transportManager?: TransportManager; // inject a custom/test transport instead
   transportName?: string;              // default "websocket"
   maxMessagesPerFlow?: number;         // ring buffer cap per flow, default 100
@@ -123,7 +123,7 @@ type UIIntentionInput = {
 
 ### 4.3 Reading and observing matters
 
-`useMatter(address, options?)` and `useMatterSubscription(address, options?)` both return a live `MatterSnapshot` via `useSyncExternalStore`. `useMatter` pulls once on mount (`autoRead`, default true) and optionally also subscribes (`subscribe: true`); `useMatterSubscription` always subscribes — use it when only live push updates matter, not an initial read. `refetchOnEvent: true` re-reads automatically when the snapshot goes stale after an event. `useMatterEvent(address, callback, options?)` layers a one-shot side-effect callback on top of `useMatterSubscription`, firing once per new event — useful for a toast or a log line reacting to `matter_written`/`matter_deleted` without coupling that reaction to render logic.
+`useMatter(address, options?)` and `useMatterSubscription(address, options?)` both return a live `MatterSnapshot` via `useSyncExternalStore`. `useMatter` pulls once on mount (`autoRead`, default true) and optionally also subscribes (`subscribe: true`); `useMatterSubscription` always subscribes — use it when only live push updates matter, not an initial read. Use `dataRange: {unit: "bytes"|"lines", offset, length}` or `{unit, tail}` to read a bounded slice; distinct ranges have distinct snapshots. `refetchOnEvent: true` re-reads automatically when the snapshot goes stale after `matter_written`, `matter_appended`, `matter_truncated` or `matter_deleted`. `useMatterEvent(address, callback, options?)` layers a one-shot side-effect callback on top of `useMatterSubscription`. Low-level durable subscriptions are available through `pulse.matter.subscribe({ ..., durable: true })`; after durable processing succeeds, explicitly call `pulse.matter.acknowledgeEvent(event)`. Never acknowledge before the application effect is committed.
 
 ### 4.4 The idiomatic action hook
 

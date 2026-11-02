@@ -22,6 +22,7 @@ import {
   ValueKindIntention,
   ValueKindResponse,
   type MessageKind,
+  CONTROL_MESSAGE_LIMIT_BYTES,
 } from "./constants.js";
 import type { Intention } from "./intention.js";
 import type { Response } from "./response.js";
@@ -69,11 +70,14 @@ export function serializeMessage(msg: CirculationMessage): string {
       break;
   }
 
-  return JSON.stringify(base);
+  const serialized = JSON.stringify(base);
+  assertControlMessageSize(serialized);
+  return serialized;
 }
 
 export function deserializeMessage(json: string): CirculationMessage {
-  const raw = JSON.parse(json);
+  assertControlMessageSize(json);
+  const raw = JSON.parse(preserveUnsafeIntegers(json));
 
   const kind: MessageKind = raw[KeyKind];
   const ts: string = raw[KeyTS];
@@ -94,6 +98,66 @@ export function deserializeMessage(json: string): CirculationMessage {
     };
   }
 
-  // fallback (unknown kind)
   return raw as CirculationMessage;
+}
+
+function assertControlMessageSize(value: string): void {
+  if (new TextEncoder().encode(value).byteLength > CONTROL_MESSAGE_LIMIT_BYTES) {
+    throw new Error("Circulation payload exceeds the 4 MiB control-plane limit; use Matter");
+  }
+}
+
+// JSON.parse rounds integers above Number.MAX_SAFE_INTEGER before a reviver can
+// see them. Revisions and byte coordinates are int64 in the engine, so quote
+// only unsafe integer tokens while scanning outside strings. They then remain
+// exact decimal strings and can be sent back as expected_* guards unchanged.
+function preserveUnsafeIntegers(json: string): string {
+  let output = "";
+  let index = 0;
+  let inString = false;
+  let escaped = false;
+
+  while (index < json.length) {
+    const char = json[index];
+    if (inString) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      output += char;
+      index += 1;
+      continue;
+    }
+    if (char === "-" || (char >= "0" && char <= "9")) {
+      const start = index;
+      if (char === "-") index += 1;
+      while (index < json.length && json[index] >= "0" && json[index] <= "9") index += 1;
+      const integerEnd = index;
+      if (json[index] === "." || json[index] === "e" || json[index] === "E") {
+        while (index < json.length && /[0-9eE+.-]/u.test(json[index])) index += 1;
+        output += json.slice(start, index);
+        continue;
+      }
+      const token = json.slice(start, integerEnd);
+      try {
+        const integer = BigInt(token);
+        if (integer > BigInt(Number.MAX_SAFE_INTEGER) || integer < BigInt(Number.MIN_SAFE_INTEGER)) {
+          output += JSON.stringify(token);
+        } else {
+          output += token;
+        }
+      } catch {
+        output += token;
+      }
+      continue;
+    }
+    output += char;
+    index += 1;
+  }
+  return output;
 }

@@ -50,6 +50,7 @@ export {
 export { MatterRuntime } from "./matter/MatterRuntime.js";
 export type {
   MatterAddress,
+  MatterDataRange,
   MatterEventSnapshot,
   MatterKey,
   MatterSnapshot,

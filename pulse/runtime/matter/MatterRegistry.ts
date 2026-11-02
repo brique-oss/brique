@@ -21,8 +21,13 @@ export type MatterAddress = {
   matterId: string;
 };
 
+export type MatterDataRange =
+  | { unit?: "bytes" | "lines"; offset: number | string; length: number | string }
+  | { unit?: "bytes" | "lines"; tail: number | string };
+
 export type MatterKey = MatterAddress & {
   readMode: string | null;
+  dataRange?: MatterDataRange | null;
 };
 
 export type MatterStatus =
@@ -35,21 +40,33 @@ export type MatterStatus =
   | "deleted";
 
 export type MatterEventSnapshot = {
-  event: "matter_written" | "matter_deleted";
+  event: "matter_written" | "matter_deleted" | "matter_appended" | "matter_truncated";
   matterId: string;
-  revision: number | null;
+  revision: number | string | null;
   substanceMode: string | null;
   sourceIntentionId: string | null;
+  op: string | null;
+  subId: string | null;
+  eventId: string | null;
+  byteOffset: number | string | null;
+  byteLength: number | string | null;
+  totalBytes: number | string | null;
+  previousTotalBytes: number | string | null;
+  lineOffset: number | string | null;
+  lineLength: number | string | null;
+  totalLines: number | string | null;
+  previousTotalLines: number | string | null;
 };
 
 export type MatterSnapshot = {
   address: MatterAddress;
   readMode: string | null;
+  dataRange: MatterDataRange | null;
   status: MatterStatus;
   data: unknown;
   payload: unknown;
   error: unknown;
-  revision: number | null;
+  revision: number | string | null;
   subId: string | null;
   subscribed: boolean;
   lastEvent: MatterEventSnapshot | null;
@@ -70,6 +87,7 @@ const EMPTY_MATTER_SNAPSHOT = Object.freeze({
     matterId: "",
   }),
   readMode: null,
+  dataRange: null,
   status: "idle",
   data: null,
   payload: null,
@@ -322,7 +340,7 @@ export class MatterRegistry {
 
   private updateEntry(
     entry: MatterEntry,
-    patch: Partial<Omit<MatterSnapshot, "address" | "readMode">>
+    patch: Partial<Omit<MatterSnapshot, "address" | "readMode" | "dataRange">>
   ): void {
     const next = Object.freeze({
       ...entry.snapshot,
@@ -359,12 +377,13 @@ export function normalizeMatterKey(input: MatterKey): MatterKey {
     context: normalizeContext(input.context),
     matterId: normalizeMatterId(input.matterId),
     readMode: normalizeReadMode(input.readMode),
+    dataRange: normalizeDataRange(input.dataRange),
   });
 }
 
 export function matterKeyToString(input: MatterKey): string {
   const key = normalizeMatterKey(input);
-  return `${key.context}::${key.matterId}::${key.readMode ?? ""}`;
+  return `${key.context}::${key.matterId}::${key.readMode ?? ""}::${JSON.stringify(key.dataRange)}`;
 }
 
 function createMatterSnapshot(key: MatterKey): MatterSnapshot {
@@ -374,6 +393,7 @@ function createMatterSnapshot(key: MatterKey): MatterSnapshot {
       matterId: key.matterId,
     }),
     readMode: key.readMode,
+    dataRange: key.dataRange ?? null,
     status: "idle",
     data: null,
     payload: null,
@@ -406,6 +426,14 @@ function normalizeMatterId(matterId: string): string {
 function normalizeReadMode(readMode: string | null | undefined): string | null {
   const normalized = readMode?.trim();
   return normalized || null;
+}
+
+function normalizeDataRange(dataRange: MatterDataRange | null | undefined): MatterDataRange | null {
+  if (!dataRange) return null;
+  const unit = dataRange.unit ?? "bytes";
+  return "tail" in dataRange
+    ? Object.freeze({ unit, tail: dataRange.tail })
+    : Object.freeze({ unit, offset: dataRange.offset, length: dataRange.length });
 }
 
 function extractMatterData(payload: unknown): unknown {
@@ -441,14 +469,14 @@ function toUint8Array(value: unknown): Uint8Array | null {
   return null;
 }
 
-function extractRevision(payload: unknown): number | null {
+function extractRevision(payload: unknown): number | string | null {
   if (
     typeof payload === "object" &&
     payload !== null &&
     "revision" in payload
   ) {
     const revision = (payload as { revision?: unknown }).revision;
-    return typeof revision === "number" ? revision : null;
+    return typeof revision === "number" || typeof revision === "string" ? revision : null;
   }
 
   return null;

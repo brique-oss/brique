@@ -20,6 +20,7 @@ import type {
   Correlation,
   Intention,
   MatterRef,
+  ElementRef,
 } from "../circulation/intention.js";
 import type { UIPath } from "../core/types.js";
 
@@ -30,6 +31,7 @@ export type UIIntentionInput = {
   identity?: Identity;
   params?: Record<string, unknown>;
   matters?: MatterRef[];
+  elementRefs?: ElementRef[];
   correlation?: Correlation;
   awaitResponse?: boolean;
 };
@@ -73,6 +75,7 @@ export class UIActionBuilder {
       identity: input.identity ?? this.identity,
       params: input.params,
       matters: input.matters,
+      element_refs: input.elementRefs,
       correlation: input.correlation,
     };
   }

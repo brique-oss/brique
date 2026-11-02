@@ -17,6 +17,7 @@
 import {
   deserializeMessage,
   serializeMessage,
+  CONTROL_MESSAGE_LIMIT_BYTES,
   type CirculationMessage,
 } from "../circulation/index.js";
 import type { Transport, TransportConnectionState, Unsubscribe } from "./Transport.js";
@@ -103,6 +104,10 @@ export class WebSocketTransport implements Transport {
       try {
         if (typeof event.data !== "string") {
           throw new Error("WebSocketTransport expects text messages");
+        }
+        if (new TextEncoder().encode(event.data).byteLength > CONTROL_MESSAGE_LIMIT_BYTES) {
+          socket.close(1009, "control message too large");
+          throw new Error("WebSocketTransport received a message above the 4 MiB limit");
         }
 
         const msg = deserializeMessage(event.data);

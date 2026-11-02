@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useSyncExternalStore } from "react";
-import type { MatterSnapshot } from "../../runtime/index.js";
+import type { MatterDataRange, MatterSnapshot } from "../../runtime/index.js";
 import { usePulse } from "./usePulse.js";
 
 export type MatterHookAddress = {
@@ -25,6 +25,7 @@ export type MatterHookAddress = {
 
 export type MatterOptions = {
   readMode?: string | null;
+  dataRange?: MatterDataRange | null;
   autoRead?: boolean;
   subscribe?: boolean;
   refetchOnEvent?: boolean;
@@ -39,7 +40,9 @@ export function useMatter(
     context: address.context,
     matterId: address.matterId,
     readMode: options.readMode ?? null,
+    dataRange: options.dataRange ?? null,
   });
+  const dataRangeKey = JSON.stringify(key.dataRange);
 
   const snapshot = useSyncExternalStore(
     (onStoreChange) =>
@@ -56,7 +59,7 @@ export function useMatter(
     return () => {
       pulse.matter.releaseReader(key);
     };
-  }, [pulse, key.context, key.matterId, key.readMode, options.autoRead]);
+  }, [pulse, key.context, key.matterId, key.readMode, dataRangeKey, options.autoRead]);
 
   useEffect(() => {
     if (!options.subscribe) return;
@@ -66,7 +69,7 @@ export function useMatter(
     return () => {
       pulse.matter.releaseSubscription(key);
     };
-  }, [pulse, key.context, key.matterId, key.readMode, options.subscribe]);
+  }, [pulse, key.context, key.matterId, key.readMode, dataRangeKey, options.subscribe]);
 
   useEffect(() => {
     if (!options.refetchOnEvent || snapshot.status !== "stale") return;
@@ -77,6 +80,7 @@ export function useMatter(
     key.context,
     key.matterId,
     key.readMode,
+    dataRangeKey,
     options.refetchOnEvent,
     snapshot.status,
     snapshot.lastEvent,

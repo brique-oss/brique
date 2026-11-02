@@ -46,7 +46,12 @@ export function extractMatterEvent(
   const matterId = params.matter_id;
 
   if (
-    (event !== "matter_written" && event !== "matter_deleted") ||
+    (
+      event !== "matter_written" &&
+      event !== "matter_deleted" &&
+      event !== "matter_appended" &&
+      event !== "matter_truncated"
+    ) ||
     typeof matterId !== "string" ||
     !matterId.trim()
   ) {
@@ -56,10 +61,20 @@ export function extractMatterEvent(
   return {
     event,
     matterId: matterId.trim(),
-    revision: numberOrNull(params.revision),
+    revision: exactIntegerOrNull(params.revision),
     substanceMode: stringOrNull(params.substance_mode),
     sourceIntentionId: stringOrNull(params.source_intention_id),
+    op: stringOrNull(params.op),
     subId: stringOrNull(params.sub_id),
+    eventId: stringOrNull(params.event_id),
+    byteOffset: exactIntegerOrNull(params.byte_offset),
+    byteLength: exactIntegerOrNull(params.byte_length),
+    totalBytes: exactIntegerOrNull(params.total_bytes),
+    previousTotalBytes: exactIntegerOrNull(params.previous_total_bytes),
+    lineOffset: exactIntegerOrNull(params.line_offset),
+    lineLength: exactIntegerOrNull(params.line_length),
+    totalLines: exactIntegerOrNull(params.total_lines),
+    previousTotalLines: exactIntegerOrNull(params.previous_total_lines),
   };
 }
 
@@ -67,6 +82,6 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
+function exactIntegerOrNull(value: unknown): number | string | null {
+  return typeof value === "number" || typeof value === "string" ? value : null;
 }

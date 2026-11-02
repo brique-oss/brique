@@ -23,6 +23,7 @@ import type { UIPath } from "../core/types.js";
 import {
   MatterRegistry,
   normalizeMatterKey,
+  type MatterDataRange,
   type MatterKey,
   type MatterSnapshot,
 } from "./MatterRegistry.js";
@@ -44,25 +45,31 @@ export type MatterReadInput = {
   context: string;
   matterId: string;
   readMode?: string | null;
+  dataRange?: MatterDataRange | null;
 };
 
 export type MatterReadBatchInput = {
   context: string;
   matterIds: string[];
   readMode?: string | null;
+  dataRange?: MatterDataRange | null;
 };
 
 export type MatterSubscribeInput = {
   context: string;
   matterId: string;
   readMode?: string | null;
+  dataRange?: MatterDataRange | null;
   subId?: string;
+  durable?: boolean;
+  target?: Intention["to"];
 };
 
 export type MatterUnsubscribeInput = {
   context: string;
   matterId: string;
   readMode?: string | null;
+  dataRange?: MatterDataRange | null;
   subId: string;
 };
 
@@ -154,6 +161,7 @@ export class MatterRuntime extends MatterRegistry {
         params: {
           matter_id: key.matterId,
           ...(key.readMode ? { read_mode: key.readMode } : {}),
+          ...(key.dataRange ? { data_range: key.dataRange } : {}),
         },
       }));
 
@@ -191,6 +199,7 @@ export class MatterRuntime extends MatterRegistry {
       params: {
         matter_ids: input.matterIds,
         ...(input.readMode ? { read_mode: input.readMode } : {}),
+        ...(input.dataRange ? { data_range: input.dataRange } : {}),
       },
     }));
 
@@ -254,9 +263,11 @@ export class MatterRuntime extends MatterRegistry {
           params: {
             matter_id: key.matterId,
             ...(input.subId ? { sub_id: input.subId } : {}),
+            ...(input.durable === true ? { durable: true } : {}),
+            ...(input.target ? { target: input.target } : {}),
           },
         }));
-  
+
         this.assertOK(response);
         const subId = extractSubId(response);
         if (this.has(key) && this.getKeyVersion(keyString) === version) {
@@ -319,7 +330,7 @@ export class MatterRuntime extends MatterRegistry {
     const key = this.resolveEventKey(event);
     if (!key) return false;
 
-    if (event.event === "matter_written") {
+    if (event.event !== "matter_deleted") {
       this.markStale(key, event);
       return true;
     }
@@ -328,16 +339,34 @@ export class MatterRuntime extends MatterRegistry {
     return true;
   }
 
+  async acknowledgeEvent(event: MatterEventDispatch): Promise<Response> {
+    if (!event.subId || !event.eventId) {
+      throw new Error("Durable Matter acknowledgement requires sub_id and event_id");
+    }
+    const key = this.getKeyForSubId(event.subId);
+    if (!key) {
+      throw new Error("Durable Matter subscription is not active");
+    }
+    const response = await this.emitAndWait(this.buildMatterIntention({
+      context: key.context,
+      cap: "matter.subscription.ack",
+      params: { sub_id: event.subId, event_id: event.eventId },
+    }));
+    this.assertOK(response);
+    return response;
+  }
+
   private toKey(input: MatterReadInput): MatterKey {
     return normalizeMatterKey({
       context: input.context,
       matterId: input.matterId,
       readMode: input.readMode ?? null,
+      dataRange: input.dataRange ?? null,
     });
   }
 
   private keyToString(input: MatterKey): string {
-    return `${input.context}::${input.matterId}::${input.readMode ?? ""}`;
+    return `${input.context}::${input.matterId}::${input.readMode ?? ""}::${JSON.stringify(input.dataRange ?? null)}`;
   }
 
   getReadRequestCount(input: MatterReadInput): number {

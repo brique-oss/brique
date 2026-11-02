@@ -22,4 +22,8 @@ export const KeyResponse = "response";
 export const ValueKindIntention = "intention";
 export const ValueKindResponse = "response";
 
+// Must stay aligned with engine/shared.DefaultControlMessageBytes. Larger
+// business payloads travel through Matter, never through an intention.
+export const CONTROL_MESSAGE_LIMIT_BYTES = 4 * 1024 * 1024;
+
 export type MessageKind = typeof ValueKindIntention | typeof ValueKindResponse;

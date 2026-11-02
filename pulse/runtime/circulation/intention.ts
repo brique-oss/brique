@@ -24,6 +24,13 @@ export type MatterRef = {
   mode?: string; // "read" | "write"
 };
 
+export type ElementRef = {
+  context: ContextID;
+  id: string;
+  repr?: string;
+  kind: "schema" | "structure" | "document" | "capacity";
+};
+
 export type Correlation = {
   root_intention_id?: string;
   parent_intention_id?: string | null;
@@ -40,6 +47,7 @@ export type Intention = {
   identity: Identity;
 
   matters?: MatterRef[];
+  element_refs?: ElementRef[];
   params?: Record<string, unknown>;
 
   correlation?: Correlation;

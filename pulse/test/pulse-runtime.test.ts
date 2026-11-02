@@ -51,6 +51,22 @@ test("wire protocol serializes and deserializes response messages", () => {
   assert.deepEqual(deserializeMessage(serialized), message);
 });
 
+test("wire protocol preserves unsafe int64 values as exact decimal strings", () => {
+  const message = deserializeMessage(
+    '{"kind":"response","ts":"2026-04-25T00:00:00.000Z","response":{"intention_id":"i-64","to":{"context":"@ui_main","cap":"ui","type":"user"},"from":{"context":"/root","cap":"matter.stat","type":"matter"},"identity":{"id":"brique"},"status":"ok","payload":{"revision":1798765432109876543,"total_bytes":42}}}'
+  );
+  assert.equal(message.kind, "response");
+  if (message.kind !== "response") return;
+  assert.equal(message.response.payload?.revision, "1798765432109876543");
+  assert.equal(message.response.payload?.total_bytes, 42);
+});
+
+test("wire protocol rejects control-plane messages above 4 MiB", () => {
+  const message = sampleResponse("i-large");
+  message.response.payload = { data: "x".repeat(4 * 1024 * 1024) };
+  assert.throws(() => serializeMessage(message), /4 MiB control-plane limit/i);
+});
+
 test("wire protocol tolerates unknown fields", () => {
   const message = deserializeMessage(
     JSON.stringify({
@@ -749,6 +765,38 @@ test("PulseRuntime matter.read emits canonical matter intention and updates snap
   pulse.teardown();
 });
 
+test("PulseRuntime matter.read forwards and isolates byte or line ranges", async () => {
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const key = {
+    context: "/root/log_context",
+    matterId: "conversation",
+    readMode: "data",
+    dataRange: { unit: "lines" as const, tail: 20 },
+  };
+
+  pulse.matter.registerReader(key);
+  const read = pulse.matter.read(key);
+  assert.deepEqual(transport.sent[0].intention.params, {
+    matter_id: "conversation",
+    read_mode: "data",
+    data_range: { unit: "lines", tail: 20 },
+  });
+  assert.notEqual(
+    pulse.matter.getSnapshot(key),
+    pulse.matter.getSnapshot({ ...key, dataRange: { unit: "lines", tail: 10 } })
+  );
+
+  transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+    matter_id: "conversation",
+    data: { kind: "inline", bytes: "last lines" },
+  }));
+  await read;
+  pulse.teardown();
+});
+
 test("PulseRuntime matter.read streams Brique HTTP lease handles", async () => {
   const originalFetch = globalThis.fetch;
   const transport = new ManualTransport();
@@ -1333,6 +1381,62 @@ test("PulseRuntime dispatches matter_deleted event to matching subscription", as
   pulse.teardown();
 });
 
+test("PulseRuntime handles append metadata and explicitly acknowledges durable events", async () => {
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const key = { context: "/root/text_context", matterId: "text_buffer", readMode: null };
+
+  const subscribing = pulse.matter.subscribe({ ...key, durable: true });
+  assert.deepEqual(transport.sent[0].intention.params, {
+    matter_id: "text_buffer",
+    durable: true,
+  });
+  transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+    ok: true,
+    matter_id: "text_buffer",
+    sub_id: "sub-durable",
+    durable: true,
+  }));
+  await subscribing;
+
+  transport.receive(matterEvent("matter_appended", "text_buffer", {
+    sub_id: "sub-durable",
+    event_id: "event-1",
+    revision: "1798765432109876543",
+    byte_offset: 10,
+    byte_length: 4,
+    total_bytes: 14,
+    op: "append",
+    line_offset: 2,
+    line_length: 1,
+    total_lines: 3,
+  }));
+  const event = pulse.matter.getSnapshot(key).lastEvent;
+  assert.equal(event?.event, "matter_appended");
+  assert.equal(event?.revision, "1798765432109876543");
+  assert.equal(event?.byteOffset, 10);
+  assert.equal(event?.totalBytes, 14);
+  assert.equal(event?.op, "append");
+  assert.equal(event?.totalLines, 3);
+
+  const acknowledging = pulse.matter.acknowledgeEvent(event!);
+  assert.equal(transport.sent[1].intention.to.cap, "matter.subscription.ack");
+  assert.deepEqual(transport.sent[1].intention.params, {
+    sub_id: "sub-durable",
+    event_id: "event-1",
+  });
+  transport.receive(matterResponse(transport.sent[1].intention.intention_id, {
+    ok: true,
+    sub_id: "sub-durable",
+    event_id: "event-1",
+    removed: true,
+  }));
+  await acknowledging;
+  pulse.teardown();
+});
+
 test("PulseRuntime ignores matter events for inactive matters", () => {
   const transport = new ManualTransport();
   const manager = new TransportManager();
@@ -1450,7 +1554,7 @@ function matterResponse(
 }
 
 function matterEvent(
-  event: "matter_written" | "matter_deleted",
+  event: "matter_written" | "matter_deleted" | "matter_appended" | "matter_truncated",
   matterId: string,
   params: Record<string, unknown> = {}
 ) {

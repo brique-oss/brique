@@ -28,7 +28,9 @@ export function useMatterSubscription(
     context: address.context,
     matterId: address.matterId,
     readMode: options.readMode ?? null,
+    dataRange: options.dataRange ?? null,
   });
+  const dataRangeKey = JSON.stringify(key.dataRange);
 
   const snapshot = useSyncExternalStore(
     (onStoreChange) =>
@@ -43,7 +45,7 @@ export function useMatterSubscription(
     return () => {
       pulse.matter.releaseSubscription(key);
     };
-  }, [pulse, key.context, key.matterId, key.readMode]);
+  }, [pulse, key.context, key.matterId, key.readMode, dataRangeKey]);
 
   return snapshot;
 }
