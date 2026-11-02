@@ -17,6 +17,7 @@
 package junction
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -142,6 +143,11 @@ func (d Delivery) RestrictedLocal() (*admission.Context, bool) {
 	return d.security.external, true
 }
 
+// ErrDerivedCapabilityDenied is returned when the admission a derived intention would run
+// under does not hold the destination capability. Callers that have a waiting party answer
+// it with the canonical capability refusal instead of leaving it to time out.
+var ErrDerivedCapabilityDenied = errors.New("derived capability is not authorized")
+
 // DeriveExternal creates a child intention under the exact admission carried
 // by its parent. It cannot widen authority: correlation must bind the child to
 // the parent/root chain and the destination capability must be allowed by both
@@ -178,7 +184,7 @@ func DeriveExternalAudited(parent Delivery, child circulation.Message, runtime *
 	to := child.Intention.To
 	if !context.AuthorizeCapability(runtime, string(to.Context), to.Type, to.Cap) {
 		context.RecordCapabilityDenial(recorder, runtime, "derived", child.Intention)
-		return Delivery{}, fmt.Errorf("derived capability is not authorized")
+		return Delivery{}, ErrDerivedCapabilityDenied
 	}
 	// Derived work keeps the admission and root response state, but never
 	// inherits transport-only response or wrapper-dispatch metadata.

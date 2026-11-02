@@ -40,6 +40,7 @@ package comm
 // so CommLoop must not unmarshal/marshal JSON except at interface boundaries.
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -959,6 +960,9 @@ func (l *CommLoop) handleInterfaceIngress(it IngressItem) {
 			}
 			l.sendToTrace(it.Msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
 				detail)
+			if errors.Is(err, junction.ErrDerivedCapabilityDenied) {
+				l.refuseDelegatedWrapperCall(it)
+			}
 		}
 		return
 	}
