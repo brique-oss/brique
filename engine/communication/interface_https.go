@@ -60,6 +60,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,8 +97,13 @@ type HttpsInterface struct {
 	serverName         string
 
 	// Client side
-	client  *http.Client
-	targets map[string]string // key: "ext_<pubkey>" -> baseURL (e.g. "https://host:8443/brique")
+	client *http.Client
+	// trustedFile is the machine's trusted.pem when the configuration names no tls_ca_file.
+	trustedFile   string
+	clientMu      sync.Mutex
+	clientStamp   time.Time
+	clientChecked time.Time
+	targets       map[string]string // key: "ext_<pubkey>" -> baseURL (e.g. "https://host:8443/brique")
 
 	// Server side
 	server   *http.Server
@@ -149,12 +155,20 @@ type HttpsInterface struct {
 // - Allocates runtime and implementation state only; socket bind and loop startup happen later.
 
 func NewHTTPSInterfaceRuntime(ic InterfaceCfg) (*InterfaceRuntime, error) {
+	return newHTTPSInterfaceRuntimeIn(ic, "")
+}
+
+// newHTTPSInterfaceRuntimeIn is NewHTTPSInterfaceRuntime for an engine that has a machine
+// security directory: a certificate, a key or trusted certificates the configuration does not
+// name are looked for in <machine>/tls.
+func newHTTPSInterfaceRuntimeIn(ic InterfaceCfg, machineDirectory string) (*InterfaceRuntime, error) {
 	rt := &InterfaceRuntime{
 		Name:   ic.Name,
 		Type:   ic.Type,
 		Driver: ic.Driver,
 		Cfg:    ic,
 	}
+	rt.machineDirectory = machineDirectory
 
 	impl, err := newHTTPSInterfaceImpl(rt, ic)
 	if err != nil {
@@ -307,6 +321,19 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 	certFile, _ := cfg[configuration.KeyTLSCertFile].(string)
 	keyFile, _ := cfg[configuration.KeyTLSKeyFile].(string)
 	caFile, _ := cfg[configuration.KeyTLSCAFile].(string)
+	if rt.machineDirectory != "" {
+		// The machine's own files are the default, so that nothing machine-specific has to be
+		// written in the (versioned) configuration of the instance.
+		tlsDirectory := filepath.Join(rt.machineDirectory, "tls")
+		if certFile == "" && keyFile == "" {
+			certFile, keyFile = filepath.Join(tlsDirectory, "cert.pem"), filepath.Join(tlsDirectory, "key.pem")
+		}
+		if caFile == "" {
+			if trusted := filepath.Join(tlsDirectory, "trusted.pem"); fileExists(trusted) {
+				caFile = trusted
+			}
+		}
+	}
 
 	insecure := false
 	if v, ok := cfg[configuration.KeyTLSInsecureSkipVerify].(bool); ok {
@@ -340,35 +367,71 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 		cancel: cancel,
 	}
 
+	// The certificates a peer may present, beyond the system's: the file named by tls_ca_file, or
+	// the machine's trusted.pem. The latter is looked at again while the engine runs.
+	if caFile == "" && rt.machineDirectory != "" {
+		h.trustedFile = filepath.Join(rt.machineDirectory, "tls", "trusted.pem")
+	}
+	h.reqTimeout = reqTimeout
+	client, err := h.newClient(caFile)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("https iface %q: %w", rt.Name, err)
+	}
+	h.client = client
+	h.clientStamp = modTime(h.trustedFile)
+
+	return h, nil
+}
+
+// newClient builds the HTTPS client: the system's roots plus the certificates of caFile.
+func (h *HttpsInterface) newClient(caFile string) (*http.Client, error) {
 	var rootCAs *x509.CertPool
 	if caFile != "" {
 		pemBytes, err := os.ReadFile(caFile)
 		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("https iface %q: read tls_ca_file: %w", rt.Name, err)
+			return nil, fmt.Errorf("read tls_ca_file: %w", err)
 		}
-		rootCAs = x509.NewCertPool()
+		// The certificates named here are added to the system's, never substituted for them: a
+		// peer with a public certificate keeps working next to one with a private one.
+		if rootCAs, _ = x509.SystemCertPool(); rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
 		if !rootCAs.AppendCertsFromPEM(pemBytes) {
-			cancel()
-			return nil, fmt.Errorf("https iface %q: tls_ca_file contains no certificate", rt.Name)
+			return nil, fmt.Errorf("tls_ca_file contains no certificate")
 		}
 	}
-
-	// HTTPS client (TLS)
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
+	return &http.Client{
+		Timeout: h.reqTimeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: h.insecureSkipVerify,
 			ServerName:         h.serverName,
 			RootCAs:            rootCAs,
 			MinVersion:         tls.VersionTLS12,
-		},
-	}
-	h.client = &http.Client{
-		Timeout:   reqTimeout,
-		Transport: tr,
-	}
+		}},
+	}, nil
+}
 
-	return h, nil
+// httpClient is the client to send with. When the machine's trusted certificates have changed
+// since it was built — a peer renewed or regenerated its certificate and its new one was
+// trusted with brique-sec — a new client is built from them; a file that cannot be read keeps
+// the previous client.
+func (h *HttpsInterface) httpClient() *http.Client {
+	if h.trustedFile == "" {
+		return h.client
+	}
+	h.clientMu.Lock()
+	defer h.clientMu.Unlock()
+	if now := time.Now(); now.Sub(h.clientChecked) >= certificateRecheckInterval {
+		h.clientChecked = now
+		if stamp := modTime(h.trustedFile); stamp != h.clientStamp {
+			h.clientStamp = stamp
+			if client, err := h.newClient(h.trustedFile); err == nil {
+				h.client = client
+			}
+		}
+	}
+	return h.client
 }
 
 func (h *HttpsInterface) Directions() InterfaceDirections {
@@ -441,7 +504,9 @@ func (h *HttpsInterface) Start() error {
 		return fmt.Errorf("https iface %q: missing tls cert/key (cfg %q and %q)", h.rtName(), configuration.KeyTLSCertFile, configuration.KeyTLSKeyFile)
 	}
 
-	certificate, err := tls.LoadX509KeyPair(h.certFile, h.keyFile)
+	// The pair is loaded now, so that a missing or mismatched one stops the start, and again
+	// whenever the files change, so that renewing the certificate needs no restart.
+	certificates, err := newReloadingCertificate(h.certFile, h.keyFile)
 	if err != nil {
 		return fmt.Errorf("https iface %q: load tls cert/key: %w", h.rtName(), err)
 	}
@@ -464,8 +529,8 @@ func (h *HttpsInterface) Start() error {
 
 		// Server-side TLS config (minimal)
 		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{certificate},
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: certificates.get,
 		},
 	}
 	listener, err := net.Listen("tcp", h.addr)
@@ -635,7 +700,7 @@ func (h *HttpsInterface) WriteLoop() error {
 				reportInterfaceEgressOutcome(h.rt, msg, InterfaceEgressOutcome{Definitive: true, Err: err})
 				continue
 			}
-			outcome := sendHTTPControl(h.ctx, h.client, url, b)
+			outcome := sendHTTPControl(h.ctx, h.httpClient(), url, b)
 			if outcome.Err != nil {
 				select {
 				case <-h.done:
@@ -662,7 +727,7 @@ func (h *HttpsInterface) sendSignedExternal(item signedExternalEgressItem) Inter
 	if err := shared.ValidateControlMessageBytes(int64(len(item.Envelope)), h.readLimit); err != nil {
 		return InterfaceEgressOutcome{Definitive: true, Err: err}
 	}
-	return sendHTTPControl(h.ctx, h.client, strings.TrimRight(item.Endpoint, "/")+"/msg", item.Envelope)
+	return sendHTTPControl(h.ctx, h.httpClient(), strings.TrimRight(item.Endpoint, "/")+"/msg", item.Envelope)
 }
 
 // Close

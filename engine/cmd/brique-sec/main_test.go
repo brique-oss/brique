@@ -258,3 +258,163 @@ func TestPeersAndFacadesThroughTheCommandLine(t *testing.T) {
 		t.Fatalf("doctor:\n%s", out)
 	}
 }
+
+// Two instances recognize each other with nothing but the commands: one prints its public
+// key, the other registers it, and the private key never appears in the output.
+func TestKeyShowGivesTheOtherInstanceWhatItNeeds(t *testing.T) {
+	a := filepath.Join(t.TempDir(), "security")
+	b := filepath.Join(t.TempDir(), "security")
+	mustOK(t, a, "init", "--instance", "prod-a")
+	mustOK(t, b, "init", "--instance", "prod-b")
+
+	out := mustOK(t, a, "key", "show")
+	var public string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "brique-sec principal add prod-a --kind instance --key ") {
+			public = strings.Fields(line)[len(strings.Fields(line))-1]
+		}
+	}
+	if public == "" {
+		t.Fatalf("key show does not print the command for the peer:\n%s", out)
+	}
+	mustOK(t, b, "principal", "add", "prod-a", "--kind", "instance", "--key", public)
+	if list := mustOK(t, b, "principal", "list"); !strings.Contains(list, "prod-a") {
+		t.Fatalf("the peer did not register the advertised key:\n%s", list)
+	}
+	privateKey, err := os.ReadFile(filepath.Join(a, secadmin.MessageKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, string(privateKey)) || strings.Contains(out, "PRIVATE KEY") {
+		t.Fatalf("key show printed private material:\n%s", out)
+	}
+	if _, _, code := sec(t, a, "key"); code == 0 {
+		t.Fatal("key without a subcommand succeeded")
+	}
+}
+
+// The instance carries who may do what and the machine keeps the keys and the signed policy:
+// with --root the commands find both.
+func TestInstanceAndMachineThroughTheCommandLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", home)
+	t.Setenv("BRIQUE_SECURITY_DIR", "")
+	// The instance directory holds root/ and, next to it, security/.
+	instanceDir := filepath.Join(t.TempDir(), "my-instance")
+	instance := filepath.Join(instanceDir, "root")
+	if err := os.MkdirAll(instance, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	admin := func(args ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := run(append([]string{"--root", instance}, args...), &out, &errOut); code != 0 {
+			t.Fatalf("brique-sec %v failed (%d): %s%s", args, code, out.String(), errOut.String())
+		}
+		return out.String()
+	}
+
+	if out := admin("init", "--instance", "monsite"); !strings.Contains(out, "-root_path "+instance) {
+		t.Fatalf("init does not tell how to start the engine:\n%s", out)
+	}
+	public, _, _ := ed25519.GenerateKey(nil)
+	admin("principal", "add", "partner-a", "--kind", "instance", "--key", base64.RawURLEncoding.EncodeToString(public))
+	admin("grant", "add", "partner-a", "read", "/root/catalog/**")
+	admin("peer", "add", "partner-a", "--audience", "prod-b", "--interface", "secure-a", "--target", "https://partner.example/brique")
+	if out := admin("apply"); !strings.Contains(out, "g000002") {
+		t.Fatalf("apply:\n%s", out)
+	}
+	if out := admin("doctor"); strings.Contains(out, "erreur") {
+		t.Fatalf("doctor on the split layout:\n%s", out)
+	}
+	if out := admin("key", "show"); !strings.Contains(out, "principal add monsite") {
+		t.Fatalf("key show:\n%s", out)
+	}
+
+	if _, err := os.Stat(filepath.Join(instanceDir, "security", "access.json")); err != nil {
+		t.Errorf("the instance lacks its access source")
+	}
+	if _, err := os.Stat(filepath.Join(instanceDir, "security", "generations")); err == nil {
+		t.Error("the instance carries signed generations by default")
+	}
+	machine := filepath.Join(home, ".brique", "monsite")
+	for _, rel := range []string{"keys/message-signer.pem", "generations/g000002/trust-policy.json"} {
+		if _, err := os.Stat(filepath.Join(machine, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("the machine lacks %s", rel)
+		}
+	}
+	// Without --root and --dir there is nothing to administer.
+	var out, errOut bytes.Buffer
+	if code := run([]string{"principal", "list"}, &out, &errOut); code == 0 {
+		t.Fatal("a command ran with no instance and no directory")
+	}
+}
+
+// The HTTPS side in a few commands: a certificate made on the machine, the interface written in
+// the context.json without any path of the machine, the certificate of a peer trusted, and a
+// certificate regenerated on demand.
+func TestTLSCommandsMakeTheHTTPSInterfaceWork(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", home)
+	t.Setenv("BRIQUE_SECURITY_DIR", "")
+	template, err := os.ReadFile("../../../templates/instance/root/context.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := filepath.Join(t.TempDir(), "my-instance", "root")
+	if err := os.MkdirAll(instance, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instance, "context.json"), template, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	admin := func(args ...string) (string, int) {
+		var out, errOut bytes.Buffer
+		code := run(append([]string{"--root", instance}, args...), &out, &errOut)
+		return out.String() + errOut.String(), code
+	}
+	if out, code := admin("tls", "init", "--host", "mon-hote.exemple"); code == 0 {
+		t.Fatalf("a certificate was made before init:\n%s", out)
+	}
+	if out, code := admin("init", "--instance", "monsite"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := admin("tls", "init"); code == 0 || !strings.Contains(out, "--host") {
+		t.Fatalf("tls init without a host:\n%s", out)
+	}
+	out, code := admin("tls", "init", "--host", "mon-hote.exemple", "--host", "127.0.0.1", "--addr", "127.0.0.1:9443")
+	if code != 0 || !strings.Contains(out, "Interface HTTPS   : ajoutée") || !strings.Contains(out, "mon-hote.exemple, 127.0.0.1") {
+		t.Fatalf("tls init:\n%s", out)
+	}
+	context, _ := os.ReadFile(filepath.Join(instance, "context.json"))
+	if !strings.Contains(string(context), `"addr": "127.0.0.1:9443"`) || strings.Contains(string(context), home) || strings.Contains(string(context), "tls_cert_file") {
+		t.Fatalf("the context.json names a file of the machine or lacks the interface:\n%s", context)
+	}
+	machine := filepath.Join(home, ".brique", "monsite", "tls")
+	for _, name := range []string{"cert.pem", "key.pem"} {
+		if _, err := os.Stat(filepath.Join(machine, name)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if out, code := admin("tls", "init", "--host", "mon-hote.exemple"); code == 0 || !strings.Contains(out, "--force") {
+		t.Fatalf("a second tls init replaced the certificate:\n%s", out)
+	}
+	if out, code := admin("tls", "init", "--host", "mon-hote.exemple", "--force"); code != 0 || !strings.Contains(out, "déjà présente") {
+		t.Fatalf("regenerating:\n%s", out)
+	}
+	shown, code := admin("tls", "show")
+	if code != 0 || !strings.Contains(shown, "Empreinte SHA-256") || !strings.Contains(shown, "Certificats de pairs acceptés : 0") {
+		t.Fatalf("tls show:\n%s", shown)
+	}
+	if out, code := admin("tls", "trust", filepath.Join(machine, "cert.pem")); code != 0 || !strings.Contains(out, "1 certificat") {
+		t.Fatalf("tls trust:\n%s", out)
+	}
+	if shown, _ = admin("tls", "show"); !strings.Contains(shown, "Certificats de pairs acceptés : 1") {
+		t.Fatalf("tls show after trust:\n%s", shown)
+	}
+	if strings.Contains(out, "PRIVATE") {
+		t.Fatal("private material was printed")
+	}
+}

@@ -48,8 +48,14 @@ var ifaceFactories = map[string]InterfaceFactory{
 	configuration.KeyIntHTTP: func(_ *junction.ContextRegistry, cfg InterfaceCfg) (*InterfaceRuntime, error) {
 		return NewHTTPInterfaceRuntime(cfg)
 	},
-	configuration.KeyIntHTTPS: func(_ *junction.ContextRegistry, cfg InterfaceCfg) (*InterfaceRuntime, error) {
-		return NewHTTPSInterfaceRuntime(cfg)
+	configuration.KeyIntHTTPS: func(frame *junction.ContextRegistry, cfg InterfaceCfg) (*InterfaceRuntime, error) {
+		directory := ""
+		if frame != nil {
+			if provider, ok := frame.CtxCommReg.(junction.MachineDirectoryProvider); ok {
+				directory = provider.MachineDirectory()
+			}
+		}
+		return newHTTPSInterfaceRuntimeIn(cfg, directory)
 	},
 }
 

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"brique_engine/security/audit"
+	"brique_engine/security/hostdir"
 	securityruntime "brique_engine/security/runtime"
 	"brique_engine/security/secadmin"
 	"brique_engine/security/trust"
@@ -39,9 +40,13 @@ import (
 
 const usage = `brique-sec : administration de la sécurité d'une instance Brique
 
-Usage : brique-sec [--dir <répertoire de sécurité>] <commande> [arguments]
+Usage : brique-sec [--root <dossier root/ de l'instance>] [--dir <répertoire de la machine>] <commande> [arguments]
 
   init --instance <id> [--solo | --strict --authority-public <clé>]
+  tls init --host <nom ou adresse>... [--addr <hôte:port>] [--days <n>] [--force]   (certificat HTTPS de cette machine, et interface outerCtx)
+  tls trust <certificat.pem>                                  (accepter le certificat d'un pair)
+  tls show                                                    (certificat de cette machine, à donner aux pairs)
+  key show                                                    (clés publiques de cette instance, à transmettre aux pairs)
   principal add <id> --kind <instance|service|user> --key <clé publique>
   principal add local.<wrapper> --kind local        (composant local restreint, sans clé)
   principal disable|enable|remove <id>
@@ -61,7 +66,10 @@ Usage : brique-sec [--dir <répertoire de sécurité>] <commande> [arguments]
   denials [--since <24h|7d|date RFC 3339>] [--principal <id>] [--reason <code>] [--limit <n>]
   doctor [--root <répertoire de l'instance>]
 
-Le répertoire de sécurité vaut --dir, sinon $BRIQUE_SECURITY_DIR.
+--root est le dossier root/ de l'instance (le même chemin que -root_path du moteur) : les droits d'accès vivent
+dans security/ à côté de root/ (à versionner), les clés, la politique signée et l'état dans le répertoire de
+la machine, par défaut ~/.brique/<nom de l'instance>.
+Sans --root, --dir (ou $BRIQUE_SECURITY_DIR) désigne un répertoire unique qui contient tout.
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -123,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "brique-sec : "+format+"\n", values...)
 		return 1
 	}
-	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "audience", "interface", "target")
+	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "audience", "interface", "target", "host", "addr", "days")
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -137,20 +145,47 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if global.positional[0] == "sign" { // offline: needs no security directory
 		return signCommand(global, stdout, fail)
 	}
-	root := global.one("dir")
-	if root == "" {
-		root = os.Getenv("BRIQUE_SECURITY_DIR")
+	command := global.positional[0]
+	instanceRoot := global.one("root")
+	if instanceRoot != "" {
+		if instanceRoot, err = filepath.Abs(instanceRoot); err != nil {
+			return fail("chemin de l'instance invalide : %v", err)
+		}
 	}
-	if root == "" {
-		return fail("indiquez le répertoire de sécurité avec --dir ou BRIQUE_SECURITY_DIR")
+	// With --root the policy lives in <instance>/security and the keys on the machine; a
+	// directory given alone keeps everything together, as before.
+	split := instanceRoot != "" && (hostdir.HasPolicy(instanceRoot) || command == "init")
+	machine := global.one("dir")
+	if machine == "" {
+		machine = os.Getenv(hostdir.Environment)
 	}
-	root, err = filepath.Abs(root)
+	if machine == "" && split {
+		id := global.one("instance")
+		if id == "" {
+			if id, err = hostdir.InstanceID(instanceRoot); err != nil {
+				return fail("%v (donnez --instance ou --dir)", err)
+			}
+		}
+		if machine, err = hostdir.Default(id); err != nil {
+			return fail("%v", err)
+		}
+	}
+	if machine == "" {
+		return fail("indiquez le répertoire de sécurité avec --dir ou BRIQUE_SECURITY_DIR, ou l'instance avec --root")
+	}
+	root, err := filepath.Abs(machine)
 	if err != nil {
 		return fail("répertoire invalide : %v", err)
 	}
 	dir := &secadmin.Dir{Root: root}
-	command, rest := global.positional[0], global.positional[1:]
-	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "apply" {
+	if split {
+		dir.PolicyRoot = hostdir.PolicyDirectory(instanceRoot)
+		// Signed policies travel with the instance when it already carries them, or when the
+		// authority is external (--strict); otherwise this machine signs its own.
+		dir.Carry = hostdir.CarriesGenerations(instanceRoot) || (command == "init" && global.has("strict"))
+	}
+	rest := global.positional[1:]
+	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "apply" || command == "tls" {
 		unlock, lockErr := dir.Lock()
 		if lockErr != nil {
 			return fail("verrou administratif indisponible : %v", lockErr)
@@ -173,8 +208,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "Mode strict : aucune clé d'autorité sur ce poste. Compilez (compile --out), signez hors ligne (sign), puis installez (apply --signed).")
 		} else {
 			fmt.Fprintf(stdout, "  génération initiale            : %s\n", result.Generation)
-			fmt.Fprintf(stdout, "Démarrez le moteur avec : -security_dir %s -security_generation %s\n", root, result.Generation)
+			if dir.InstanceSource() {
+				fmt.Fprintf(stdout, "Droits d'accès (à versionner avec l'instance) : %s\n", dir.PolicyRoot)
+				fmt.Fprintf(stdout, "Clés, politique signée et état de la machine  : %s (ne pas versionner)\n", root)
+				fmt.Fprintf(stdout, "Démarrez le moteur avec : -root_path %s\n", instanceRoot)
+			} else {
+				fmt.Fprintf(stdout, "Démarrez le moteur avec : -security_dir %s -security_generation %s\n", root, result.Generation)
+			}
 		}
+	case "key":
+		return keyCommand(dir, rest, stdout, fail)
+	case "tls":
+		return tlsCommand(dir, instanceRoot, rest, global, stdout, fail)
 	case "principal":
 		return principalCommand(dir, rest, global, stdout, fail)
 	case "grant":
@@ -533,6 +578,29 @@ func formatDenial(r audit.Record) string {
 }
 
 // peerCommand edits the outbound peers that the next generation carries.
+// keyCommand prints the public keys of this instance: what to give to a peer so that it can
+// register this instance with "principal add --key".
+func keyCommand(dir *secadmin.Dir, args []string, stdout io.Writer, fail func(string, ...any) int) int {
+	if len(args) != 1 || args[0] != "show" {
+		return fail("usage : key show")
+	}
+	identity, err := dir.Identity()
+	if err != nil {
+		return fail("%v", err)
+	}
+	fmt.Fprintf(stdout, "Instance : %s\n\n", identity.InstanceID)
+	fmt.Fprintln(stdout, "Clé de signature de l'instance (celle que les pairs vérifient)")
+	fmt.Fprintf(stdout, "  identifiant  : %s\n", identity.MessageKeyID)
+	fmt.Fprintf(stdout, "  clé publique : %s\n\n", identity.MessagePublicKey)
+	fmt.Fprintln(stdout, "Clé d'autorité de politique")
+	fmt.Fprintf(stdout, "  identifiant  : %s\n", identity.AuthorityKeyID)
+	fmt.Fprintf(stdout, "  clé publique : %s\n\n", identity.AuthorityPublicKey)
+	fmt.Fprintln(stdout, "Sur l'instance qui doit reconnaître celle-ci, exécutez :")
+	fmt.Fprintf(stdout, "  brique-sec principal add %s --kind instance --key %s\n", identity.InstanceID, identity.MessagePublicKey)
+	fmt.Fprintln(stdout, "La clé privée ne quitte jamais ce poste : seule la clé publique se transmet.")
+	return 0
+}
+
 func peerCommand(dir *secadmin.Dir, args []string, global options, stdout io.Writer, fail func(string, ...any) int) int {
 	if len(args) == 0 {
 		return fail("usage : peer add|remove|list")
@@ -566,6 +634,72 @@ func peerCommand(dir *secadmin.Dir, args []string, global options, stdout io.Wri
 		}
 	default:
 		return fail("commande inconnue : peer %s", action)
+	}
+	return 0
+}
+
+// tlsCommand makes the certificate of the machine's HTTPS interface, trusts the certificates of
+// peers and shows what a peer needs. The certificate and its key stay in the machine's
+// directory; only the certificate is given away.
+func tlsCommand(dir *secadmin.Dir, instanceRoot string, args []string, global options, stdout io.Writer, fail func(string, ...any) int) int {
+	if len(args) == 0 {
+		return fail("usage : tls init|trust|show")
+	}
+	show := func(info *secadmin.TLSInfo) {
+		fmt.Fprintf(stdout, "Certificat        : %s\n", info.CertPath)
+		fmt.Fprintf(stdout, "Noms et adresses  : %s\n", strings.Join(info.Hosts, ", "))
+		fmt.Fprintf(stdout, "Valable jusqu'au  : %s\n", info.NotAfter.Format("2006-01-02"))
+		fmt.Fprintf(stdout, "Empreinte SHA-256 : %s\n", info.Fingerprint)
+		fmt.Fprintf(stdout, "Clé privée        : %s (reste sur cette machine, ne la partagez jamais)\n", info.KeyPath)
+	}
+	switch args[0] {
+	case "init":
+		days := 0
+		if value := global.one("days"); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fail("--days attend un nombre de jours")
+			}
+			days = parsed
+		}
+		info, err := dir.TLSInit(secadmin.TLSOptions{Hosts: global.flags["host"], Days: days, Force: global.has("force")})
+		if err != nil {
+			return fail("%v", err)
+		}
+		fmt.Fprintln(stdout, "Certificat HTTPS créé.")
+		show(info)
+		if instanceRoot != "" {
+			added, err := secadmin.EnsureOuterInterface(instanceRoot, global.one("addr"))
+			if err != nil {
+				return fail("le certificat est créé mais l'interface n'a pas pu être ajoutée : %v", err)
+			}
+			if added {
+				fmt.Fprintf(stdout, "Interface HTTPS   : ajoutée à %s (redémarrez le moteur pour qu'il l'ouvre)\n", filepath.Join(instanceRoot, "context.json"))
+			} else {
+				fmt.Fprintln(stdout, "Interface HTTPS   : déjà présente dans le context.json (un certificat régénéré est pris en compte sans redémarrage)")
+			}
+		} else {
+			fmt.Fprintln(stdout, "Ajoutez à la main une interface HTTPS \"outerCtx\" au context.json (SECURITY.md §11.3).")
+		}
+		fmt.Fprintf(stdout, "À donner à vos pairs : %s ; ils l'acceptent avec : brique-sec tls trust <fichier>\n", info.CertPath)
+	case "trust":
+		if len(args) != 2 {
+			return fail("usage : tls trust <certificat.pem>")
+		}
+		added, err := dir.TLSTrust(args[1])
+		if err != nil {
+			return fail("%v", err)
+		}
+		fmt.Fprintf(stdout, "%d certificat(s) ajouté(s) aux certificats acceptés (pris en compte sans redémarrage).\n", added)
+	case "show":
+		info, err := dir.TLSShow()
+		if err != nil {
+			return fail("%v", err)
+		}
+		show(info)
+		fmt.Fprintf(stdout, "Certificats de pairs acceptés : %d\n", info.Trusted)
+	default:
+		return fail("usage : tls init|trust|show")
 	}
 	return 0
 }

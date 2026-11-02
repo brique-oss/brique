@@ -171,6 +171,10 @@ type InterfaceRuntime struct {
 	// Concrete implementation (protocol instance).
 	Impl InterfaceImpl
 
+	// machineDirectory is the machine's security directory, "" when there is none; an HTTPS
+	// interface looks there for the files its configuration does not name.
+	machineDirectory string
+
 	stateMu   sync.RWMutex
 	status    InterfaceStatus
 	lastErr   error
