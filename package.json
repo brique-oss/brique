@@ -76,7 +76,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/build-adapters.mjs",
     "vscode:check-bundle": "node scripts/check-vscode-bundle.mjs",
     "vscode:prune-dist": "node scripts/prune-vscode-dist.mjs",
-    "vscode:package": "npm run clean && npm run build:brique && npm run build && npm run vscode:check-bundle && npm run vscode:prune-dist && vsce package --out brique-0.0.1.vsix --allow-missing-repository",
+    "vscode:package": "npm run clean && npm run build:brique && npm run build && npm run vscode:check-bundle && npm run vscode:prune-dist && vsce package --out brique-0.0.1.vsix --allow-missing-repository --no-rewrite-relative-links",
     "vscode:install": "node scripts/vscode-install.mjs",
     "vscode:deploy": "npm run vscode:package && npm run vscode:install",
     "start": "node dist/spark/index.js",
