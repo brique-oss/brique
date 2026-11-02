@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	neturl "net/url"
 	"os"
 	"strings"
 	"sync"
@@ -41,10 +42,23 @@ func NewTransportClient(url string) *TransportClient {
 	return &TransportClient{url: url}
 }
 
+// dialOrigin is the Origin header of the WebSocket handshake. golang.org/x/net/websocket
+// requires one; the engine accepts a client that sends none or one whose host is the
+// listener's own, and refuses any other web origin. The wrapper is not a web page, so it
+// presents the origin of the engine it dials, which the default policy accepts without
+// widening allowed_origins.
+func dialOrigin(rawURL string) string {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "http://localhost"
+	}
+	return "http://" + parsed.Host
+}
+
 func (t *TransportClient) Connect(ctx context.Context) error {
 	delay := 100 * time.Millisecond
 	for attempt := 1; attempt <= 5; attempt++ {
-		conn, err := websocket.Dial(t.url, "", "http://localhost")
+		conn, err := websocket.Dial(t.url, "", dialOrigin(t.url))
 		if err == nil {
 			t.conn = conn
 			return nil
