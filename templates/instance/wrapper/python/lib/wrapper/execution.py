@@ -200,9 +200,12 @@ class CapacityExecutor:
         return await invoke_callable(symbol, *args)
 
     async def _invoke_binding(self, key: tuple[str, str], symbol: Any, *args: Any) -> Any:
+        binding = self.runtime.registry.resolve_capacity(*key)
+        if binding is None or not binding.serial:
+            return await self._invoke(symbol, *args)       # parallel: any number of calls at once
         stack = current_binding_stack.get()
         if key in stack:
-            return await self._invoke(symbol, *args)
+            return await self._invoke(symbol, *args)       # a serial capacity calling itself in the same chain
         lock = self._binding_locks.setdefault(key, asyncio.Lock())
         async with lock:
             token = current_binding_stack.set((*stack, key))

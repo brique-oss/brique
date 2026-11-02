@@ -41,7 +41,8 @@ func (r *Router) Route(raw []byte) {
 		return
 	}
 	key := r.workKey(msg)
-	if !r.runtime.scheduler.Submit(key, func() { r.handleIntention(msg, delegation) }) {
+	work := func() { r.handleIntention(msg, delegation) }
+	if !r.runtime.scheduler.SubmitFor(msg, key, r.ordered(msg), work) {
 		r.runtime.log("event=scheduler_overloaded queued=%d key=%s", r.runtime.scheduler.Queued(), key)
 		if msg.AwaitResponse {
 			r.sendFailure(msg, delegation, newPublicError("refused", "wrapper pending-work queue is full", "busy"))
@@ -75,6 +76,16 @@ func decodeWrapperFrame(raw []byte) (Envelope, string, error) {
 		return Envelope{}, "", fmt.Errorf("invalid wrapper frame")
 	}
 	return frame.Message, frame.Delegation, nil
+}
+
+// ordered says whether the work of a message must wait for the earlier work of its key. Matters
+// are ordered per matter. A capacity runs in parallel unless it is declared Serial.
+func (r *Router) ordered(msg *IntentionMsg) bool {
+	if msg.To.Type != TypeUser {
+		return true
+	}
+	binding, err := r.runtime.registry.ResolveCapacity(r.relativeContext(msg.To.Context), msg.To.Cap)
+	return err == nil && binding.Serial
 }
 
 func (r *Router) workKey(msg *IntentionMsg) string {

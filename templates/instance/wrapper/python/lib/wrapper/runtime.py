@@ -31,6 +31,7 @@ from .constants import (
     KIND_RESPONSE,
     TYPE_EXECUTION,
     TYPE_MATTER,
+    TYPE_USER,
 )
 from .correlator import AwaitCorrelator
 from .execution import CapacityExecutor, MatterManager, current_activity, current_delegation, current_intention
@@ -239,8 +240,10 @@ class WrapperRuntime:
         else:
             target_name = str(to.get("cap", "")).strip()
         key = ":".join((target_type, context, target_name))
+        # Matters are ordered per matter. A capacity runs in parallel unless it is declared serial.
+        ordered = target_type != TYPE_USER or self._capacity_is_serial(context, target_name)
         try:
-            self.scheduler.submit(key, lambda: self._run_scheduled(message, delegation))
+            self.scheduler.submit(key, lambda: self._run_scheduled(message, delegation), ordered=ordered)
         except SchedulerFullError:
             self.log_event("scheduler_overloaded", queued=self.scheduler.queued, key=key)
             token = current_delegation.set(delegation)
@@ -248,6 +251,10 @@ class WrapperRuntime:
                 await self.router.reject_overloaded(intention)
             finally:
                 current_delegation.reset(token)
+
+    def _capacity_is_serial(self, context: str, name: str) -> bool:
+        binding = self.registry.resolve_capacity(context, name)
+        return binding is not None and binding.serial
 
     async def _drain_inflight(self) -> None:
         await self.scheduler.drain()

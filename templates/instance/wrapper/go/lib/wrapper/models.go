@@ -70,10 +70,15 @@ func (p *Params) Bool(key string) bool {
 }
 
 // CapacityBinding maps a (context, name) pair to a live Go handler.
+//
+// A capacity runs its calls in parallel, as many at once as the wrapper's concurrency
+// allows. Serial makes it run one call at a time, in arrival order; use it for a capacity
+// that cannot run two calls at once and never waits on another call of itself.
 type CapacityBinding struct {
 	Context string
 	Name    string
 	Handler func(params *Params) (any, error)
+	Serial  bool
 }
 
 // MatterBinding maps a (context, name) pair to read/write accessors.

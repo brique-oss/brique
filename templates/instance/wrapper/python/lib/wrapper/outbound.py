@@ -147,6 +147,10 @@ class OutboundIntentionAPI:
         }
         try:
             await self.runtime.send_message(message)
-            return await pending.wait(timeout_s)
+            scheduler = getattr(self.runtime, "scheduler", None)
+            if scheduler is None:
+                return await pending.wait(timeout_s)
+            async with scheduler.yielding():      # waiting for an answer does not hold an execution slot
+                return await pending.wait(timeout_s)
         finally:
             await self.runtime.correlator.unregister(intention_id, pending)

@@ -102,6 +102,7 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 
 	r.transport = NewTransportClient(url)
 	r.outbound = NewOutboundAPI(r.transport, r.correlator, r.wrapperName, r.ctxID)
+	r.outbound.scheduler = r.scheduler
 	r.transit, err = NewTransitService(r)
 	if err != nil {
 		return fmt.Errorf("initialize transit: %w", err)

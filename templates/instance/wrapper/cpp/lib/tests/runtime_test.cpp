@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -88,6 +89,73 @@ int main() {
     scheduler.close();
     assert(maximum.load() == 2);
     assert(started.size() == 3 && started[2] == "a2");
+
+    {   // work submitted unordered runs together, whatever shares its key
+        wrapper::WorkScheduler parallel(4, 8);
+        std::mutex m;
+        std::condition_variable c;
+        bool go = false;
+        int running = 0;
+        auto hold = [&] {
+            std::unique_lock<std::mutex> l(m);
+            ++running;
+            c.notify_all();
+            c.wait(l, [&] { return go; });
+        };
+        assert(parallel.submit("cap", hold, false));
+        assert(parallel.submit("cap", hold, false));
+        assert(parallel.submit("cap", hold, false));
+        {
+            std::unique_lock<std::mutex> l(m);
+            assert(c.wait_for(l, std::chrono::seconds(1), [&] { return running == 3; }));
+            go = true;
+        }
+        c.notify_all();
+        parallel.close();
+    }
+    {   // a parent that waits for a child call of the same capacity does not wait behind itself
+        wrapper::WorkScheduler nested(4, 8);
+        std::promise<void> child_done;
+        std::promise<void> parent_done;
+        auto parent_finished = parent_done.get_future();
+        assert(nested.submit("cap", [&] {
+            assert(nested.submit("cap", [&] { child_done.set_value(); }, false));
+            child_done.get_future().wait();
+            parent_done.set_value();
+        }, false));
+        assert(parent_finished.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+        nested.close();
+    }
+
+    {   // as many calls as there are slots, each waiting for a call that needs a slot itself
+        const int slots = 3;
+        wrapper::WorkScheduler starved(slots, 16);
+        std::atomic<int> parents_done{0};
+        std::atomic<int> parents_holding{0};
+        std::mutex m;
+        std::condition_variable c;
+        for (int i = 0; i < slots; ++i) {
+            assert(starved.submit("cap", [&] {
+                ++parents_holding;   // every slot is held by a parent before any child is asked for
+                while (parents_holding.load() < slots) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::promise<void> child_done;
+                auto child_finished = child_done.get_future();
+                assert(starved.submit("cap", [&] { child_done.set_value(); }, false));
+                {
+                    wrapper::SlotYield waiting;   // waiting for the child does not hold a slot
+                    child_finished.wait();
+                }
+                std::lock_guard<std::mutex> l(m);
+                ++parents_done;
+                c.notify_all();
+            }, false));
+        }
+        {
+            std::unique_lock<std::mutex> l(m);
+            assert(c.wait_for(l, std::chrono::seconds(3), [&] { return parents_done.load() == slots; }));
+        }
+        starved.close();
+    }
 
     const std::string raw = R"({"value":{"nested":[1,2]},"name":"ok"})";
     assert(wrapper::json::raw_field(raw, "value") == R"({"nested":[1,2]})");

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .matter import build_matter_binding
-from .models import CapacityBinding, MatterBinding
+from .models import SERIAL_ATTRIBUTE, CapacityBinding, MatterBinding
 
 
 class RuntimeRegistry:
@@ -78,6 +78,7 @@ class RuntimeRegistry:
                 context_id=context_id,
                 name=cap_name,
                 symbol=symbol,
+                serial=bool(getattr(symbol, SERIAL_ATTRIBUTE, False)),
             )
         return out
 

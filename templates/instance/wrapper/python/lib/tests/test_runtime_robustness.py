@@ -68,7 +68,7 @@ class InvocationTests(unittest.IsolatedAsyncioTestCase):
         result = await CapacityExecutor(runtime).execute_capacity("", "cap", {"params": {}})
         self.assertEqual(result, {"done": True})
 
-    async def test_same_capacity_is_serialized_even_for_direct_calls(self) -> None:
+    async def _peak_of_two_direct_calls(self, mark_serial: bool) -> int:
         active = 0
         maximum = 0
 
@@ -80,14 +80,21 @@ class InvocationTests(unittest.IsolatedAsyncioTestCase):
             active -= 1
             return {}
 
-        registry = SimpleNamespace(resolve_capacity=lambda _context, _name: CapacityBinding("", "cap", capacity))
+        binding = CapacityBinding("", "cap", capacity, serial=mark_serial)
+        registry = SimpleNamespace(resolve_capacity=lambda _context, _name: binding)
         runtime = SimpleNamespace(registry=registry, transit=SimpleNamespace(emit_returns=False))
         executor = CapacityExecutor(runtime)
         await asyncio.gather(
             executor.execute_direct("", "cap", {}),
             executor.execute_direct("", "cap", {}),
         )
-        self.assertEqual(maximum, 1)
+        return maximum
+
+    async def test_a_serial_capacity_is_serialized_even_for_direct_calls(self) -> None:
+        self.assertEqual(await self._peak_of_two_direct_calls(mark_serial=True), 1)
+
+    async def test_a_capacity_runs_direct_calls_in_parallel_by_default(self) -> None:
+        self.assertEqual(await self._peak_of_two_direct_calls(mark_serial=False), 2)
 
     async def test_notification_failure_does_not_rollback_a_committed_write(self) -> None:
         state = {"value": 0}

@@ -91,7 +91,9 @@ func (o *OutboundAPI) SendRawIntentionWithProgress(intention map[string]any, onR
 		return nil, nil
 	}
 
+	resume := o.yieldSlot()
 	resp, ok := awaitFinalResponseWith(ch, 30*time.Second, onRunning)
+	resume()
 	if !ok {
 		return nil, fmt.Errorf("outbound intention timeout: %s", id)
 	}
@@ -106,6 +108,16 @@ type OutboundAPI struct {
 	ctxID       string
 	delegation  string
 	origin      *IntentionMsg
+	scheduler   *WorkScheduler
+}
+
+// yieldSlot gives the execution slot of the call this API is scoped to back while it waits
+// for an answer. It returns the function that takes it back.
+func (o *OutboundAPI) yieldSlot() func() {
+	if o == nil || o.scheduler == nil || o.origin == nil {
+		return func() {}
+	}
+	return o.scheduler.LeaseOf(o.origin).Yield()
 }
 
 func (o *OutboundAPI) scoped(origin *IntentionMsg, delegation string) *OutboundAPI {
@@ -208,7 +220,9 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 		return nil, nil
 	}
 
+	resume := o.yieldSlot()
 	resp, ok := awaitFinalResponseWith(ch, 30*time.Second, p.OnRunning)
+	resume()
 	if !ok {
 		return nil, fmt.Errorf("outbound intention timeout: %s", id)
 	}

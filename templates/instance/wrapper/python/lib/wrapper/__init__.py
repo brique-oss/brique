@@ -15,7 +15,9 @@
 """Generic Brique Python wrapper runtime."""
 
 from .matter import build_matter_binding
+from .models import serial
 
 __all__ = [
     "build_matter_binding",
+    "serial",
 ]

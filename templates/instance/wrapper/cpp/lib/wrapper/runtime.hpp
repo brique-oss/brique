@@ -264,10 +264,14 @@ struct TransitTarget {
     std::string type = kTypeUser;
 };
 
+// A capacity runs its calls in parallel, as many at once as the wrapper's concurrency allows.
+// serial makes it run one call at a time, in arrival order; use it for a capacity that cannot
+// run two calls at once and never waits on another call of itself.
 struct CapacityBinding {
     std::string relative_context;
     std::string name;
     std::function<std::string(const ParamsView&)> callback;
+    bool serial = false;
 };
 
 struct MatterBinding {
@@ -371,6 +375,9 @@ public:
                 throw std::runtime_error("duplicate capacity binding: " + binding.name);
             }
             capacity_bindings_[key] = binding.callback;
+            if (binding.serial) {
+                serial_capacities_.insert(key);
+            }
         }
         for (const auto& binding : fragment.matters) {
             if (binding.name.empty() || (!binding.read && !binding.write)) {
@@ -426,6 +433,7 @@ public:
         }
         try {
             send_message(outbound_message(params, true, id));
+            SlotYield waiting_gives_its_slot_back;
             std::unique_lock<std::mutex> lock(pending->mu);
             std::size_t observed_activity = pending->activity;
             while (!pending->done) {
@@ -575,6 +583,7 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::unique_ptr<WorkScheduler> scheduler_;
     std::unordered_map<std::string, CapacityFn> capacity_bindings_;
+    std::unordered_set<std::string> serial_capacities_;   // the others run their calls in parallel
     std::unordered_map<std::string, std::shared_ptr<MatterState>> matter_bindings_;
     std::vector<std::function<void()>> shutdown_hooks_;
     std::mutex subscriptions_mu_;
@@ -769,7 +778,7 @@ private:
                                                     "internal", "wrapper capacity failed",
 												"{\"reason\":\"wrapper_capacity_failed\",\"error_id\":" + json::quote(error_id) + "}"));
             }
-        });
+        }, serial_capacities_.count(make_key(rel_ctx, to_cap)) != 0);   // parallel unless declared serial
         if (!accepted) {
 			ExecutionContext next = current_execution;
 			next.delegation = delegation;
