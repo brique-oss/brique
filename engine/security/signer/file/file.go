@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"brique_engine/security/seal"
 	"brique_engine/security/signer"
 	"brique_engine/security/trust"
 	"brique_engine/shared"
@@ -105,6 +106,15 @@ func (backend *fileBackend) Sign(ctx context.Context, message []byte) ([]byte, e
 		return nil, errors.New("file signer unavailable")
 	}
 	return ed25519.Sign(backend.privateKey, message), nil
+}
+
+func (backend *fileBackend) Open(ctx context.Context, binding, sealed []byte) ([]byte, error) {
+	backend.mu.RLock()
+	defer backend.mu.RUnlock()
+	if backend.closed || ctx.Err() != nil {
+		return nil, errors.New("file signer unavailable")
+	}
+	return seal.Open(backend.privateKey, binding, sealed)
 }
 
 func (backend *fileBackend) Health(ctx context.Context) error {

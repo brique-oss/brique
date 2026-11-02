@@ -17,6 +17,7 @@
 package wire
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -41,6 +42,7 @@ const (
 	PurposeIntention = "intention"
 	PurposeResponse  = "response"
 	ContentModeClear = "clear"
+	ContentModeHPKE  = "hpke"
 
 	MaxEnvelopeBytes  = 4 << 20
 	MaxProtectedBytes = 16 << 10
@@ -79,12 +81,15 @@ type Protected struct {
 	ExpiresAtMS        string `json:"expires_at_ms"`
 	IntentionID        string `json:"intention_id"`
 	ContentMode        string `json:"content_mode"`
-	PayloadEncoding    string `json:"payload_encoding"`
-	PayloadSize        string `json:"payload_size"`
-	PayloadHash        string `json:"payload_hash"`
-	RequestHash        string `json:"request_hash,omitempty"`
-	ResponseSequence   string `json:"response_sequence,omitempty"`
-	ResponsePhase      string `json:"response_phase,omitempty"`
+	// RecipientKeyID names the key the payload is sealed to. Present exactly when the content
+	// mode is hpke; signed, so a ciphertext cannot be redirected to another recipient.
+	RecipientKeyID   string `json:"recipient_key_id,omitempty"`
+	PayloadEncoding  string `json:"payload_encoding"`
+	PayloadSize      string `json:"payload_size"`
+	PayloadHash      string `json:"payload_hash"`
+	RequestHash      string `json:"request_hash,omitempty"`
+	ResponseSequence string `json:"response_sequence,omitempty"`
+	ResponsePhase    string `json:"response_phase,omitempty"`
 	// ActorID is who, inside the sending instance, made the call. It is signed, so
 	// it cannot be altered in transit, but the sender chooses it: it can only
 	// narrow the principal's access (model D14). Intentions only.
@@ -94,13 +99,64 @@ type Protected struct {
 type Verified struct {
 	protected  Protected
 	payload    []byte
+	sealed     bool
 	signedHash string
 	admission  trust.Admission
 	verifiedAt time.Time
 }
 
-func (verified *Verified) Protected() Protected       { return verified.protected }
-func (verified *Verified) Payload() []byte            { return append([]byte(nil), verified.payload...) }
+func (verified *Verified) Protected() Protected { return verified.protected }
+
+// Payload is the content of the message. For a sealed message it is empty until Open has
+// succeeded, so that a caller that forgets to open never reads ciphertext as content.
+func (verified *Verified) Payload() []byte {
+	if verified.sealed {
+		return nil
+	}
+	return append([]byte(nil), verified.payload...)
+}
+
+// Sealed reports whether the content is still sealed.
+func (verified *Verified) Sealed() bool { return verified.sealed }
+
+// Opener opens content sealed to one of this instance's keys.
+type Opener interface {
+	Open(ctx context.Context, keyID string, binding, sealed []byte) ([]byte, error)
+}
+
+// Open decrypts the content of a message whose signature was already verified. It is the only
+// way to read a sealed payload. A clear message is left as it is.
+func (verified *Verified) Open(ctx context.Context, opener Opener) error {
+	if !verified.sealed {
+		return nil
+	}
+	if opener == nil {
+		return ErrAuthentication
+	}
+	binding, err := sealBinding(verified.protected)
+	if err != nil {
+		return ErrAuthentication
+	}
+	plaintext, err := opener.Open(ctx, verified.protected.RecipientKeyID, binding, verified.payload)
+	if err != nil {
+		return ErrAuthentication
+	}
+	verified.payload = plaintext
+	verified.sealed = false
+	return nil
+}
+
+// sealBinding is what the ciphertext is bound to: the signed header without the two fields
+// that describe the ciphertext itself, which cannot be known before sealing.
+func sealBinding(protected Protected) ([]byte, error) {
+	protected.PayloadSize = ""
+	protected.PayloadHash = ""
+	encoded, err := json.Marshal(protected)
+	if err != nil {
+		return nil, err
+	}
+	return trust.CanonicalizeJSON(encoded)
+}
 func (verified *Verified) SignedEnvelopeHash() string { return verified.signedHash }
 func (verified *Verified) Admission() trust.Admission { return verified.admission }
 func (verified *Verified) VerifiedAt() time.Time      { return verified.verifiedAt }
@@ -221,6 +277,7 @@ func verifyClear(data []byte, audience string, now time.Time, snapshot *trust.Sn
 	return &Verified{
 		protected:  protected,
 		payload:    append([]byte(nil), payload...),
+		sealed:     protected.ContentMode == ContentModeHPKE,
 		signedHash: signedHash,
 		admission:  admission,
 		verifiedAt: now.UTC(),
@@ -236,7 +293,19 @@ func validateProtected(protected Protected, audience string, now time.Time) (iss
 	if !validDigestID(protected.KeyID, "bk1_") || !uuidV4Pattern.MatchString(protected.IntentionID) {
 		return 0, 0, 0, fmt.Errorf("invalid identity fields")
 	}
-	if protected.ContentMode != ContentModeClear || protected.PayloadEncoding != "base64url" {
+	if protected.PayloadEncoding != "base64url" {
+		return 0, 0, 0, fmt.Errorf("unsupported content mode or encoding")
+	}
+	switch protected.ContentMode {
+	case ContentModeClear:
+		if protected.RecipientKeyID != "" {
+			return 0, 0, 0, fmt.Errorf("clear content names a recipient")
+		}
+	case ContentModeHPKE:
+		if !validDigestID(protected.RecipientKeyID, "bk1_") {
+			return 0, 0, 0, fmt.Errorf("sealed content without a valid recipient")
+		}
+	default:
 		return 0, 0, 0, fmt.Errorf("unsupported content mode or encoding")
 	}
 	issuedMS, err = parseCanonicalUint(protected.IssuedAtMS)

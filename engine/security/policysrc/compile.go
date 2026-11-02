@@ -196,6 +196,12 @@ func (c *compiler) principal(index int, id string, p *Principal) (trust.Principa
 	if p.Disabled {
 		out.Status = "disabled"
 	}
+	if p.Limits != nil {
+		out.Limits = &trust.Limits{RatePerSecond: p.Limits.RatePerSecond, Burst: p.Limits.Burst, ChainCalls: p.Limits.ChainCalls, ChainDepth: p.Limits.ChainDepth, Unlimited: p.Limits.Unlimited}
+	}
+	if p.Sealed() {
+		out.ContentMode = trust.ContentModeHPKE
+	}
 	for _, key := range p.Keys {
 		raw, _ := base64.RawURLEncoding.DecodeString(key.PublicKey) // validated
 		keyID, err := trust.SigningKeyID(ed25519.PublicKey(raw))

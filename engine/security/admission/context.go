@@ -19,6 +19,7 @@
 package admission
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,8 +180,14 @@ func (context *Context) PrincipalKind() string { return context.principalKind }
 
 // ActorID is the actor the sender signed into the request, or "". It narrows the
 // principal and is traced; it is a claim, never a proof.
-func (context *Context) ActorID() string            { return context.trustAdmission.ActorID() }
-func (context *Context) SigningKeyID() string       { return context.signingKeyID }
+func (context *Context) ActorID() string      { return context.trustAdmission.ActorID() }
+func (context *Context) SigningKeyID() string { return context.signingKeyID }
+
+// SigningPublicKey is the key that signed the request: a response sealed to the requester is
+// sealed to it.
+func (context *Context) SigningPublicKey() ed25519.PublicKey {
+	return context.trustAdmission.PublicKey()
+}
 func (context *Context) AuthenticatedAt() time.Time { return context.authenticatedAt }
 func (context *Context) RequestHash() string        { return context.requestHash }
 func (context *Context) RootIntentionID() string    { return context.rootIntentionID }

@@ -21,7 +21,8 @@
           "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
           "status": "active"
         }
-      ]
+      ],
+      "content_mode": "hpke"
     }
   ],
   "scopes": [

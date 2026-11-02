@@ -55,14 +55,49 @@ type Source struct {
 	Peers []trust.ExternalPeer `json:"peers,omitempty"`
 }
 
+// Values of Principal.Encryption.
+const (
+	EncryptionRequired = "required"
+	EncryptionNone     = "none"
+)
+
+// Sealed reports whether messages to and from the principal must be encrypted.
+func (p *Principal) Sealed() bool {
+	switch p.Encryption {
+	case EncryptionRequired:
+		return p.Kind != "local"
+	case EncryptionNone:
+		return false
+	}
+	return p.Kind == "instance"
+}
+
+// Limits is the request rate of a principal: a rate per second and the burst allowed above it,
+// or "unlimited". The numbers are written as strings, like every number of a source.
+type Limits struct {
+	RatePerSecond int  `json:"rate_per_second,omitempty,string"`
+	Burst         int  `json:"burst,omitempty,string"`
+	ChainCalls    int  `json:"chain_calls,omitempty,string"`
+	ChainDepth    int  `json:"chain_depth,omitempty,string"`
+	Unlimited     bool `json:"unlimited,omitempty"`
+}
+
 // Principal is one subject of authorization.
 type Principal struct {
-	Kind          string            `json:"kind"`
-	Disabled      bool              `json:"disabled,omitempty"`
-	Keys          []Key             `json:"keys,omitempty"`
-	TracePayloads bool              `json:"trace_payloads,omitempty"`
-	Grants        []Grant           `json:"grants,omitempty"`
-	Actors        map[string]*Actor `json:"actors,omitempty"`
+	Kind          string `json:"kind"`
+	Disabled      bool   `json:"disabled,omitempty"`
+	Keys          []Key  `json:"keys,omitempty"`
+	TracePayloads bool   `json:"trace_payloads,omitempty"`
+	// Encryption is how messages to and from this principal travel. An instance principal
+	// is sealed by default; "none" opts it out. A service or user principal is in the clear
+	// unless "required". Messages are sealed to the principal's key and opened with this
+	// instance's own.
+	Encryption string `json:"encryption,omitempty"`
+	// Limits bounds the requests per second the principal can make. Absent, a default
+	// applies; "unlimited" must be written to lift it.
+	Limits *Limits           `json:"limits,omitempty"`
+	Grants []Grant           `json:"grants,omitempty"`
+	Actors map[string]*Actor `json:"actors,omitempty"`
 }
 
 // Key is a signing public key of a principal.

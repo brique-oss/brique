@@ -17,6 +17,7 @@
 package signer
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -65,6 +66,21 @@ func (set *Set) Active() Signer { return set.signers[set.activeName] }
 func (set *Set) Lookup(name string) (Signer, bool) {
 	current, exists := set.signers[name]
 	return current, exists
+}
+
+// Open opens content sealed to the key with this identifier, if a signer of the set holds it
+// and can open. Any other case is an ErrorConfiguration, with no hint about which.
+func (set *Set) Open(ctx context.Context, keyID string, binding, sealed []byte) ([]byte, error) {
+	for _, current := range set.signers {
+		if current.Descriptor().KeyID != keyID {
+			continue
+		}
+		if opener, ok := current.(Opener); ok {
+			return opener.Open(ctx, binding, sealed)
+		}
+		break
+	}
+	return nil, &Error{Kind: ErrorConfiguration}
 }
 
 func (set *Set) Descriptors() []Descriptor {

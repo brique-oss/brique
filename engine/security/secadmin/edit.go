@@ -48,6 +48,99 @@ func (d *Dir) PrincipalAdd(id, kind, publicKey string) error {
 	return d.SaveSource(src)
 }
 
+// PrincipalSetEncryption chooses how messages to and from a principal travel: "required"
+// seals them, "none" sends them in the clear, "default" returns to the rule of its kind (an
+// instance is sealed).
+func (d *Dir) PrincipalSetEncryption(id, mode string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal, exists := src.Principals[id]
+	if !exists || principal == nil {
+		return fmt.Errorf("principal %q does not exist", id)
+	}
+	switch mode {
+	case policysrc.EncryptionRequired, policysrc.EncryptionNone:
+		principal.Encryption = mode
+	case "default":
+		principal.Encryption = ""
+	default:
+		return fmt.Errorf("encryption is %q, %q or \"default\"", policysrc.EncryptionRequired, policysrc.EncryptionNone)
+	}
+	return d.SaveSource(src)
+}
+
+// PrincipalSetLimits sets how fast a principal may make this instance work: "default" returns
+// to the default of its kind, "unlimited" lifts the limit, and a rate with a burst (the burst
+// defaults to twice the rate) sets it.
+func (d *Dir) PrincipalSetLimits(id, rate, burst string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal, exists := src.Principals[id]
+	if !exists || principal == nil {
+		return fmt.Errorf("principal %q does not exist", id)
+	}
+	switch rate {
+	case "default":
+		principal.Limits = nil
+	case "unlimited":
+		principal.Limits = &policysrc.Limits{Unlimited: true}
+	default:
+		perSecond, err := strconv.Atoi(rate)
+		if err != nil || perSecond < 1 {
+			return fmt.Errorf("the rate is requests per second, a positive number, \"unlimited\" or \"default\"")
+		}
+		allowed := perSecond * 2
+		if burst != "" {
+			if allowed, err = strconv.Atoi(burst); err != nil {
+				return fmt.Errorf("the burst is a number of requests")
+			}
+		}
+		kept := policysrc.Limits{}
+		if principal.Limits != nil && !principal.Limits.Unlimited {
+			kept = *principal.Limits
+		}
+		kept.RatePerSecond, kept.Burst = perSecond, allowed
+		principal.Limits = &kept
+	}
+	return d.SaveSource(src)
+}
+
+// PrincipalSetChainLimits sets how much one admitted request of the principal may set off
+// inside this instance: the calls derived from it in all, and how deep they nest. A depth left
+// empty keeps what the principal has. The rate of the principal is left as it is.
+func (d *Dir) PrincipalSetChainLimits(id, calls, depth string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal, exists := src.Principals[id]
+	if !exists || principal == nil {
+		return fmt.Errorf("principal %q does not exist", id)
+	}
+	kept := policysrc.Limits{}
+	if principal.Limits != nil {
+		if principal.Limits.Unlimited {
+			return fmt.Errorf("principal %q is unlimited: set a rate first (\"limits %s default\" lifts the exemption)", id, id)
+		}
+		kept = *principal.Limits
+	}
+	var err2 error
+	if kept.ChainCalls, err2 = strconv.Atoi(calls); err2 != nil || kept.ChainCalls < 1 {
+		return fmt.Errorf("the calls are a positive number")
+	}
+	if depth != "" {
+		if kept.ChainDepth, err2 = strconv.Atoi(depth); err2 != nil || kept.ChainDepth < 1 {
+			return fmt.Errorf("the depth is a positive number")
+		}
+	}
+	principal.Limits = &kept
+	return d.SaveSource(src)
+}
+
 // PrincipalDisable disables a principal without forgetting it, or enables it
 // again with enable=true.
 func (d *Dir) PrincipalSetDisabled(id string, disabled bool) error {

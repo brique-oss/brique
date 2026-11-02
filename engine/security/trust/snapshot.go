@@ -60,7 +60,10 @@ type compiledPrincipal struct {
 	id     string
 	kind   string
 	status string
-	scopes bitset
+	// content is the weakest content mode accepted from the principal.
+	content string
+	limits  *Limits
+	scopes  bitset
 	// actors is non-nil when the principal declares actors; it maps an actor id
 	// (or DefaultActor) to its scopes.
 	actors map[string]bitset
@@ -200,7 +203,7 @@ func Compile(decoded *DecodeResult, catalog Catalog) (*Snapshot, error) {
 	}
 	for index := range policy.Principals {
 		source := &policy.Principals[index]
-		principal := compiledPrincipal{id: source.PrincipalID, kind: source.Kind, status: source.Status, scopes: make(bitset, words)}
+		principal := compiledPrincipal{id: source.PrincipalID, kind: source.Kind, status: source.Status, content: source.ContentMode, limits: source.Limits, scopes: make(bitset, words)}
 		for _, scopeID := range source.ScopeIDs {
 			principal.scopes.set(scopeIndexes[scopeID])
 		}
@@ -283,6 +286,93 @@ func (snapshot *Snapshot) HasLocalPrincipal(principalID string) bool {
 		}
 	}
 	return false
+}
+
+// MinimumContentMode is the weakest content mode this policy accepts from the admitted
+// principal: ContentModeHPKE when the content must be sealed, ContentModeClear otherwise.
+func (snapshot *Snapshot) MinimumContentMode(admission Admission) string {
+	principal, ok := snapshot.admittedPrincipal(admission)
+	if !ok || principal.content != ContentModeHPKE {
+		return ContentModeClear
+	}
+	return ContentModeHPKE
+}
+
+// RateLimit is how fast the principal may make this instance work: what its policy sets, else
+// the default for its kind. limited is false only when the policy exempts it explicitly.
+func (snapshot *Snapshot) RateLimit(principalID string) (perSecond, burst int, limited bool) {
+	for index := range snapshot.principals {
+		principal := &snapshot.principals[index]
+		if principal.id != principalID {
+			continue
+		}
+		switch {
+		case principal.limits != nil && principal.limits.Unlimited:
+			return 0, 0, false
+		case principal.limits != nil && principal.limits.RatePerSecond > 0:
+			return principal.limits.RatePerSecond, principal.limits.Burst, true
+		case principal.kind == PrincipalKindLocal:
+			return DefaultLocalRatePerSecond, DefaultLocalBurst, true
+		}
+		break
+	}
+	return DefaultNetworkRatePerSecond, DefaultNetworkBurst, true
+}
+
+// ChainLimits is how much one admitted request of the principal may set off inside this
+// instance: the calls derived from it in all, and their depth. limited is false only when the
+// policy exempts the principal explicitly.
+func (snapshot *Snapshot) ChainLimits(principalID string) (calls, depth int, limited bool) {
+	calls, depth = DefaultChainCalls, DefaultChainDepth
+	for index := range snapshot.principals {
+		principal := &snapshot.principals[index]
+		if principal.id != principalID || principal.limits == nil {
+			continue
+		}
+		if principal.limits.Unlimited {
+			return 0, 0, false
+		}
+		if principal.limits.ChainCalls > 0 {
+			calls = principal.limits.ChainCalls
+		}
+		if principal.limits.ChainDepth > 0 {
+			depth = principal.limits.ChainDepth
+		}
+	}
+	return calls, depth, true
+}
+
+// PeerRequiresSeal reports whether the policy requires content to and from this principal to
+// be sealed.
+func (snapshot *Snapshot) PeerRequiresSeal(principalID string) bool {
+	for index := range snapshot.principals {
+		if snapshot.principals[index].id == principalID {
+			return snapshot.principals[index].content == ContentModeHPKE
+		}
+	}
+	return false
+}
+
+// SealingKey is the key to seal a message to the principal with: its active key that is valid
+// at the given time and was valid longest. ok is false when it has none.
+func (snapshot *Snapshot) SealingKey(principalID string, at time.Time) (keyID string, publicKey ed25519.PublicKey, ok bool) {
+	var best keyBinding
+	for id, binding := range snapshot.keys {
+		principal := snapshot.principals[binding.principalIndex]
+		if principal.id != principalID || principal.status != "active" || binding.status != "active" {
+			continue
+		}
+		if (!binding.notBefore.IsZero() && at.Before(binding.notBefore)) || (!binding.notAfter.IsZero() && !at.Before(binding.notAfter)) {
+			continue
+		}
+		if !ok || binding.notBefore.Before(best.notBefore) || (binding.notBefore.Equal(best.notBefore) && id < keyID) {
+			keyID, best, ok = id, binding, true
+		}
+	}
+	if !ok {
+		return "", nil, false
+	}
+	return keyID, append(ed25519.PublicKey(nil), best.publicKey...), true
 }
 
 func (snapshot *Snapshot) Authenticate(keyID string, at time.Time) (Admission, error) {

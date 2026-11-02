@@ -82,7 +82,47 @@ type Principal struct {
 	// actor named in the signed request. An absent actor uses the "default"
 	// entry; an absent entry or an unknown actor is refused.
 	Actors []ActorBinding `json:"actors,omitempty"`
+	// ContentMode is the weakest way this principal's messages may reach the engine: absent or
+	// "clear" accepts any, "hpke" accepts only content sealed to this instance's key. Responses
+	// to the principal are sealed whenever its request was.
+	ContentMode string `json:"content_mode,omitempty"`
+	// Limits bounds how fast the principal can make this instance work. Absent: the defaults
+	// below apply, so that no caller is unbounded unless the policy says so.
+	Limits *Limits `json:"limits,omitempty"`
 }
+
+// Limits is a sustained rate of requests and the burst allowed above it, or an explicit
+// exemption.
+type Limits struct {
+	// The numbers are strings in the signed policy, which has no JSON numbers.
+	RatePerSecond int `json:"rate_per_second,omitempty,string"`
+	Burst         int `json:"burst,omitempty,string"`
+	// ChainCalls and ChainDepth bound what one admitted request may set off inside this
+	// instance: the calls derived from it in all, and how deep they nest. Zero: the default.
+	ChainCalls int  `json:"chain_calls,omitempty,string"`
+	ChainDepth int  `json:"chain_depth,omitempty,string"`
+	Unlimited  bool `json:"unlimited,omitempty"`
+}
+
+// Limits applied to a principal whose policy sets none.
+const (
+	DefaultNetworkRatePerSecond = 20
+	DefaultNetworkBurst         = 40
+	DefaultLocalRatePerSecond   = 100
+	DefaultLocalBurst           = 200
+	DefaultChainCalls           = 256
+	DefaultChainDepth           = 16
+	MaxChainCalls               = 100000
+	MaxChainDepth               = 1000
+	MaxRatePerSecond            = 100000
+	MaxBurst                    = 1000000
+)
+
+// Content modes a principal can require. They are the wire content modes.
+const (
+	ContentModeClear = "clear"
+	ContentModeHPKE  = "hpke"
+)
 
 // A local principal is an internal component the engine itself launched (a
 // wrapper) and authenticates by its channel, not by a key (model §8.2). Its id is

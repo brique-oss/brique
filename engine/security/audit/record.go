@@ -40,6 +40,10 @@ const (
 	ReasonResourceDenied     = "resource_denied"
 	ReasonActorDenied        = "actor_denied"
 	ReasonEgressDenied       = "egress_denied"
+	ReasonEncryptionRequired = "encryption_required"
+	ReasonDecryptFailed      = "decrypt_failed"
+	ReasonRateLimited        = "rate_limited"
+	ReasonChainBudget        = "chain_budget"
 	ReasonWrapperSecret      = "wrapper_secret_invalid"
 	ReasonPayloadLimit       = "payload_limit"
 	ReasonUnsupported        = "unsupported"
@@ -62,6 +66,7 @@ var reasons = map[string]bool{
 	ReasonReplay: true, ReasonAudienceMismatch: true, ReasonBadSignature: true, ReasonCapabilityDenied: true,
 	ReasonResourceDenied: true, ReasonActorDenied: true, ReasonEgressDenied: true, ReasonWrapperSecret: true,
 	ReasonPayloadLimit: true, ReasonUnsupported: true, ReasonQuota: true, ReasonInternal: true,
+	ReasonEncryptionRequired: true, ReasonDecryptFailed: true, ReasonRateLimited: true, ReasonChainBudget: true,
 }
 
 // ValidReason reports whether code belongs to the closed set.

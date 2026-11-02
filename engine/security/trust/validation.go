@@ -175,6 +175,12 @@ func validatePrincipal(version string, principal *Principal, scopes map[string]s
 	if principal.Kind == PrincipalKindLocal && version == PolicyFormatVersion {
 		return fmt.Errorf("principal %q: local principals require format version %s", principal.PrincipalID, PolicyFormatVersionV2)
 	}
+	if principal.ContentMode != "" && (!oneOf(principal.ContentMode, ContentModeClear, ContentModeHPKE) || principal.Kind == PrincipalKindLocal) {
+		return fmt.Errorf("principal %q has invalid content_mode", principal.PrincipalID)
+	}
+	if err := ValidateLimits(principal.Limits); err != nil {
+		return fmt.Errorf("principal %q: %w", principal.PrincipalID, err)
+	}
 	if !oneOf(principal.Status, "active", "disabled", "revoked") {
 		return fmt.Errorf("principal %q has invalid status %q", principal.PrincipalID, principal.Status)
 	}
@@ -534,6 +540,29 @@ func validateExternalPeers(policy *Policy) error {
 			return fmt.Errorf("duplicate external peer %q", peer.PrincipalID)
 		}
 		seen[peer.PrincipalID] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateLimits checks the request budget of a principal: unlimited alone, or any of a rate
+// with a burst of at least that rate, a number of chain calls and a chain depth.
+func ValidateLimits(limits *Limits) error {
+	if limits == nil {
+		return nil
+	}
+	rated := limits.RatePerSecond != 0 || limits.Burst != 0
+	chained := limits.ChainCalls != 0 || limits.ChainDepth != 0
+	switch {
+	case limits.Unlimited && (rated || chained):
+		return fmt.Errorf("invalid limits: unlimited stands alone")
+	case limits.Unlimited:
+		return nil
+	case !rated && !chained:
+		return fmt.Errorf("invalid limits: empty")
+	case rated && (limits.RatePerSecond < 1 || limits.RatePerSecond > MaxRatePerSecond || limits.Burst < limits.RatePerSecond || limits.Burst > MaxBurst):
+		return fmt.Errorf("invalid limits: a rate_per_second from 1 and a burst of at least that rate")
+	case limits.ChainCalls < 0 || limits.ChainCalls > MaxChainCalls || limits.ChainDepth < 0 || limits.ChainDepth > MaxChainDepth:
+		return fmt.Errorf("invalid limits: chain_calls and chain_depth are positive and bounded")
 	}
 	return nil
 }

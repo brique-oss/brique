@@ -36,6 +36,8 @@ const (
 	AlgorithmEd25519                        = "ed25519"
 	ExternalMessageV1Domain                 = "BRIQUE-EXTERNAL-MESSAGE-SIGNATURE-V1\x00"
 	MaxSigningInputBytes                    = (16 << 10) + len(ExternalMessageV1Domain)
+	// MaxSealedBytes bounds what a provider is asked to open: the largest payload and its overhead.
+	MaxSealedBytes = (4 << 20) + 64
 )
 
 type ErrorKind string
@@ -78,6 +80,18 @@ type Signer interface {
 	Sign(context.Context, SigningPurpose, []byte) ([]byte, error)
 	Health(context.Context) error
 	Close() error
+}
+
+// Opener is the optional capability of a signer whose key can also open content sealed to
+// its public key (security/seal). The private key never leaves the provider: only the
+// plaintext does.
+type Opener interface {
+	Open(ctx context.Context, binding, sealed []byte) ([]byte, error)
+}
+
+// OpenerBackend is the provider side of Opener.
+type OpenerBackend interface {
+	Open(ctx context.Context, binding, sealed []byte) ([]byte, error)
 }
 
 // Backend is a provider implementation point, not an engine-facing signing
@@ -162,6 +176,27 @@ func (signer *boundedSigner) Sign(ctx context.Context, purpose SigningPurpose, m
 		return nil
 	})
 	return signature, err
+}
+
+// Open opens content sealed to this signer's public key. It is bounded exactly like signing.
+func (signer *boundedSigner) Open(ctx context.Context, binding, sealed []byte) ([]byte, error) {
+	backend, ok := signer.backend.(OpenerBackend)
+	if !ok || len(sealed) == 0 || len(sealed) > MaxSealedBytes || len(binding) > MaxSigningInputBytes {
+		return nil, &Error{Kind: ErrorConfiguration}
+	}
+	if err := liveDeadline(ctx); err != nil {
+		return nil, err
+	}
+	var plaintext []byte
+	err := signer.execute(ctx, func() error {
+		opened, providerErr := backend.Open(ctx, binding, sealed)
+		if providerErr != nil {
+			return &Error{Kind: ErrorInternal}
+		}
+		plaintext = opened
+		return nil
+	})
+	return plaintext, err
 }
 
 func (signer *boundedSigner) Health(ctx context.Context) error {

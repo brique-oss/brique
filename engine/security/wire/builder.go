@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"time"
 
+	"brique_engine/security/seal"
 	"brique_engine/security/signer"
 	"brique_engine/security/trust"
 )
@@ -35,7 +36,15 @@ const (
 	ResponsePhaseFinal   = "final"
 )
 
+// Recipient is the key a message is sealed to: the identifier it is known by and its public key.
+type Recipient struct {
+	KeyID     string
+	PublicKey ed25519.PublicKey
+}
+
 type ClearIntention struct {
+	// Seal, when set, encrypts the payload to this recipient (content mode hpke).
+	Seal *Recipient
 	// ActorID is optional; when set it must be a canonical identifier.
 	ActorID            string
 	AudienceInstanceID string
@@ -46,6 +55,8 @@ type ClearIntention struct {
 }
 
 type ClearResponse struct {
+	// Seal, when set, encrypts the payload to this recipient (content mode hpke).
+	Seal               *Recipient
 	AudienceInstanceID string
 	IntentionID        string
 	IssuedAt           time.Time
@@ -84,6 +95,7 @@ func BuildClearIntention(ctx context.Context, messageSigner signer.Signer, reque
 		purpose:     PurposeIntention,
 		payload:     request.Payload,
 		actorID:     request.ActorID,
+		seal:        request.Seal,
 	})
 }
 
@@ -101,6 +113,7 @@ func BuildClearResponse(ctx context.Context, messageSigner signer.Signer, respon
 		requestHash:      response.RequestHash,
 		responseSequence: strconv.FormatUint(response.Sequence, 10),
 		responsePhase:    response.Phase,
+		seal:             response.Seal,
 	})
 }
 
@@ -115,6 +128,7 @@ type clearBuild struct {
 	responseSequence string
 	responsePhase    string
 	actorID          string
+	seal             *Recipient
 }
 
 func buildClear(ctx context.Context, messageSigner signer.Signer, request clearBuild) (*BuiltEnvelope, error) {
@@ -128,17 +142,35 @@ func buildClear(ctx context.Context, messageSigner signer.Signer, request clearB
 	// Own the transported bytes before hashing. The caller may reuse its input
 	// immediately after this function returns without aliasing the result.
 	payload := append([]byte(nil), request.payload...)
+	mode, recipientKeyID := ContentModeClear, ""
+	if request.seal != nil {
+		keyID, err := trust.SigningKeyID(request.seal.PublicKey)
+		if err != nil || keyID != request.seal.KeyID {
+			return nil, ErrConstruction
+		}
+		mode, recipientKeyID = ContentModeHPKE, keyID
+	}
 	protected := Protected{
 		Format: Format, Version: Version, Purpose: request.purpose,
 		AudienceInstanceID: request.audience, KeyID: descriptor.KeyID,
 		IssuedAtMS:  strconv.FormatInt(request.issuedAt.UnixMilli(), 10),
 		ExpiresAtMS: strconv.FormatInt(request.expiresAt.UnixMilli(), 10),
 		IntentionID: request.intentionID,
-		ContentMode: ContentModeClear, PayloadEncoding: "base64url",
-		PayloadSize: strconv.Itoa(len(payload)), PayloadHash: PayloadHash(payload),
+		ContentMode: mode, RecipientKeyID: recipientKeyID, PayloadEncoding: "base64url",
 		RequestHash: request.requestHash, ResponseSequence: request.responseSequence, ResponsePhase: request.responsePhase,
 		ActorID: request.actorID,
 	}
+	if request.seal != nil {
+		binding, err := sealBinding(protected)
+		if err != nil {
+			return nil, ErrConstruction
+		}
+		payload, err = seal.Seal(request.seal.PublicKey, binding, payload)
+		if err != nil || len(payload) > MaxPayloadBytes {
+			return nil, ErrConstruction
+		}
+	}
+	protected.PayloadSize, protected.PayloadHash = strconv.Itoa(len(payload)), PayloadHash(payload)
 	// Using issuedAt as the construction reference checks the fixed fields,
 	// canonical times and lifetime without coupling deterministic construction
 	// to a second wall-clock read. Receiver freshness is checked independently.

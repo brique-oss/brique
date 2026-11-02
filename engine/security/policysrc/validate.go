@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"brique_engine/security/trust"
 )
 
 const (
@@ -183,6 +185,17 @@ func validatePrincipal(id string, p *Principal, seenKeys map[string]string) erro
 	}
 	if p == nil {
 		return fmt.Errorf("%s: is null", where)
+	}
+	if p.Limits != nil {
+		if err := trust.ValidateLimits(&trust.Limits{RatePerSecond: p.Limits.RatePerSecond, Burst: p.Limits.Burst, ChainCalls: p.Limits.ChainCalls, ChainDepth: p.Limits.ChainDepth, Unlimited: p.Limits.Unlimited}); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+	}
+	if p.Encryption != "" && p.Encryption != EncryptionRequired && p.Encryption != EncryptionNone {
+		return fmt.Errorf("%s: encryption is %q or %q", where, EncryptionRequired, EncryptionNone)
+	}
+	if p.Encryption == EncryptionRequired && p.Kind == "local" {
+		return fmt.Errorf("%s: a local principal does not use the network, so it has no encryption", where)
 	}
 	switch p.Kind {
 	case "instance", "service", "user":

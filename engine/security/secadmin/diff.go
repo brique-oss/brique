@@ -36,6 +36,12 @@ func accessLines(policy trust.Policy) map[string][]string {
 	out := make(map[string][]string, len(policy.Principals))
 	for _, principal := range policy.Principals {
 		lines := []string{fmt.Sprintf("principal kind=%s status=%s", principal.Kind, principal.Status)}
+		if limits := principal.Limits; limits != nil {
+			lines = append(lines, fmt.Sprintf("limits unlimited=%t rate=%d burst=%d chain=%d/%d", limits.Unlimited, limits.RatePerSecond, limits.Burst, limits.ChainCalls, limits.ChainDepth))
+		}
+		if principal.ContentMode == trust.ContentModeHPKE {
+			lines = append(lines, "content sealed")
+		}
 		for _, key := range principal.SigningKeys {
 			lines = append(lines, fmt.Sprintf("key %s %s", key.KeyID, key.Status))
 		}

@@ -131,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "brique-sec : "+format+"\n", values...)
 		return 1
 	}
-	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "audience", "interface", "target", "host", "addr", "days")
+	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "encryption", "depth", "audience", "interface", "target", "host", "addr", "days")
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -360,7 +360,7 @@ func reasonFR(reason string) string {
 
 func principalCommand(dir *secadmin.Dir, args []string, global options, stdout io.Writer, fail func(string, ...any) int) int {
 	if len(args) == 0 {
-		return fail("usage : principal add|disable|enable|remove|list")
+		return fail("usage : principal add|encryption|limits|disable|enable|remove|list")
 	}
 	action, rest := args[0], args[1:]
 	need := func(count int) bool { return len(rest) == count }
@@ -371,6 +371,27 @@ func principalCommand(dir *secadmin.Dir, args []string, global options, stdout i
 			return fail("usage : principal add <id> --kind <genre> --key <clé publique>")
 		}
 		err = dir.PrincipalAdd(rest[0], global.one("kind"), global.one("key"))
+		if err == nil && global.has("encryption") {
+			err = dir.PrincipalSetEncryption(rest[0], global.one("encryption"))
+		}
+	case "limits":
+		if len(rest) < 2 || len(rest) > 3 {
+			return fail("usage : principal limits <id> default|unlimited|<requêtes par seconde> [<rafale>]  |  principal limits <id> chain <appels> [--depth <profondeur>]")
+		}
+		burst := ""
+		if len(rest) == 3 {
+			burst = rest[2]
+		}
+		if rest[1] == "chain" {
+			err = dir.PrincipalSetChainLimits(rest[0], burst, global.one("depth"))
+		} else {
+			err = dir.PrincipalSetLimits(rest[0], rest[1], burst)
+		}
+	case "encryption":
+		if !need(2) {
+			return fail("usage : principal encryption <id> required|none|default")
+		}
+		err = dir.PrincipalSetEncryption(rest[0], rest[1])
 	case "disable", "enable":
 		if !need(1) {
 			return fail("usage : principal %s <id>", action)
@@ -397,7 +418,11 @@ func principalCommand(dir *secadmin.Dir, args []string, global options, stdout i
 			if p.Disabled {
 				state = "désactivé"
 			}
-			fmt.Fprintf(stdout, "%-24s %-9s %-10s %d clé(s), %d droit(s), %d acteur(s)\n", id, p.Kind, state, len(p.Keys), len(p.Grants), len(p.Actors))
+			sealing := "clair"
+			if p.Sealed() {
+				sealing = "chiffré"
+			}
+			fmt.Fprintf(stdout, "%-24s %-9s %-10s %-8s %d clé(s), %d droit(s), %d acteur(s)\n", id, p.Kind, state, sealing, len(p.Keys), len(p.Grants), len(p.Actors))
 		}
 		return 0
 	default:
