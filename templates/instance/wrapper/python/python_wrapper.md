@@ -468,13 +468,14 @@ The wrapper must support:
 
 It must preserve the required ordering rule:
 
-* ordering is guaranteed per addressed binding or per matter
-* unrelated bindings may execute in parallel
+* ordering is guaranteed per matter
+* a capacity runs its calls in parallel, and one call may wait for another call of the same capacity
+* a capacity declared serial runs one call at a time, in arrival order
 
 This means the scheduler must be capable of:
 
-* parallel execution across unrelated work
-* serialized execution for the same addressed binding or matter when required by the ordering rule
+* parallel execution of unrelated work, and of the calls of one capacity
+* serialized execution for one matter, and for a capacity declared serial
 
 Possible implementation approaches include:
 
@@ -685,7 +686,7 @@ However, the following must hold:
 * the communication loop must stay responsive
 * waiting on outbound responses must not block the main communication loop
 * parallel work must respect concurrency limits
-* ordering must be preserved per addressed binding or per matter
+* ordering must be preserved per matter, and per capacity declared serial
 
 For existing blocking codebases, a hybrid model is often the safest membrane design:
 
@@ -808,8 +809,24 @@ The wrapper does not invent its identity dynamically.
 
 ### 10.6 Ordering invariant
 
-Ordering is guaranteed per addressed binding or per matter.
-Unrelated bindings may execute in parallel.
+Ordering is guaranteed per matter. A capacity runs its calls in parallel unless it is declared serial.
+
+A serial capacity runs one call at a time, in arrival order. In Python it is declared with the
+`serial` decorator of the wrapper library:
+
+```python
+from wrapper import serial
+
+@serial
+async def reserve_seat(params): ...
+```
+
+A serial capacity must not wait for another call of itself: that call would wait for the first to
+end. Calls it makes to other capacities are not affected.
+
+A call that waits for the answer to a call it made (`emit_and_wait`) gives its execution slot back
+while it waits (`WorkScheduler.yielding`) and takes it back in turn. Without it, as many calls as
+there are slots, each waiting for a call that needs a slot itself, would wait for each other for ever.
 
 ### 10.7 Matter-visibility invariant
 

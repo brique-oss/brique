@@ -33,7 +33,7 @@ It mirrors the Python wrapper's protocol and execution guarantees:
   - dispatches wrapper-backed user capacities from a static registry
   - dispatches wrapper-backed matter reads, writes and subscriptions
   - emits fire-and-forget or awaited outbound intentions with correlation
-  - bounds global work while preserving FIFO order per binding or matter
+  - bounds global work while preserving FIFO order per matter and per serial capacity
   - returns Brique `response` envelopes
 
 ## Layout
@@ -105,7 +105,7 @@ handle-free local traffic.
 - current Brique response/status and structured-error envelopes
 - `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
 - responses and `wrapper_stop` outside the bounded work scheduler
-- FIFO ordering per capacity or matter with unrelated parallelism
+- FIFO ordering per matter; capacities run their calls in parallel unless a binding sets `serial = true`, which runs one call at a time in arrival order
 - strict binding validation before connection
 - 4 MiB control-message limit, fragmented WebSocket reads and bounded startup retries
 - matter commit before notification, relative notification origins and owner-checked subscriptions

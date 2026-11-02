@@ -475,7 +475,7 @@ only for independent local work that is not derived from a capacity call.
 
 The following apply regardless of host language.
 
-**Ordering** — guaranteed per addressed binding or per matter. Unrelated bindings may execute in parallel.
+**Ordering** — guaranteed per matter: the work on one matter runs in arrival order. A capacity runs its calls in parallel, as many at once as the wrapper's concurrency allows, and a call may wait for another call of the same capacity. A capacity declared **serial** runs one call at a time, in arrival order; use it for a capacity that cannot run two calls at once and that never waits on another call of itself, which would wait for its own turn.
 
 **Concurrency** — the wrapper must remain responsive, execute in parallel, and handle multiple requests.
 
@@ -584,7 +584,7 @@ Declare the wrapper in the owning context's `context.json`:
 }
 ```
 
-For the Python, Go and C++ runtimes, `BRIQUE_MAX_CONCURRENCY` and `BRIQUE_QUEUE_LIMIT` are positive integers with defaults `16` and `256`. They bound globally executing engine-routed capacity/matter work and pending work. Responses and `wrapper_stop` bypass that queue so a saturated wrapper can still make progress. Work for one addressed binding remains ordered, while unrelated bindings may run in parallel. All three consume `BRIQUE_TRANSIT_MAX_BYTES` and `BRIQUE_TRANSIT_TTL_SECONDS`: they cap one serialized `@file` payload and the lifetime of abandoned references. Above the file limit the runtime uses a transient Matter; durable data remains an explicit semantic Matter.
+For the Python, Go and C++ runtimes, `BRIQUE_MAX_CONCURRENCY` and `BRIQUE_QUEUE_LIMIT` are positive integers with defaults `16` and `256`. They bound globally executing engine-routed capacity/matter work and pending work. Responses and `wrapper_stop` bypass that queue so a saturated wrapper can still make progress. Work on one matter remains ordered. Calls to a capacity run in parallel unless the capacity is declared serial, in which case they run one at a time in arrival order. A call that waits for the answer to a call it made gives its execution slot back for the time it waits, and takes it back in turn, so that capacities waiting for each other can never use up every slot. All three consume `BRIQUE_TRANSIT_MAX_BYTES` and `BRIQUE_TRANSIT_TTL_SECONDS`: they cap one serialized `@file` payload and the lifetime of abandoned references. Above the file limit the runtime uses a transient Matter; durable data remains an explicit semantic Matter.
 
 ### 15.2 `bindings.py` Is a Pure Import File — Never Business Logic
 

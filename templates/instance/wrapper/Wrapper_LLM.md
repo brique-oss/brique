@@ -258,7 +258,7 @@ Model as an outbound intention to a trace-writing capability (`trace_kind:"user"
 
 - One wrapper runtime process per wrapper name + boundary context. No per-subcontext process.
 - Every binding resolves to a live symbol — no dynamic runtime registration (`register_capacity(...)` doesn't exist; bindings load once from `bindings.py` at bootstrap).
-- Ordering guaranteed per addressed binding / per matter. Unrelated bindings run in parallel.
+- Ordering is guaranteed per matter. A capacity runs its calls in parallel, and may wait for another call of itself; declare it serial (`@serial` in Python, `Serial: true` in Go, `serial = true` in C++) to run one call at a time, in arrival order.
 - Matter writes: no intermediate invalid state exposed — visible only as completed.
 - Communication loop must stay responsive; never block it on outbound waits.
 - Excess concurrent work queues; never breaks the runtime.

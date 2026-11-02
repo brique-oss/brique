@@ -116,7 +116,7 @@ No external dependencies beyond the standard library and `golang.org/x/net/webso
 
 - current Brique `response.status` and structured-error contract
 - `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
-- FIFO ordering per addressed capacity or matter, with parallel unrelated bindings
+- FIFO ordering per matter; capacities run their calls in parallel unless a binding sets `Serial: true`, which runs one call at a time in arrival order
 - responses and `wrapper_stop` outside the work queue
 - strict binding validation before connection
 - 4 MiB control-message ceiling and five bounded connection attempts
