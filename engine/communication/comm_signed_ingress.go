@@ -17,9 +17,11 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/junction"
 	"brique_engine/security/audit"
+	"brique_engine/security/limits"
 	"brique_engine/security/refusal"
 	"brique_engine/security/replay"
 	securityruntime "brique_engine/security/runtime"
+	"brique_engine/security/trust"
 	"brique_engine/security/wire"
 	"brique_engine/shared"
 )
@@ -51,9 +53,13 @@ func (l *CommLoop) admitSignedExternalEnvelope(item signedExternalIngressItem) {
 		l.traceSignedAdmissionReject("authentication_failed")
 		return
 	}
+	overRate := verified.Protected().Purpose == wire.PurposeIntention && !l.withinRate(verified.Admission())
+	if !l.openSigned(verified) {
+		return
+	}
 	switch verified.Protected().Purpose {
 	case wire.PurposeIntention:
-		l.admitVerifiedExternalIntention(verified)
+		l.admitVerifiedExternalIntention(verified, overRate)
 	case wire.PurposeResponse:
 		l.admitSignedExternalResponse(verified)
 	default:
@@ -77,10 +83,52 @@ func (l *CommLoop) admitSignedExternalIntention(item signedExternalIngressItem) 
 		l.traceSignedAdmissionReject("authentication_failed")
 		return
 	}
-	l.admitVerifiedExternalIntention(verified)
+	overRate := !l.withinRate(verified.Admission())
+	if !l.openSigned(verified) {
+		return
+	}
+	l.admitVerifiedExternalIntention(verified, overRate)
 }
 
-func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified) {
+// withinRate takes one request from the budget of the authenticated principal and reports
+// whether there was one. It decides nothing else: what to do with a request over budget is
+// up to the admission of the intention.
+func (l *CommLoop) withinRate(admission trust.Admission) bool {
+	perSecond, burst, limited := l.securityRuntime().Trust().Active().RateLimit(admission.PrincipalID())
+	return !limited || l.rateLimiter().Allow(admission.PrincipalID(), limits.Rate{PerSecond: perSecond, Burst: burst})
+}
+
+// openSigned enforces the content mode the policy requires from the sender, then decrypts
+// sealed content with this instance's key. It runs after the signature is verified and before
+// anything reads the payload; a refusal is recorded against the authenticated principal and
+// the sender learns nothing.
+func (l *CommLoop) openSigned(verified *wire.Verified) bool {
+	securityRuntime := l.securityRuntime()
+	admission := verified.Admission()
+	refuse := func(reason, trace string) bool {
+		l.auditRecorder().Record(audit.Record{
+			Channel: "wire", Principal: admission.PrincipalID(), KeyID: admission.SigningKeyID(),
+			PolicyRevision: admission.PolicyRevision(), PolicyHash: admission.PolicyHash(),
+			Layer: audit.LayerAuthentication, Reason: reason,
+		})
+		l.traceSignedAdmissionReject(trace)
+		return false
+	}
+	if securityRuntime.Trust().Active().MinimumContentMode(admission) == trust.ContentModeHPKE && verified.Protected().ContentMode != wire.ContentModeHPKE {
+		return refuse(audit.ReasonEncryptionRequired, "encryption_required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), signedExternalSignTimeout)
+	defer cancel()
+	if err := verified.Open(ctx, securityRuntime.Signers()); err != nil {
+		return refuse(audit.ReasonDecryptFailed, "decrypt_failed")
+	}
+	return true
+}
+
+// admitVerifiedExternalIntention admits one authenticated intention. overRate says its sender
+// went over the request budget its policy gives: the request is then not run, and a caller that
+// waits for an answer is told so with the answer a saturated instance gives.
+func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified, overRate bool) {
 	securityRuntime := l.securityRuntime()
 	if securityRuntime == nil || securityRuntime.Replay() == nil {
 		l.traceSignedAdmissionReject("security_runtime_unavailable")
@@ -99,6 +147,13 @@ func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified) {
 	}
 	l.recordProvenance(admission)
 	target := string(message.Intention.To.Context)
+	if overRate {
+		admission.RecordDenial(l.auditRecorder(), "wire", message.Intention, audit.LayerTransport, audit.ReasonRateLimited)
+		l.sendToTrace(message, circulation.ValueTraceCommReject, "rate_limited", "principal request rate exceeded")
+		if !message.Intention.AwaitResponse {
+			return // nobody waits: dropping costs the least
+		}
+	}
 	capabilityDenied := !admission.AuthorizeCapability(securityRuntime.Trust(), target, message.Intention.To.Type, message.Intention.To.Cap)
 	if capabilityDenied {
 		admission.RecordCapabilityDenial(l.auditRecorder(), securityRuntime.Trust(), "wire", message.Intention)
@@ -148,6 +203,12 @@ func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified) {
 	if err := securityRuntime.Replay().MarkDispatched(key, admission.RequestHash()); err != nil {
 		_ = securityRuntime.Replay().MarkOutcomeUnknown(key, admission.RequestHash())
 		l.sendToTrace(message, circulation.ValueTraceCommReject, "replay_unavailable", "durable dispatch transition failed")
+		return
+	}
+	if overRate {
+		if !l.rejectAdmittedExternal(delivery, message, "request rate exceeded, retry later") {
+			_ = securityRuntime.Replay().MarkOutcomeUnknown(key, admission.RequestHash())
+		}
 		return
 	}
 	if capabilityDenied {

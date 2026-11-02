@@ -42,7 +42,7 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		return false
 	}
 	securityRuntime := l.securityRuntime()
-	if securityRuntime == nil || reservation.ContentMode() != wire.ContentModeClear {
+	if securityRuntime == nil || (reservation.ContentMode() != wire.ContentModeClear && reservation.ContentMode() != wire.ContentModeHPKE) {
 		l.abortSignedExternal(message, reservation, "external response security context is unavailable")
 		return false
 	}
@@ -60,6 +60,12 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		return false
 	}
 	now := l.externalReplyTime().UTC()
+	// A request that came sealed is answered sealed, to the key that signed it.
+	var sealTo *wire.Recipient
+	if reservation.ContentMode() == wire.ContentModeHPKE {
+		keyID, publicKey := reservation.SealTo()
+		sealTo = &wire.Recipient{KeyID: keyID, PublicKey: publicKey}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), signedExternalSignTimeout)
 	built, err := wire.BuildClearResponse(ctx, securityRuntime.Signers().Active(), wire.ClearResponse{
 		AudienceInstanceID: peer.AudienceInstanceID,
@@ -70,6 +76,7 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		Sequence:           reservation.Sequence(),
 		Phase:              reservation.Phase(),
 		Payload:            payload,
+		Seal:               sealTo,
 	})
 	cancel()
 	if err != nil {

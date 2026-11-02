@@ -84,6 +84,19 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 		return
 	}
 	now := l.externalReplyTime().UTC()
+	// The peer's policy decides: a peer that requires sealed content is sealed to, with its
+	// key from the signed policy, and its answer must come back sealed too.
+	var sealTo *wire.Recipient
+	responseMode := wire.ContentModeClear
+	if securityRuntime.Trust().Active().PeerRequiresSeal(principalID) {
+		keyID, publicKey, ok := securityRuntime.Trust().Active().SealingKey(principalID, now)
+		if !ok {
+			l.failSignedExternalIntention(message, "signed_external_no_sealing_key", "external peer has no active key to seal to")
+			return
+		}
+		sealTo = &wire.Recipient{KeyID: keyID, PublicKey: publicKey}
+		responseMode = wire.ContentModeHPKE
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), signedExternalSignTimeout)
 	built, err := wire.BuildClearIntention(ctx, securityRuntime.Signers().Active(), wire.ClearIntention{
 		ActorID:            actor,
@@ -92,6 +105,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 		IssuedAt:           now,
 		ExpiresAt:          now.Add(wire.MaxLifetime),
 		Payload:            payload,
+		Seal:               sealTo,
 	})
 	cancel()
 	if err != nil {
@@ -106,7 +120,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 			RequestHash:         requestHash,
 			ExpectedPrincipalID: principalID,
 			Origin:              origin,
-			MinimumContentMode:  wire.ContentModeClear,
+			MinimumContentMode:  responseMode,
 			SilenceTimeout:      pendingExternalSilence,
 			AbsoluteDeadline:    now.Add(pendingExternalMaximum),
 		}, now)

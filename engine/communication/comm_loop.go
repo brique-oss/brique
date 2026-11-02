@@ -48,6 +48,8 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
+	"brique_engine/security/limits"
+	"brique_engine/security/refusal"
 	"brique_engine/shared"
 )
 
@@ -75,6 +77,10 @@ type CommLoop struct {
 	ingress               chan IngressItem
 	signedExternalIngress chan signedExternalIngressItem
 
+	// limiter holds the request rate of every principal that calls this instance.
+	limiter     *limits.Limiter
+	limiterOnce sync.Once
+
 	// interfaceOutcomes decouples physical transport reporting from routing.
 	// Failures are rare, but processing them on a dedicated Comm goroutine
 	// prevents a driver WriteLoop from re-entering its own egress queue.
@@ -93,6 +99,12 @@ type CommLoop struct {
 	done    chan struct{}
 	once    sync.Once
 	wg      sync.WaitGroup
+}
+
+// rateLimiter is made on first use, so that a loop built any way always has one.
+func (l *CommLoop) rateLimiter() *limits.Limiter {
+	l.limiterOnce.Do(func() { l.limiter = limits.New(nil) })
+	return l.limiter
 }
 
 // NewCommLoop
@@ -961,7 +973,15 @@ func (l *CommLoop) handleInterfaceIngress(it IngressItem) {
 			l.sendToTrace(it.Msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
 				detail)
 			if errors.Is(err, junction.ErrDerivedCapabilityDenied) {
-				l.refuseDelegatedWrapperCall(it)
+				l.refuseDelegatedWrapperCall(it, refusal.CapabilityDenied(circulation.ValueOriginCommunication))
+			}
+			if errors.Is(err, junction.ErrChainBudget) {
+				// Not the canonical refusal: the wrapper is looping or fanning out, and it is told
+				// so, since nothing about the capacity is being hidden from it.
+				l.refuseDelegatedWrapperCall(it, &circulation.ResponseProblem{
+					Origin: circulation.ValueOriginCommunication, Code: circulation.ValueCodeUnavailable,
+					Message: "call chain budget exceeded",
+				})
 			}
 		}
 		return

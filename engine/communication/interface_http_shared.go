@@ -23,9 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 
 	"brique_engine/circulation"
+	"brique_engine/security/limits"
 	"brique_engine/security/wire"
 )
 
@@ -75,6 +78,7 @@ func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, re
 	if readLimit <= 0 || readLimit > wire.MaxEnvelopeBytes {
 		readLimit = wire.MaxEnvelopeBytes
 	}
+	byAddress := limits.New(nil)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -82,6 +86,12 @@ func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, re
 		}
 		defer r.Body.Close()
 
+		// Before the body is read and before the queue: a stranger with no key can still fill
+		// the queue every peer shares, so each address has a budget of its own.
+		if !byAddress.Allow(remoteBucket(r.RemoteAddr), limits.Rate{PerSecond: addressRatePerSecond, Burst: addressBurst}) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, readLimit)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -141,4 +151,31 @@ func reportInterfaceEgressOutcome(rt *InterfaceRuntime, msg circulation.Message,
 	if outcome.Err != nil && rt != nil && rt.ReportEgressOutcome != nil {
 		rt.ReportEgressOutcome(msg, outcome)
 	}
+}
+
+// The budget of one remote address on the signed listener. It is generous, because several
+// instances can share one address behind a gateway; it only has to stop a flood.
+const (
+	addressRatePerSecond = 200
+	addressBurst         = 400
+)
+
+// remoteBucket names the budget an address draws from: its host, and for IPv6 its /64, since
+// one machine owns a whole /64 and would otherwise get a fresh budget per address.
+func remoteBucket(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	address = address.Unmap()
+	if address.Is6() {
+		if prefix, err := address.Prefix(64); err == nil {
+			return prefix.String()
+		}
+	}
+	return address.String()
 }

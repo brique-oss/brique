@@ -323,7 +323,7 @@ func bindWrapperReturn(delivery Delivery, wrapperName string, connection Wrapper
 		return Delivery{}, ErrWrapperDelegationInvalid
 	}
 	security := &deliverySecurity{
-		external: context, responses: delivery.security.responses,
+		external: context, responses: delivery.security.responses, chain: delivery.security.chain,
 		wrapperBack: &wrapperReturnRoute{wrapperName: strings.TrimSpace(wrapperName), connection: connection, handle: handle},
 	}
 	return Delivery{message: message, security: security}, nil

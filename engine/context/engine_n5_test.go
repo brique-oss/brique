@@ -445,6 +445,32 @@ func startN5SecurityPair(t *testing.T, rootADir, rootBDir string, regA, regB *ju
 // variable set by newEngineN5HarnessSource around the start is safe.
 var n5SourceForB func(remotePublicKey string) *policysrc.Source
 
+// n5ContentMode, when set, is the content mode each instance's policy requires of the other
+// (trust.ContentModeHPKE or trust.ContentModeClear), keyed by instance id. Unset: the policy
+// says nothing, so messages travel in the clear.
+var n5ContentMode map[string]string
+
+// n5Limits, when set, is the request rate each instance's policy gives the other, keyed by
+// instance id. Unset: the default of the policy applies.
+var n5Limits map[string]*trust.Limits
+
+// newEngineN5HarnessLimits starts the two instances with the request rate B gives A.
+func newEngineN5HarnessLimits(t *testing.T, limitsOfA *trust.Limits) *engineN5Harness {
+	t.Helper()
+	n5Limits = map[string]*trust.Limits{"instance-b": limitsOfA}
+	t.Cleanup(func() { n5Limits = nil })
+	return newEngineN5HarnessWith(t, nil)
+}
+
+// newEngineN5HarnessContent starts the two instances with the content mode each requires of
+// the other, and keeps it for the successor generations the test writes.
+func newEngineN5HarnessContent(t *testing.T, modeA, modeB string) *engineN5Harness {
+	t.Helper()
+	n5ContentMode = map[string]string{"instance-a": modeA, "instance-b": modeB}
+	t.Cleanup(func() { n5ContentMode = nil })
+	return newEngineN5HarnessWith(t, nil)
+}
+
 func newEngineN5HarnessSource(t *testing.T, source func(remotePublicKey string) *policysrc.Source) *engineN5Harness {
 	t.Helper()
 	n5SourceForB = source
@@ -667,6 +693,8 @@ func writeN5GenerationSpec(t *testing.T, spec n5GenerationSpec) {
 		InstanceID: instanceID, Revision: spec.revision, PreviousPolicyHash: spec.previousHash, IssuedAt: time.Now().UTC().Format(time.RFC3339),
 		Principals: []trust.Principal{{
 			PrincipalID: remoteID, Kind: "instance", Status: spec.status, ScopeIDs: []string{"integration"},
+			ContentMode: n5ContentMode[instanceID],
+			Limits:      n5Limits[instanceID],
 			SigningKeys: []trust.SigningKey{{
 				KeyID: remoteKeyID, Algorithm: trust.SigningAlgorithm,
 				PublicKey: base64.RawURLEncoding.EncodeToString(remotePublic), Status: "active",

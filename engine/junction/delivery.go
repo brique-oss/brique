@@ -76,6 +76,8 @@ type deliverySecurity struct {
 	localSource string
 	external    *admission.Context
 	responses   *responseState
+	// chain counts what the admitted request sets off; every derived delivery shares it.
+	chain       *chainState
 	response    *ResponseReservation
 	wrapper     string
 	wrapperBack *wrapperReturnRoute
@@ -115,7 +117,7 @@ func AdmitExternalIntention(verified *wire.Verified) (Delivery, error) {
 	if err != nil {
 		return Delivery{}, err
 	}
-	security := &deliverySecurity{external: context}
+	security := &deliverySecurity{external: context, chain: &chainState{}}
 	if context.AwaitResponse() {
 		security.responses = newResponseState(context)
 	}
@@ -131,7 +133,7 @@ func AdmitRestrictedLocal(message circulation.Message, context *admission.Contex
 		message.Kind != circulation.ValueKindIntention || message.Intention.IntentionID != context.RootIntentionID() {
 		return Delivery{}, fmt.Errorf("a valid restricted local admission is required")
 	}
-	return Delivery{message: message, security: &deliverySecurity{external: context, restricted: true}}, nil
+	return Delivery{message: message, security: &deliverySecurity{external: context, restricted: true, chain: &chainState{}}}, nil
 }
 
 // RestrictedLocal returns the admission of a restricted internal component, when
@@ -186,10 +188,17 @@ func DeriveExternalAudited(parent Delivery, child circulation.Message, runtime *
 		context.RecordCapabilityDenial(recorder, runtime, "derived", child.Intention)
 		return Delivery{}, ErrDerivedCapabilityDenied
 	}
+	// One request may not set off more than its policy allows, however the calls nest.
+	if calls, depth, limited := runtime.Active().ChainLimits(context.PrincipalID()); limited {
+		if err := parent.security.chain.chargeDerived(parentMessage.Intention.IntentionID, child.Intention.IntentionID, calls, depth); err != nil {
+			context.RecordDenial(recorder, "derived", child.Intention, audit.LayerTransport, audit.ReasonChainBudget)
+			return Delivery{}, err
+		}
+	}
 	// Derived work keeps the admission and root response state, but never
 	// inherits transport-only response or wrapper-dispatch metadata.
 	return Delivery{message: child, security: &deliverySecurity{
-		external: context, responses: parent.security.responses, restricted: parent.security.restricted,
+		external: context, responses: parent.security.responses, restricted: parent.security.restricted, chain: parent.security.chain,
 	}}, nil
 }
 
@@ -236,7 +245,7 @@ func DispatchExternalToWrapper(request Delivery, wrapperName string) (Delivery, 
 		return Delivery{}, fmt.Errorf("external wrapper dispatch is already selected")
 	}
 	security := &deliverySecurity{
-		external: context, responses: request.security.responses, wrapper: wrapperName, restricted: request.security.restricted,
+		external: context, responses: request.security.responses, chain: request.security.chain, wrapper: wrapperName, restricted: request.security.restricted,
 	}
 	if request.security.wrapperBack != nil {
 		route := *request.security.wrapperBack

@@ -26,6 +26,7 @@ package comm
 // entry in the policy keeps the trust of the local authority, exactly as before.
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,6 +34,7 @@ import (
 	"brique_engine/junction"
 	"brique_engine/security/admission"
 	"brique_engine/security/audit"
+	"brique_engine/security/limits"
 	"brique_engine/security/trust"
 )
 
@@ -74,6 +76,9 @@ func (l *CommLoop) restrictedWrapperDelivery(item IngressItem) (delivery junctio
 	if admitErr != nil {
 		return junction.Delivery{}, true, fmt.Errorf("restricted wrapper is not admitted: %w", admitErr)
 	}
+	if perSecond, burst, limited := runtime.Active().RateLimit(principalID); limited && !l.rateLimiter().Allow(principalID, limits.Rate{PerSecond: perSecond, Burst: burst}) {
+		return junction.Delivery{}, true, errWrapperRateLimited
+	}
 	message := item.Msg
 	projectWrapperOrigin(&message, l.frame.CtxId)
 	context, ctxErr := admission.NewRestrictedLocal(admitted, item.IfaceName, message, l.externalReplyTime())
@@ -86,6 +91,9 @@ func (l *CommLoop) restrictedWrapperDelivery(item IngressItem) (delivery junctio
 	}
 	return delivery, true, deliveryErr
 }
+
+// errWrapperRateLimited says a restricted wrapper went over the request budget its policy gives.
+var errWrapperRateLimited = errors.New("restricted wrapper is over its request rate")
 
 // projectWrapperOrigin places a wrapper-local origin in instance space, as the
 // ingress does for a trusted wrapper.
@@ -109,9 +117,13 @@ func projectWrapperOrigin(message *circulation.Message, boundary string) {
 // verdict: its own request simply times out.
 func (l *CommLoop) refuseRestrictedWrapper(item IngressItem, cause error) {
 	l.sendToTrace(item.Msg, circulation.ValueTraceCommReject, "restricted_wrapper_refused", cause.Error())
+	layer, reason := audit.LayerAuthentication, audit.ReasonWrapperSecret
+	if errors.Is(cause, errWrapperRateLimited) {
+		layer, reason = audit.LayerTransport, audit.ReasonRateLimited
+	}
 	l.auditRecorder().Record(audit.Record{
-		Principal: trust.LocalPrincipalPrefix + item.IfaceName, Channel: "wrapper", Layer: audit.LayerAuthentication,
-		Reason: audit.ReasonWrapperSecret, Context: string(item.Msg.Intention.To.Context),
+		Principal: trust.LocalPrincipalPrefix + item.IfaceName, Channel: "wrapper", Layer: layer,
+		Reason: reason, Context: string(item.Msg.Intention.To.Context),
 		Capacity: item.Msg.Intention.To.Type + "/" + item.Msg.Intention.To.Cap, Intention: item.Msg.Intention.IntentionID,
 	})
 }

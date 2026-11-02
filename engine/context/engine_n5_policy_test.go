@@ -314,6 +314,8 @@ func TestEngine_N5_POLICY_06_RotatingTheCallersKeyDuringACallCutsOnlyNewCalls(t 
 // a duplicate, and the service is the same afterwards. (What one principal can hold in the
 // replay ledger is bounded separately, in security/replay.)
 func TestEngine_N5_POLICY_07_ABurstFromOnePrincipalGetsOneTerminalAnswerEach(t *testing.T) {
+	n5Limits = map[string]*trust.Limits{"instance-b": {Unlimited: true}}
+	defer func() { n5Limits = nil }()
 	h := newEngineN5HarnessWith(t, n5OnlyReadState)
 	const burst = 150
 	for i := 0; i < burst; i++ {
@@ -363,7 +365,7 @@ func TestEngine_N5_POLICY_07_ABurstFromOnePrincipalGetsOneTerminalAnswerEach(t *
 func n5VerbSource(grants ...policysrc.Grant) func(string) *policysrc.Source {
 	return func(publicKey string) *policysrc.Source {
 		return &policysrc.Source{Format: policysrc.Format, Version: policysrc.Version, InstanceID: "instance-b", PolicyID: "main",
-			Principals: map[string]*policysrc.Principal{"instance-a": {Kind: "instance", Keys: []policysrc.Key{{PublicKey: publicKey}}, Grants: grants}}}
+			Principals: map[string]*policysrc.Principal{"instance-a": {Kind: "instance", Encryption: policysrc.EncryptionNone, Keys: []policysrc.Key{{PublicKey: publicKey}}, Grants: grants}}}
 	}
 }
 
@@ -533,5 +535,84 @@ func TestEngine_N5_POLICY_11_ARestartOfTheCallerDuringACallReportsResponseStateL
 	// ... and the restarted caller calls normally with a new one.
 	if out, ok := h.readState(t, "policy-caller-fresh", 5*time.Second); !ok || out.Response.Status != circulation.ValueStatusOK {
 		t.Fatalf("the restarted caller does not call: %#v ok=%v", out, ok)
+	}
+}
+
+// N5_SEAL: content sealed to the recipient's key, signed by the sender, over the real
+// signed HTTPS between two engines.
+
+func TestEngine_N5_SEAL_01_SealedBothWaysDeliversTheCallAndItsAnswer(t *testing.T) {
+	h := newEngineN5HarnessContent(t, trust.ContentModeHPKE, trust.ContentModeHPKE)
+	out, ok := h.callB(t, "sealed-read", "reflexive", "read.state", nil, 15*time.Second)
+	if !ok || out.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("a call sealed to B was not answered: ok=%v %+v", ok, out.Response)
+	}
+}
+
+// B requires sealed content from A, A's policy does not seal: the signature is good, the
+// message is refused for what it is not, and A is told nothing but silence.
+func TestEngine_N5_SEAL_02_AnUnsealedMessageIsRefusedWhereSealingIsRequired(t *testing.T) {
+	h := newEngineN5HarnessContent(t, trust.ContentModeClear, trust.ContentModeHPKE)
+	if out, ok := h.callB(t, "clear-read", "reflexive", "read.state", nil, 4*time.Second); ok && out.Response.Status == circulation.ValueStatusOK {
+		t.Fatalf("a clear message was served where sealing is required: %+v", out.Response)
+	}
+}
+
+// A seals to B, B accepts either: sealed content is opened with B's key and answered sealed.
+func TestEngine_N5_SEAL_03_SealedContentIsAcceptedWhereClearIsToo(t *testing.T) {
+	h := newEngineN5HarnessContent(t, trust.ContentModeHPKE, trust.ContentModeClear)
+	out, ok := h.callB(t, "sealed-read", "reflexive", "read.state", nil, 15*time.Second)
+	if !ok || out.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("a sealed call to a peer that accepts clear was not answered: ok=%v %+v", ok, out.Response)
+	}
+}
+
+// N5_RATE: a principal that babbles is slowed to the rate its policy gives it, and told so.
+
+// answers sends n calls from A to B at once and counts what comes back.
+func (h *engineN5Harness) burstToB(t *testing.T, prefix string, n int) (served, unavailable int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(prefix+strconv.Itoa(i), "@ext_"+h.pubB+":/root/beta_child",
+			circulation.ValueTypeReflexive, "read.state", n5SinkAID, map[string]any{circulation.KeyInclude: []any{circulation.KeyContext}}))
+	}
+	deadline := time.After(30 * time.Second)
+	for got := 0; got < n; got++ {
+		select {
+		case out := <-h.sinkA:
+			if out.Response.Status == circulation.ValueStatusOK {
+				served++
+			} else if out.Response.Error != nil && out.Response.Error.Code == "unavailable" {
+				unavailable++
+			} else {
+				t.Fatalf("unexpected answer: %+v", out.Response.Error)
+			}
+		case <-deadline:
+			t.Fatalf("only %d of %d calls got an answer", got, n)
+		}
+	}
+	return served, unavailable
+}
+
+func TestEngine_N5_RATE_01_ABabblingPrincipalIsSlowedAndToldSo(t *testing.T) {
+	h := newEngineN5HarnessLimits(t, &trust.Limits{RatePerSecond: 2, Burst: 5})
+	served, unavailable := h.burstToB(t, "rate-", 40)
+	// 5 in the burst, plus what refills while the burst is sent (a couple of seconds at most).
+	if served < 5 || served > 15 {
+		t.Fatalf("%d of 40 served under a rate of 2 per second with a burst of 5", served)
+	}
+	if served+unavailable != 40 || unavailable == 0 {
+		t.Fatalf("every call must be answered, and the excess refused: %d served, %d refused", served, unavailable)
+	}
+}
+
+func TestEngine_N5_RATE_02_UnlimitedMustBeWrittenToLiftTheLimit(t *testing.T) {
+	limited := newEngineN5HarnessLimits(t, nil)
+	servedByDefault, _ := limited.burstToB(t, "default-", 120)
+	if servedByDefault >= 120 {
+		t.Fatalf("a principal with no setting was not limited: %d of 120 served", servedByDefault)
+	}
+	if servedByDefault < trust.DefaultNetworkBurst {
+		t.Fatalf("the default burst of %d was not honored: %d served", trust.DefaultNetworkBurst, servedByDefault)
 	}
 }

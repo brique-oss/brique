@@ -24,7 +24,6 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
-	"brique_engine/security/refusal"
 	"brique_engine/shared"
 )
 
@@ -328,7 +327,7 @@ func projectDelegatedWrapperOrigin(message *circulation.Message, boundary string
 // not cover. The refusal is the canonical one, which does not say whether the capacity
 // exists, and it travels on the delegation the call came in on; without it the wrapper
 // would wait for its whole timeout for an answer that never comes.
-func (l *CommLoop) refuseDelegatedWrapperCall(item IngressItem) {
+func (l *CommLoop) refuseDelegatedWrapperCall(item IngressItem, problem *circulation.ResponseProblem) {
 	if l == nil || l.frame == nil || item.Msg.Kind != circulation.ValueKindIntention || !item.Msg.Intention.AwaitResponse {
 		return
 	}
@@ -338,7 +337,7 @@ func (l *CommLoop) refuseDelegatedWrapperCall(item IngressItem) {
 	}
 	response := circulation.Message{Kind: circulation.ValueKindResponse, TS: time.Now().UTC().Format(time.RFC3339Nano), Response: circulation.Response{
 		IntentionID: request.Intention.IntentionID, To: request.Intention.From, From: request.Intention.To,
-		Status: circulation.ValueStatusError, Error: refusal.CapabilityDenied(circulation.ValueOriginCommunication),
+		Status: circulation.ValueStatusError, Error: problem,
 	}}
 	projected, ok := projectExternalWrapperResponse(response, item.IfaceName, shared.ContextAddr(l.frame.CtxId))
 	runtime := l.ifaces[item.IfaceName]

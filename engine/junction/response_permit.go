@@ -17,6 +17,7 @@
 package junction
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,11 +41,45 @@ type responseState struct {
 	intentionID   string
 	principalID   string
 	contentMode   string
+	sealKeyID     string
+	sealKey       ed25519.PublicKey
 	nextSequence  uint64
 	nextToken     uint64
 	inFlight      bool
 	inFlightToken uint64
 	terminal      bool
+}
+
+// ErrChainBudget is returned when a derived call would take a request over the budget its
+// policy gives it: too many calls in all, or nested too deep.
+var ErrChainBudget = errors.New("call chain budget exceeded")
+
+// chainState is what one admitted request has set off inside this instance, shared by every
+// delivery derived from it: the calls so far, and the nesting depth of each by intention id.
+// Depth is tracked only while a budget applies, so the table is bounded by it.
+type chainState struct {
+	mu      sync.Mutex
+	derived int
+	depths  map[string]int
+}
+
+// chargeDerived counts one more call derived from parentID.
+func (state *chainState) chargeDerived(parentID, childID string, maxCalls, maxDepth int) error {
+	if state == nil {
+		return ErrChainBudget
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	depth := state.depths[parentID] + 1
+	if state.derived >= maxCalls || depth > maxDepth {
+		return ErrChainBudget
+	}
+	if state.depths == nil {
+		state.depths = make(map[string]int)
+	}
+	state.derived++
+	state.depths[childID] = depth
+	return nil
 }
 
 // ResponseReservation is an unforgeable two-phase right to emit one signed
@@ -61,12 +96,15 @@ type ResponseReservation struct {
 	intentionID string
 	principalID string
 	contentMode string
+	sealKeyID   string
+	sealKey     ed25519.PublicKey
 }
 
 func newResponseState(context *admission.Context) *responseState {
 	return &responseState{
 		requestHash: context.RequestHash(), intentionID: context.RootIntentionID(),
 		principalID: context.PrincipalID(), contentMode: context.ContentMode(),
+		sealKeyID: context.SigningKeyID(), sealKey: context.SigningPublicKey(),
 	}
 }
 
@@ -102,7 +140,7 @@ func (security *deliverySecurity) beginResponse(status string) (ResponseReservat
 		state: state, token: state.nextToken, sequence: state.nextSequence,
 		phase: phase, status: status, requestHash: state.requestHash,
 		intentionID: state.intentionID, principalID: state.principalID,
-		contentMode: state.contentMode,
+		contentMode: state.contentMode, sealKeyID: state.sealKeyID, sealKey: state.sealKey,
 	}, nil
 }
 
@@ -116,6 +154,11 @@ func (reservation ResponseReservation) RequestHash() string { return reservation
 func (reservation ResponseReservation) IntentionID() string { return reservation.intentionID }
 func (reservation ResponseReservation) PrincipalID() string { return reservation.principalID }
 func (reservation ResponseReservation) ContentMode() string { return reservation.contentMode }
+
+// SealTo is the key that signed the request, to seal the response to when the request was sealed.
+func (reservation ResponseReservation) SealTo() (keyID string, publicKey ed25519.PublicKey) {
+	return reservation.sealKeyID, append(ed25519.PublicKey(nil), reservation.sealKey...)
+}
 
 func (ResponseReservation) MarshalJSON() ([]byte, error) {
 	return nil, fmt.Errorf("external response reservation is internal and cannot be serialized")
