@@ -94,7 +94,7 @@ func dedupe(sorted []string) []string {
 
 // sameAccess reports whether two policies grant exactly the same access.
 func sameAccess(a, b trust.Policy) bool {
-	return len(accessDiff(a, b)) == 0
+	return len(accessDiff(a, b)) == 0 && samePeers(a.ExternalPeers, b.ExternalPeers)
 }
 
 // Change is one difference between two policies.

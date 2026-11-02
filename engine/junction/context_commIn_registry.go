@@ -55,6 +55,7 @@ type ContextCommRegistry struct {
 	trustRuntime      atomic.Pointer[trust.Runtime]
 	securityRuntime   atomic.Pointer[securityruntime.Runtime]
 	auditRecorder     atomic.Pointer[auditHolder]
+	machineDirectory  atomic.Pointer[string]
 	securityInstallMu sync.Mutex
 
 	// projectionNotify is the root's listener for descriptor changes.
@@ -235,6 +236,28 @@ func (r *ContextCommRegistry) SwapSecurityRuntime(expected, next *securityruntim
 	r.trustRuntime.Store(next.Trust())
 	return nil
 }
+
+// SetMachineDirectory records the machine's security directory, so that components that
+// need a file of the machine (the HTTPS certificate) can find it by default.
+func (r *ContextCommRegistry) SetMachineDirectory(directory string) {
+	if r != nil {
+		r.machineDirectory.Store(&directory)
+	}
+}
+
+// MachineDirectory is the machine's security directory, or "" when none is configured.
+func (r *ContextCommRegistry) MachineDirectory() string {
+	if r == nil {
+		return ""
+	}
+	if directory := r.machineDirectory.Load(); directory != nil {
+		return *directory
+	}
+	return ""
+}
+
+// MachineDirectoryProvider is implemented by registries that know the machine's directory.
+type MachineDirectoryProvider interface{ MachineDirectory() string }
 
 func (r *ContextCommRegistry) SecurityRuntime() *securityruntime.Runtime {
 	if r == nil {

@@ -55,6 +55,20 @@ type Policy struct {
 	IssuedAt           string      `json:"issued_at"`
 	Principals         []Principal `json:"principals"`
 	Scopes             []Scope     `json:"scopes"`
+	// ExternalPeers (format version 2 and above) says where the instance reaches each
+	// principal it sends to. It is part of what the authority signs: an address changes
+	// only with the policy, never alone.
+	ExternalPeers []ExternalPeer `json:"external_peers,omitempty"`
+}
+
+// ExternalPeer binds a principal to the remote instance it answers for: the audience
+// its messages are addressed to, the local HTTPS adapter that carries them and the exact
+// base URL of the remote listener.
+type ExternalPeer struct {
+	PrincipalID        string `json:"principal_id"`
+	AudienceInstanceID string `json:"audience_instance_id"`
+	Interface          string `json:"interface"`
+	Target             string `json:"target"`
 }
 
 type Principal struct {
@@ -172,6 +186,11 @@ func (result *DecodeResult) PolicyID() string   { return result.policy.PolicyID 
 func (result *DecodeResult) InstanceID() string { return result.policy.InstanceID }
 func (result *DecodeResult) Revision() string   { return result.policy.Revision }
 func (result *DecodeResult) PolicyHash() string { return result.policyHash }
+
+// ExternalPeers returns a copy of the peers the signed policy carries.
+func (result *DecodeResult) ExternalPeers() []ExternalPeer {
+	return append([]ExternalPeer(nil), result.policy.ExternalPeers...)
+}
 
 // PreviousPolicyHash is the hash this policy declares as its predecessor.
 func (result *DecodeResult) PreviousPolicyHash() string { return result.policy.PreviousPolicyHash }

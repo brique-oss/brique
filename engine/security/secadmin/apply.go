@@ -104,46 +104,25 @@ func (d *Dir) Apply(options ApplyOptions) (*ApplyResult, error) {
 		return nil, err
 	}
 	result := &ApplyResult{Warnings: compiled.Result.Warnings}
-	peers, havePeers, err := d.Peers()
-	if err != nil {
-		return nil, err
-	}
-	peersChanged := false
-	if havePeers && compiled.Head != nil {
-		headDocument, _, err := d.loadBootstrap(path.Join(GenerationsDir, compiled.Head.Name, BootstrapFile))
-		if err != nil {
-			return nil, err
-		}
-		peersChanged = !samePeers(headDocument.ExternalPeers, peers)
-	}
-	if compiled.Head != nil && !options.Force && !peersChanged && sameAccess(compiled.Head.Policy, compiled.Result.Policy) {
+	if compiled.Head != nil && !options.Force && sameAccess(compiled.Head.Policy, compiled.Result.Policy) {
 		result.Unchanged = true
 		result.Generation, result.Revision, result.Hash = compiled.Head.Name, compiled.Head.Revision, compiled.Head.Hash
 		return result, nil
 	}
 
-	bootstrapRel := path.Join("source", "bootstrap.template.json")
+	headName := ""
 	if compiled.Head != nil {
-		bootstrapRel = path.Join(GenerationsDir, compiled.Head.Name, BootstrapFile)
+		headName = compiled.Head.Name
 	}
+	bootstrapRel := d.bootstrapRel(headName)
 	bootstrapBytes, err := d.readProtected(bootstrapRel, 64<<10)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap unavailable: %w", err)
 	}
-	bootstrapDocument, authority, err := d.loadBootstrap(bootstrapRel)
+	_, authority, err := d.loadBootstrap(bootstrapRel)
 	if err != nil {
 		return nil, err
 	}
-	if havePeers {
-		// The peers of the source travel with the generation: the bootstrap is public
-		// data, and the engine takes its peers from the generation it adopts.
-		bootstrapDocument.ExternalPeers = peers
-		if bootstrapBytes, err = json.MarshalIndent(bootstrapDocument, "", "  "); err != nil {
-			return nil, err
-		}
-		bootstrapBytes = append(bootstrapBytes, '\n')
-	}
-
 	var envelope []byte
 	if options.SignedFile != "" {
 		envelope, err = os.ReadFile(options.SignedFile)
@@ -229,6 +208,9 @@ func preflight(head *Generation, candidate *trust.DecodeResult) error {
 // install publishes a generation with one rename so the engine never sees a
 // partial one.
 func (d *Dir) install(name string, bootstrapBytes, envelope []byte) error {
+	if d.Carrying() {
+		return d.installInInstance(name, envelope)
+	}
 	staging := filepath.Join("staging", name)
 	_ = os.RemoveAll(d.abs(staging))
 	defer os.RemoveAll(d.abs(staging))
@@ -245,6 +227,25 @@ func (d *Dir) install(name string, bootstrapBytes, envelope []byte) error {
 		return fmt.Errorf("generation %s already exists", name)
 	}
 	return os.Rename(d.abs(staging), d.abs(path.Join(GenerationsDir, name)))
+}
+
+// installInInstance publishes the signed policy of a generation in the instance's security
+// folder with one rename. The machine's bootstrap does not change with a generation.
+func (d *Dir) installInInstance(name string, envelope []byte) error {
+	staging := path.Join(".staging", name)
+	_ = os.RemoveAll(d.generationsAbs(staging))
+	defer os.RemoveAll(d.generationsAbs(".staging"))
+	if err := shared.WriteInstanceFile(d.PolicyRoot, path.Join(staging, PolicyFile), envelope, 0o644); err != nil {
+		return err
+	}
+	if err := shared.WriteInstanceFile(d.PolicyRoot, path.Join(GenerationsDir, ".keep"), nil, 0o644); err != nil {
+		return err
+	}
+	_ = os.Remove(d.generationsAbs(path.Join(GenerationsDir, ".keep")))
+	if _, err := os.Stat(d.generationsAbs(path.Join(GenerationsDir, name))); err == nil {
+		return fmt.Errorf("generation %s already exists", name)
+	}
+	return os.Rename(d.generationsAbs(staging), d.generationsAbs(path.Join(GenerationsDir, name)))
 }
 
 // SignPolicy signs a policy document with an authority key and returns the

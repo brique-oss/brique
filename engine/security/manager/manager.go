@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,7 +51,13 @@ var (
 )
 
 type Options struct {
-	SecurityDirectory       string
+	SecurityDirectory string
+	// PolicyDirectory, when set, is the instance's security folder: the signed policy of
+	// each generation is read from <PolicyDirectory>/generations/<g>/trust-policy.json, with
+	// the ordinary permissions of a versioned file, and the machine's single bootstrap
+	// (<SecurityDirectory>/bootstrap.json) applies to every generation. Empty keeps the
+	// layout where everything lives under SecurityDirectory.
+	PolicyDirectory         string
 	InitialGeneration       string
 	PolicyID                string
 	AllowedOwnerUIDs        []uint32
@@ -99,6 +106,13 @@ func Start(options Options, catalog trust.Catalog, registry *junction.ContextCom
 		return nil, err
 	}
 	generation := options.InitialGeneration
+	chosen := false
+	if generation == "" && !found {
+		// A machine that never ran this instance starts from the newest generation it finds;
+		// the signature and the trust anchor decide whether it is valid.
+		generation = newestGeneration(options.policyBase())
+		chosen = generation != ""
+	}
 	if found {
 		generation = state.ActiveGeneration
 		if options.InitialGeneration != "" && options.InitialGeneration != generation {
@@ -134,6 +148,14 @@ func Start(options Options, catalog trust.Catalog, registry *junction.ContextCom
 			return nil, fmt.Errorf("durable activation binding or security clock mismatch")
 		}
 		if err := trustRuntime.Recover(decoded, catalog, state.TrustRecord()); err != nil {
+			return nil, err
+		}
+	} else if options.PolicyDirectory != "" || chosen {
+		// The instance carries its whole history, or the generation was not named: a machine
+		// that has never run it starts from the newest generation rather than replaying
+		// every revision.
+		initialCandidate, err = trustRuntime.PrepareAdoption(decoded, catalog)
+		if err != nil {
 			return nil, err
 		}
 	} else {
@@ -177,9 +199,15 @@ func Start(options Options, catalog trust.Catalog, registry *junction.ContextCom
 		_ = replayRuntime.Close()
 		return nil, fmt.Errorf("denial journal unavailable: %w", err)
 	}
+	peers, err := peerDirectory(bootstrapCandidate, decoded)
+	if err != nil {
+		_ = auditLog.Close()
+		_ = replayRuntime.Close()
+		return nil, err
+	}
 	complete, err := securityruntime.New(
 		decoded.InstanceID(), bootstrapCandidate.Signers(), trustRuntime,
-		bootstrapCandidate.Peers(), replayRuntime, pendingResponses,
+		peers, replayRuntime, pendingResponses,
 	)
 	if err != nil {
 		_ = auditLog.Close()
@@ -261,8 +289,12 @@ func (manager *Manager) Reload(catalog trust.Catalog) error {
 	if err := nextTrust.Recover(decoded, catalog, record); err != nil {
 		return err
 	}
+	peers, err := peerDirectory(bootstrapCandidate, decoded)
+	if err != nil {
+		return err
+	}
 	next, err := securityruntime.New(
-		record.InstanceID, bootstrapCandidate.Signers(), nextTrust, bootstrapCandidate.Peers(), manager.replay, manager.pending,
+		record.InstanceID, bootstrapCandidate.Signers(), nextTrust, peers, manager.replay, manager.pending,
 	)
 	if err != nil {
 		return err
@@ -334,7 +366,7 @@ func (manager *Manager) Close() error {
 }
 
 func (manager *Manager) findSuccessor(catalog trust.Catalog) (string, *trust.DecodeResult, error) {
-	entries, err := os.ReadDir(filepath.Join(manager.options.SecurityDirectory, "generations"))
+	entries, err := os.ReadDir(filepath.Join(manager.options.policyBase(), "generations"))
 	if err != nil || len(entries) > maxGenerationEntries {
 		return "", nil, fmt.Errorf("security generations are unavailable or unbounded")
 	}
@@ -349,9 +381,7 @@ func (manager *Manager) findSuccessor(catalog trust.Catalog) (string, *trust.Dec
 		if name == manager.generation || !entry.IsDir() || !shared.ValidProtectedRelativePath(name) || strings.Contains(name, "/") {
 			continue
 		}
-		content, err := shared.ReadProtectedFile(manager.options.SecurityDirectory, generationFile(name, defaultPolicyFile), shared.ProtectedFileOptions{
-			MaxBytes: trust.MaxEnvelopeBytes, AllowedOwnerUIDs: manager.options.AllowedOwnerUIDs,
-		})
+		content, err := readPolicyEnvelope(manager.options, name)
 		if err != nil {
 			continue
 		}
@@ -376,16 +406,14 @@ func (manager *Manager) findSuccessor(catalog trust.Catalog) (string, *trust.Dec
 func loadGeneration(options Options, generation string) (*bootstrap.Candidate, *trust.DecodeResult, error) {
 	candidate, err := bootstrap.Load(bootstrap.Options{
 		SecurityDirectory: options.SecurityDirectory,
-		BootstrapFile:     generationFile(generation, defaultBootstrapFile),
+		BootstrapFile:     bootstrapFileFor(options, generation),
 		Generation:        generation, AllowedOwnerUIDs: options.AllowedOwnerUIDs,
 		RequireReadOnlyKeyFiles: options.RequireReadOnlyKeyFiles, SignerExecutor: options.SignerExecutor,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	content, err := shared.ReadProtectedFile(options.SecurityDirectory, generationFile(generation, defaultPolicyFile), shared.ProtectedFileOptions{
-		MaxBytes: trust.MaxEnvelopeBytes, AllowedOwnerUIDs: options.AllowedOwnerUIDs,
-	})
+	content, err := readPolicyEnvelope(options, generation)
 	if err != nil {
 		_ = candidate.Close()
 		return nil, nil, err
@@ -397,6 +425,18 @@ func loadGeneration(options Options, generation string) (*bootstrap.Candidate, *
 		return nil, nil, err
 	}
 	return candidate, decoded, nil
+}
+
+// peerDirectory is the inventory of peers a generation carries: the ones the signed policy
+// declares, plus those of a bootstrap that still lists its own. A principal named twice is
+// refused rather than resolved.
+func peerDirectory(candidate *bootstrap.Candidate, decoded *trust.DecodeResult) (*securityruntime.PeerDirectory, error) {
+	peers := candidate.Peers().Peers()
+	for _, peer := range decoded.ExternalPeers() {
+		peers = append(peers, securityruntime.Peer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
+			Interface: peer.Interface, Target: peer.Target})
+	}
+	return securityruntime.NewPeerDirectory(peers)
 }
 
 func openReplay(options Options) (*replay.Service, error) {
@@ -448,6 +488,51 @@ func normalizeOptions(options Options) Options {
 		options.PendingLimits = pending.DefaultLimits()
 	}
 	return options
+}
+
+// policyBase is the directory that holds the generations.
+func (options Options) policyBase() string {
+	if options.PolicyDirectory != "" {
+		return options.PolicyDirectory
+	}
+	return options.SecurityDirectory
+}
+
+// bootstrapFileFor is the bootstrap that applies to a generation: the machine's single one
+// when the policy lives in the instance, the generation's own otherwise.
+func bootstrapFileFor(options Options, generation string) string {
+	if options.PolicyDirectory != "" {
+		return defaultBootstrapFile
+	}
+	return generationFile(generation, defaultBootstrapFile)
+}
+
+// readPolicyEnvelope reads the signed policy of one generation. The content is not trusted
+// by where it came from: the caller verifies its signature against the trust anchor.
+func readPolicyEnvelope(options Options, generation string) ([]byte, error) {
+	if options.PolicyDirectory != "" {
+		return shared.ReadInstanceFile(options.PolicyDirectory, generationFile(generation, defaultPolicyFile), trust.MaxEnvelopeBytes)
+	}
+	return shared.ReadProtectedFile(options.SecurityDirectory, generationFile(generation, defaultPolicyFile), shared.ProtectedFileOptions{
+		MaxBytes: trust.MaxEnvelopeBytes, AllowedOwnerUIDs: options.AllowedOwnerUIDs,
+	})
+}
+
+var generationNamePattern = regexp.MustCompile(`^g[0-9]{6}$`)
+
+// newestGeneration is the highest generation name in a policy directory, or "".
+func newestGeneration(policyDirectory string) string {
+	entries, err := os.ReadDir(filepath.Join(policyDirectory, "generations"))
+	if err != nil || len(entries) > maxGenerationEntries {
+		return ""
+	}
+	newest := ""
+	for _, entry := range entries {
+		if entry.IsDir() && generationNamePattern.MatchString(entry.Name()) && entry.Name() > newest {
+			newest = entry.Name()
+		}
+	}
+	return newest
 }
 
 func generationFile(generation, name string) string {

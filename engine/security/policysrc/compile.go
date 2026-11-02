@@ -131,6 +131,12 @@ func Compile(src *Source, cat trust.Catalog, opt Options) (*Result, error) {
 	if c.usesOwner {
 		policy.FormatVersion = trust.PolicyFormatVersionV3
 	}
+	if len(src.Peers) > 0 {
+		policy.ExternalPeers = append([]trust.ExternalPeer(nil), src.Peers...)
+		sort.Slice(policy.ExternalPeers, func(i, j int) bool {
+			return policy.ExternalPeers[i].PrincipalID < policy.ExternalPeers[j].PrincipalID
+		})
+	}
 	encoded, err := json.Marshal(policy)
 	if err != nil {
 		return nil, err

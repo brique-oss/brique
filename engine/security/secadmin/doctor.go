@@ -20,7 +20,6 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -143,7 +142,7 @@ func (d *Dir) checkModes(add func(Severity, string, ...any)) {
 }
 
 func (d *Dir) checkKeys(head Generation, add func(Severity, string, ...any)) {
-	document, authority, err := d.loadBootstrap(path.Join(GenerationsDir, head.Name, BootstrapFile))
+	document, authority, err := d.loadBootstrap(d.bootstrapRel(head.Name))
 	if err != nil {
 		add(SeverityError, "bootstrap of %s: %v", head.Name, err)
 		return

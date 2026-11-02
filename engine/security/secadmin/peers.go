@@ -17,118 +17,97 @@
 package secadmin
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path"
 	"sort"
 
+	"brique_engine/security/policysrc"
 	securityruntime "brique_engine/security/runtime"
 	"brique_engine/security/trust"
 )
 
-// PeersFile lists the outbound peers of the instance (SECURITY.md §7.4). It
-// is merged into the bootstrap of the next generation by apply; a directory without
-// it keeps the peers its bootstrap already has.
-const PeersFile = "source/peers.json"
+// Peers say where the instance reaches the principals it sends to (SECURITY.md §7.4). They
+// live in the access source and compile into the signed policy: an address changes only
+// with a signed generation, and travels with the instance like the rest of the policy.
 
-// Peers returns the peers of the source, or nil and false when the file does not
-// exist yet.
-func (d *Dir) Peers() ([]securityruntime.Peer, bool, error) {
-	if _, err := os.Stat(d.abs(PeersFile)); isNotExist(err) {
-		return nil, false, nil
+func toRuntimePeers(peers []trust.ExternalPeer) []securityruntime.Peer {
+	out := make([]securityruntime.Peer, 0, len(peers))
+	for _, peer := range peers {
+		out = append(out, securityruntime.Peer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
+			Interface: peer.Interface, Target: peer.Target})
 	}
-	content, err := d.readProtected(PeersFile, 1<<20)
-	if err != nil {
-		return nil, false, err
-	}
-	var peers []securityruntime.Peer
-	if err := trust.StrictDecodeJSON(content, &peers); err != nil {
-		return nil, false, fmt.Errorf("peers file: %w", err)
-	}
-	return peers, true, nil
+	return out
 }
 
-func (d *Dir) savePeers(peers []securityruntime.Peer) error {
-	if _, err := securityruntime.NewPeerDirectory(peers); err != nil {
-		return err
-	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].PrincipalID < peers[j].PrincipalID })
-	encoded, err := json.MarshalIndent(peers, "", "  ")
-	if err != nil {
-		return err
-	}
-	return d.writeFile(PeersFile, append(encoded, '\n'), 0o600)
-}
-
-// currentPeers is the peers file, or the peers of the installed bootstrap when no
-// file exists yet.
-func (d *Dir) currentPeers() ([]securityruntime.Peer, error) {
-	peers, found, err := d.Peers()
-	if err != nil || found {
-		if peers == nil {
-			peers = []securityruntime.Peer{}
-		}
-		return peers, err
-	}
-	rel := path.Join("source", "bootstrap.template.json")
-	if head, err := d.Generations(); err == nil && len(head) > 0 {
-		rel = path.Join(GenerationsDir, head[len(head)-1].Name, BootstrapFile)
-	}
-	document, _, err := d.loadBootstrap(rel)
-	if err != nil {
-		return nil, err
-	}
-	return append([]securityruntime.Peer{}, document.ExternalPeers...), nil
+func fromRuntimePeer(peer securityruntime.Peer) trust.ExternalPeer {
+	return trust.ExternalPeer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
+		Interface: peer.Interface, Target: peer.Target}
 }
 
 // PeerAdd declares the receiver-side binding of a peer principal to a remote
-// instance: audience, local HTTPS adapter and exact base URL. The inventory is
-// validated by the engine's own rules before anything is written.
+// instance: audience, local HTTPS adapter and exact base URL. The principal must exist, and
+// the whole inventory is validated by the engine's own rules before anything is written.
 func (d *Dir) PeerAdd(peer securityruntime.Peer) error {
-	peers, err := d.currentPeers()
+	src, err := d.LoadSource()
 	if err != nil {
 		return err
 	}
-	for _, existing := range peers {
+	if src.Principals[peer.PrincipalID] == nil {
+		return fmt.Errorf("peer %q: add the principal first", peer.PrincipalID)
+	}
+	for _, existing := range src.Peers {
 		if existing.PrincipalID == peer.PrincipalID {
 			return fmt.Errorf("peer %q already exists", peer.PrincipalID)
 		}
 	}
-	return d.savePeers(append(peers, peer))
+	src.Peers = append(src.Peers, fromRuntimePeer(peer))
+	return d.savePeers(src)
 }
 
 // PeerRemove deletes the peer of a principal.
 func (d *Dir) PeerRemove(principalID string) error {
-	peers, err := d.currentPeers()
+	src, err := d.LoadSource()
 	if err != nil {
 		return err
 	}
-	kept := peers[:0:0]
-	for _, peer := range peers {
+	kept := src.Peers[:0:0]
+	for _, peer := range src.Peers {
 		if peer.PrincipalID != principalID {
 			kept = append(kept, peer)
 		}
 	}
-	if len(kept) == len(peers) {
+	if len(kept) == len(src.Peers) {
 		return fmt.Errorf("unknown peer %q", principalID)
 	}
-	return d.savePeers(kept)
+	src.Peers = kept
+	return d.savePeers(src)
 }
 
 // PeerList returns the peers that the next generation will carry.
 func (d *Dir) PeerList() ([]securityruntime.Peer, error) {
-	peers, err := d.currentPeers()
+	src, err := d.LoadSource()
+	if err != nil {
+		return nil, err
+	}
+	peers := toRuntimePeers(src.Peers)
 	sort.Slice(peers, func(i, j int) bool { return peers[i].PrincipalID < peers[j].PrincipalID })
-	return peers, err
+	return peers, nil
 }
 
-func samePeers(a, b []securityruntime.Peer) bool {
+// savePeers checks the transport rules of the whole inventory (https, audience bindings)
+// and writes the source.
+func (d *Dir) savePeers(src *policysrc.Source) error {
+	if _, err := securityruntime.NewPeerDirectory(toRuntimePeers(src.Peers)); err != nil {
+		return err
+	}
+	sort.Slice(src.Peers, func(i, j int) bool { return src.Peers[i].PrincipalID < src.Peers[j].PrincipalID })
+	return d.SaveSource(src)
+}
+
+func samePeers(a, b []trust.ExternalPeer) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	index := make(map[string]securityruntime.Peer, len(a))
+	index := make(map[string]trust.ExternalPeer, len(a))
 	for _, peer := range a {
 		index[peer.PrincipalID] = peer
 	}
@@ -139,5 +118,3 @@ func samePeers(a, b []securityruntime.Peer) bool {
 	}
 	return true
 }
-
-func isNotExist(err error) bool { return errors.Is(err, os.ErrNotExist) }

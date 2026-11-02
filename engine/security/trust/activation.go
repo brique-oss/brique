@@ -80,6 +80,20 @@ func (runtime *Runtime) PolicyID() string {
 }
 
 func (runtime *Runtime) Prepare(decoded *DecodeResult, catalog Catalog) (*Candidate, error) {
+	return runtime.prepare(decoded, catalog, false)
+}
+
+// PrepareAdoption is Prepare for a machine that has never run this instance: the first
+// policy it activates is the newest one the instance carries, not necessarily revision 1.
+// From then on the activation record rejects anything older, and successors follow the
+// ordinary exact-successor rule. The signature and the machine's trust anchor, checked
+// before this, are what vouch for the policy; an instance cannot make a machine start from
+// a policy the authority never signed, only from an older one it did.
+func (runtime *Runtime) PrepareAdoption(decoded *DecodeResult, catalog Catalog) (*Candidate, error) {
+	return runtime.prepare(decoded, catalog, true)
+}
+
+func (runtime *Runtime) prepare(decoded *DecodeResult, catalog Catalog, adopt bool) (*Candidate, error) {
 	if decoded == nil {
 		return nil, fmt.Errorf("verified policy is required")
 	}
@@ -87,8 +101,10 @@ func (runtime *Runtime) Prepare(decoded *DecodeResult, catalog Catalog) (*Candid
 		return nil, fmt.Errorf("candidate policy is bound to another instance or policy")
 	}
 	expected := runtime.active.Load()
-	if err := validateSuccessor(expected, decoded); err != nil {
-		return nil, err
+	if expected != nil || !adopt {
+		if err := validateSuccessor(expected, decoded); err != nil {
+			return nil, err
+		}
 	}
 	next, err := Compile(decoded, catalog)
 	if err != nil {
@@ -100,6 +116,8 @@ func (runtime *Runtime) Prepare(decoded *DecodeResult, catalog Catalog) (*Candid
 	previousHash := ""
 	if expected != nil {
 		previousHash = expected.policyHash
+	} else if adopt {
+		previousHash = decoded.policy.PreviousPolicyHash
 	}
 	return &Candidate{
 		owner:    runtime,

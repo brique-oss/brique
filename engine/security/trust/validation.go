@@ -54,6 +54,9 @@ func validatePolicy(policy *Policy) error {
 	if err := validateRevision(policy.Revision); err != nil {
 		return err
 	}
+	if err := validateExternalPeers(policy); err != nil {
+		return err
+	}
 	if policy.PreviousPolicyHash != "" && !validDigestID(policy.PreviousPolicyHash, "bp1_") {
 		return fmt.Errorf("previous_policy_hash is not a canonical policy hash")
 	}
@@ -493,4 +496,44 @@ func oneOf(value string, accepted ...string) bool {
 		}
 	}
 	return false
+}
+
+const maxExternalPeers = 1024
+
+// validateExternalPeers checks the shape of the peers; the engine's peer directory applies
+// the transport rules (https, host, port) when it installs them.
+func validateExternalPeers(policy *Policy) error {
+	if len(policy.ExternalPeers) == 0 {
+		return nil
+	}
+	if policy.FormatVersion == PolicyFormatVersion {
+		return fmt.Errorf("external peers require format version %s", PolicyFormatVersionV2)
+	}
+	if len(policy.ExternalPeers) > maxExternalPeers {
+		return fmt.Errorf("a policy carries at most %d external peers", maxExternalPeers)
+	}
+	known := make(map[string]struct{}, len(policy.Principals))
+	for _, principal := range policy.Principals {
+		known[principal.PrincipalID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(policy.ExternalPeers))
+	for _, peer := range policy.ExternalPeers {
+		if err := validateIdentifier("external peer principal_id", peer.PrincipalID); err != nil {
+			return err
+		}
+		if err := validateIdentifier("external peer audience_instance_id", peer.AudienceInstanceID); err != nil {
+			return err
+		}
+		if peer.Interface == "" || peer.Target == "" {
+			return fmt.Errorf("external peer %q needs an interface and a target", peer.PrincipalID)
+		}
+		if _, declared := known[peer.PrincipalID]; !declared {
+			return fmt.Errorf("external peer %q is not a principal of the policy", peer.PrincipalID)
+		}
+		if _, duplicate := seen[peer.PrincipalID]; duplicate {
+			return fmt.Errorf("duplicate external peer %q", peer.PrincipalID)
+		}
+		seen[peer.PrincipalID] = struct{}{}
+	}
+	return nil
 }

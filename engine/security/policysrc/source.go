@@ -50,6 +50,9 @@ type Source struct {
 	InstanceID string                `json:"instance_id"`
 	PolicyID   string                `json:"policy_id"`
 	Principals map[string]*Principal `json:"principals"`
+	// Peers says where the instance reaches the principals it sends to. They compile
+	// into the signed policy: an address changes only with the policy.
+	Peers []trust.ExternalPeer `json:"peers,omitempty"`
 }
 
 // Principal is one subject of authorization.

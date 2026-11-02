@@ -100,7 +100,31 @@ func Validate(src *Source) error {
 			return err
 		}
 	}
-	return validateOwners(src)
+	if err := validateOwners(src); err != nil {
+		return err
+	}
+	return validatePeers(src)
+}
+
+// validatePeers checks that every peer is a principal of the source that has a key to
+// verify its answers with, and that none is declared twice.
+func validatePeers(src *Source) error {
+	seen := map[string]bool{}
+	for index, peer := range src.Peers {
+		principal := src.Principals[peer.PrincipalID]
+		switch {
+		case principal == nil:
+			return fmt.Errorf("access source: peer %d: %q is not a principal", index, peer.PrincipalID)
+		case principal.Kind == "local":
+			return fmt.Errorf("access source: peer %d: %q is a local principal and has no remote instance", index, peer.PrincipalID)
+		case seen[peer.PrincipalID]:
+			return fmt.Errorf("access source: peer %d: %q is declared twice", index, peer.PrincipalID)
+		case !identifierPattern.MatchString(peer.AudienceInstanceID) || peer.Interface == "" || peer.Target == "":
+			return fmt.Errorf("access source: peer %d (%q): audience, interface and target are required", index, peer.PrincipalID)
+		}
+		seen[peer.PrincipalID] = true
+	}
+	return nil
 }
 
 // validateOwners checks every as_owner (model §12): it names a local principal of

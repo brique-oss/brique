@@ -40,14 +40,16 @@ import (
 
 // Layout of the security directory, relative to its root.
 const (
-	SourceFile       = "source/access.json"
-	GenerationsDir   = "generations"
-	PolicyFile       = "trust-policy.json"
-	BootstrapFile    = "bootstrap.json"
-	MessageKeyFile   = "keys/message-signer.pem"
-	AuthorityKeyFile = "authority/policy-authority.pem"
-	PIDFile          = "engine.pid"
-	PolicyID         = "main"
+	SourceFile = "source/access.json"
+	// InstanceSourceFile is the access source inside the instance's security folder.
+	InstanceSourceFile = "access.json"
+	GenerationsDir     = "generations"
+	PolicyFile         = "trust-policy.json"
+	BootstrapFile      = "bootstrap.json"
+	MessageKeyFile     = "keys/message-signer.pem"
+	AuthorityKeyFile   = "authority/policy-authority.pem"
+	PIDFile            = "engine.pid"
+	PolicyID           = "main"
 
 	maxSourceBytes = 4 << 20
 	maxGenerations = 128
@@ -55,9 +57,22 @@ const (
 
 var generationPattern = regexp.MustCompile(`^g[0-9]{6}$`)
 
-// Dir is one protected security directory.
+// Dir is one security directory. Root is the machine's part: keys, the trust anchor
+// (bootstrap), durable state, the denial journal. With PolicyRoot empty it holds everything,
+// as it always did.
+//
+// With PolicyRoot set — the "security" folder of an instance — the access source lives there
+// and travels with the instance. The signed generations then stay on the machine (the
+// default: each machine compiles and signs the source it finds, with an authority of its
+// own) unless Carry is set, in which case they travel too and the machine verifies them
+// against an authority it was told to trust.
 type Dir struct {
 	Root string
+	// PolicyRoot is <instance>/security: access.json, and with Carry the signed generations.
+	PolicyRoot string
+	// Carry keeps the signed generations in the instance, next to a single machine
+	// bootstrap that names the trust anchor.
+	Carry bool
 	// Now is the clock used to date policies; time.Now when nil.
 	Now func() time.Time
 }
@@ -67,6 +82,63 @@ func (d *Dir) now() time.Time {
 		return d.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+// InstanceSource reports whether the access source lives in the instance.
+func (d *Dir) InstanceSource() bool { return d.PolicyRoot != "" }
+
+// Carrying reports whether the signed generations live in the instance.
+func (d *Dir) Carrying() bool { return d.PolicyRoot != "" && d.Carry }
+
+// sourceRel is the access source, relative to the side that holds it.
+func (d *Dir) sourceRel() string {
+	if d.InstanceSource() {
+		return InstanceSourceFile
+	}
+	return SourceFile
+}
+
+// bootstrapRel is the bootstrap that applies to a generation: the machine's single
+// bootstrap when the generations are carried, the generation's own otherwise. An empty name
+// asks for the template a first generation starts from.
+func (d *Dir) bootstrapRel(generation string) string {
+	switch {
+	case d.Carrying():
+		return BootstrapFile
+	case generation == "":
+		return path.Join("source", "bootstrap.template.json")
+	default:
+		return path.Join(GenerationsDir, generation, BootstrapFile)
+	}
+}
+
+// generationsAbs is a path among the signed generations.
+func (d *Dir) generationsAbs(rel string) string {
+	if d.Carrying() {
+		return filepath.Join(d.PolicyRoot, filepath.FromSlash(rel))
+	}
+	return d.abs(rel)
+}
+
+func (d *Dir) readGenerationFile(rel string, max int64) ([]byte, error) {
+	if d.Carrying() {
+		return shared.ReadInstanceFile(d.PolicyRoot, rel, max)
+	}
+	return d.readProtected(rel, max)
+}
+
+func (d *Dir) readSource(max int64) ([]byte, error) {
+	if d.InstanceSource() {
+		return shared.ReadInstanceFile(d.PolicyRoot, InstanceSourceFile, max)
+	}
+	return d.readProtected(SourceFile, max)
+}
+
+func (d *Dir) writeSource(content []byte) error {
+	if d.InstanceSource() {
+		return shared.WriteInstanceFile(d.PolicyRoot, InstanceSourceFile, content, 0o644)
+	}
+	return d.writeFile(SourceFile, content, 0o600)
 }
 
 func (d *Dir) abs(rel string) string { return filepath.Join(d.Root, filepath.FromSlash(rel)) }
@@ -84,7 +156,7 @@ func (d *Dir) writeFile(rel string, content []byte, mode os.FileMode) error {
 
 // LoadSource reads and strictly decodes the access source.
 func (d *Dir) LoadSource() (*policysrc.Source, error) {
-	content, err := d.readProtected(SourceFile, maxSourceBytes)
+	content, err := d.readSource(maxSourceBytes)
 	if err != nil {
 		return nil, fmt.Errorf("access source unavailable: %w", err)
 	}
@@ -101,7 +173,7 @@ func (d *Dir) SaveSource(src *policysrc.Source) error {
 	if err != nil {
 		return err
 	}
-	return d.writeFile(SourceFile, append(encoded, '\n'), 0o600)
+	return d.writeSource(append(encoded, '\n'))
 }
 
 // Generation is one installed, verified policy generation.
@@ -116,7 +188,7 @@ type Generation struct {
 // Generations lists the installed generations in revision order, each verified
 // against the authority recorded in its own bootstrap.json.
 func (d *Dir) Generations() ([]Generation, error) {
-	entries, err := os.ReadDir(d.abs(GenerationsDir))
+	entries, err := os.ReadDir(d.generationsAbs(GenerationsDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -143,12 +215,12 @@ func (d *Dir) LoadGeneration(name string) (Generation, error) {
 	if !generationPattern.MatchString(name) {
 		return Generation{}, fmt.Errorf("invalid generation name")
 	}
-	document, authority, err := d.loadBootstrap(path.Join(GenerationsDir, name, BootstrapFile))
+	document, authority, err := d.loadBootstrap(d.bootstrapRel(name))
 	if err != nil {
 		return Generation{}, err
 	}
 	_ = document
-	content, err := d.readProtected(path.Join(GenerationsDir, name, PolicyFile), trust.MaxEnvelopeBytes)
+	content, err := d.readGenerationFile(path.Join(GenerationsDir, name, PolicyFile), trust.MaxEnvelopeBytes)
 	if err != nil {
 		return Generation{}, err
 	}

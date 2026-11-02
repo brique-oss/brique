@@ -613,12 +613,21 @@ func TestFacadeEndToEnd(t *testing.T) {
 	}
 }
 
-// Peers travel with the generation: declared in the source directory, merged into
-// the bootstrap by apply, adopted by the running engine at the next reload.
+// Peers travel with the signed generation: declared in the access source, compiled into
+// the policy by apply, adopted by the running engine at the next reload.
 func TestPeersAreCarriedByTheNextGeneration(t *testing.T) {
 	d := initSolo(t)
 	m := startEngine(t, d, "g000001")
 	peer := securityruntime.Peer{PrincipalID: "partner-a", AudienceInstanceID: "prod-b", Interface: "secure-partner-a", Target: "https://partner.example:8443/brique"}
+	for _, id := range []string{"partner-a", "partner-c", "p"} {
+		public, _ := newPublicKey(t)
+		if err := d.PrincipalAdd(id, "instance", public); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PeerAdd(securityruntime.Peer{PrincipalID: "ghost", AudienceInstanceID: "prod-b", Interface: "secure-g", Target: "https://ghost.example/brique"}); err == nil {
+		t.Fatal("a peer for a principal that does not exist was accepted")
+	}
 
 	for name, bad := range map[string]securityruntime.Peer{
 		"clear url":        {PrincipalID: "p", AudienceInstanceID: "prod-b", Interface: "secure-p", Target: "http://partner.example/brique"},

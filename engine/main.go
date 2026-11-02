@@ -29,6 +29,7 @@ import (
 	context "brique_engine/context"
 	"brique_engine/junction"
 	securitycatalog "brique_engine/security/catalog"
+	"brique_engine/security/hostdir"
 	securitymanager "brique_engine/security/manager"
 	"brique_engine/security/trust"
 	"brique_engine/shared"
@@ -61,7 +62,7 @@ func runSecurityReloadWorker(rootDir string, reloader securityReloader, build se
 
 func main() {
 	rootPathFlag := flag.String("root_path", "", "Path to Brique instance root directory (contains instance root context.json)")
-	securityDirectoryFlag := flag.String("security_dir", "", "Host-local protected security directory (optional; enables signed external communication)")
+	securityDirectoryFlag := flag.String("security_dir", "", "Host-local protected security directory (optional: an instance with a security/ folder finds ~/.brique/<instance> by itself)")
 	securityGenerationFlag := flag.String("security_generation", "", "Initial protected security generation (required only for first activation)")
 	auditMaxFileMiBFlag := flag.Int("audit_max_file_mib", 0, "Maximum size in MiB of one denial-journal file (default 64)")
 	auditRetentionDaysFlag := flag.Int("audit_retention_days", 0, "Days of denial journal kept (default 14)")
@@ -86,14 +87,19 @@ func main() {
 
 	ctxCommReg := junction.NewContextCommRegistry()
 	var securityManager *securitymanager.Manager
-	if *securityDirectoryFlag == "" && *securityGenerationFlag != "" {
-		fmt.Fprintln(os.Stderr, "Brique failed to start: security_generation requires security_dir")
+	locations, err := hostdir.Resolve(rootDir, *securityDirectoryFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Brique failed to start: %s\n", err)
 		os.Exit(1)
 	}
-	if *securityDirectoryFlag != "" {
-		securityDirectory, err := filepath.Abs(*securityDirectoryFlag)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Brique failed to start: invalid security directory")
+	ctxCommReg.SetMachineDirectory(locations.Machine)
+	if locations.Machine == "" && *securityGenerationFlag != "" {
+		fmt.Fprintln(os.Stderr, "Brique failed to start: security_generation requires a security directory")
+		os.Exit(1)
+	}
+	if locations.Machine != "" {
+		if info, statErr := os.Stat(locations.Machine); statErr != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Brique failed to start: the security directory %s does not exist; create it with brique-sec init\n", locations.Machine)
 			os.Exit(1)
 		}
 		closedWorld, err := securitycatalog.Build(rootDir)
@@ -102,7 +108,7 @@ func main() {
 			os.Exit(1)
 		}
 		securityManager, err = securitymanager.Start(securitymanager.Options{
-			SecurityDirectory: securityDirectory, InitialGeneration: *securityGenerationFlag,
+			SecurityDirectory: locations.Machine, PolicyDirectory: locations.Policy, InitialGeneration: *securityGenerationFlag,
 			RequireReadOnlyKeyFiles: true,
 			AuditMaxFileMiB:         *auditMaxFileMiBFlag, AuditRetentionDays: *auditRetentionDaysFlag,
 		}, closedWorld, ctxCommReg)
@@ -117,8 +123,8 @@ func main() {
 	securityPIDFile := ""
 	var securityPIDHandle *os.File
 	securityDirectory := ""
-	if *securityDirectoryFlag != "" {
-		if absolute, absErr := filepath.Abs(*securityDirectoryFlag); absErr == nil {
+	if locations.Machine != "" {
+		if absolute, absErr := filepath.Abs(locations.Machine); absErr == nil {
 			securityDirectory = absolute
 			securityPIDFile = filepath.Join(securityDirectory, "engine.pid")
 			handle, pidErr := acquireEnginePID(securityPIDFile)
