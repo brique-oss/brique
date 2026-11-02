@@ -1506,6 +1506,12 @@ func (l *MatterLoop) runJob(msg circulation.Message) {
 		return
 	}
 
+	// An identifier becomes a file name in the context: one name, never a path.
+	if key, bad := invalidObjectIdentifier(in.Params); bad {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid, map[string]any{circulation.KeyReason: "invalid_identifier", "param": key}, "identifier must be a single name"))
+		return
+	}
+
 	// placeholder auth
 	if ok := l.authorize(in); !ok {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized, map[string]any{}, "authorization denied"))

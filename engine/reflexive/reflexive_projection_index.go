@@ -398,15 +398,24 @@ func resolveDescriptorAbsFromRoot(rootCtxDir, ctxID, elementType, id string) (st
 		if name == "" {
 			return "", fmt.Errorf("missing name")
 		}
+		if err := validElementName(name); err != nil {
+			return "", err
+		}
 		return filepath.Join(ctxDir, circulation.ValueCapacity, name+CapacityDescriptorExt), nil
 	case circulation.ValueSchema:
 		if name == "" {
 			return "", fmt.Errorf("missing name")
 		}
+		if err := validElementName(name); err != nil {
+			return "", err
+		}
 		return filepath.Join(ctxDir, circulation.ValueSchema, name+SchemaDescriptorExt), nil
 	case circulation.ValueDocument:
 		if name == "" {
 			return "", fmt.Errorf("missing name")
+		}
+		if err := validElementName(name); err != nil {
+			return "", err
 		}
 		return filepath.Join(ctxDir, circulation.ValueDocument, name+DocumentDescriptorExt), nil
 	case circulation.ValueStructure:

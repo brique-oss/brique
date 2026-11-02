@@ -934,6 +934,9 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 			err = fmt.Errorf("capacity elementname is required")
 			return
 		}
+		if err = validElementName(name); err != nil {
+			return
+		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueCapacity, name+CapacityDescriptorExt))
 		diskPath = filepath.Join(ctxDir, circulation.ValueCapacity, name+CapacityDescriptorExt)
 		return
@@ -943,6 +946,9 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 			err = fmt.Errorf("schema elementname is required")
 			return
 		}
+		if err = validElementName(name); err != nil {
+			return
+		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueSchema, name+SchemaDescriptorExt))
 		diskPath = filepath.Join(ctxDir, circulation.ValueSchema, name+SchemaDescriptorExt)
 		return
@@ -950,6 +956,9 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 	case circulation.ValueDocument:
 		if name == "" {
 			err = fmt.Errorf("document elementname is required")
+			return
+		}
+		if err = validElementName(name); err != nil {
 			return
 		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueDocument, name+DocumentDescriptorExt))
@@ -1389,6 +1398,9 @@ func (l *ReflexiveLoop) capReadDocument(msg circulation.Message) {
 		reqName = strings.TrimSpace(reqName)
 		if reqName == "" {
 			return outTarget{}, false, "missing_name"
+		}
+		if validElementName(reqName) != nil {
+			return outTarget{}, false, "invalid_name"
 		}
 
 		// Descriptor location: <ctxDir>/document/<name>.json

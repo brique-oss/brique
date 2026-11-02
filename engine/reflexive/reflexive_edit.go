@@ -632,6 +632,9 @@ func meaningPathFor(ctxDir, t, id string) (diskPath string, navPath string, err 
 		if id == "" {
 			return "", "", fmt.Errorf("capacity name is required")
 		}
+		if err := validElementName(id); err != nil {
+			return "", "", err
+		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueCapacity, id+CapacityDescriptorExt))
 		diskPath = filepath.Join(ctxDir, circulation.ValueCapacity, id+CapacityDescriptorExt)
 		return
@@ -639,12 +642,18 @@ func meaningPathFor(ctxDir, t, id string) (diskPath string, navPath string, err 
 		if id == "" {
 			return "", "", fmt.Errorf("schema name is required")
 		}
+		if err := validElementName(id); err != nil {
+			return "", "", err
+		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueSchema, id+SchemaDescriptorExt))
 		diskPath = filepath.Join(ctxDir, circulation.ValueSchema, id+SchemaDescriptorExt)
 		return
 	case circulation.ValueDocument:
 		if id == "" {
 			return "", "", fmt.Errorf("document name is required")
+		}
+		if err := validElementName(id); err != nil {
+			return "", "", err
 		}
 		navPath = filepath.ToSlash(filepath.Join(circulation.ValueDocument, id+DocumentDescriptorExt))
 		diskPath = filepath.Join(ctxDir, circulation.ValueDocument, id+DocumentDescriptorExt)
