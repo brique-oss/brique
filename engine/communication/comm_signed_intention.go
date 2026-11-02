@@ -47,11 +47,26 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 	}
 
 	origin := message.Intention.From
-	if !strings.HasPrefix(string(origin.Context), "/") || origin.Type == "" {
-		l.failSignedExternalIntention(message, "invalid_external_origin", "external intention requires an absolute local origin")
+	// The origin is where the answer is delivered here, and what the other instance is told is the
+	// context the call comes from. A context is both. A user interface element (@ui_main:/panel)
+	// is delivered to by its address, and the other instance is told the context that owns the
+	// interface, which is the part of this instance that emits the call.
+	wireOrigin := string(origin.Context)
+	if owner, isUI := l.uiOwner(string(origin.Context)); isUI {
+		if owner == "" {
+			l.failSignedExternalIntention(message, "invalid_external_origin", "the user interface that emits the intention has no owning context")
+			return
+		}
+		wireOrigin = owner
+	} else if !strings.HasPrefix(wireOrigin, "/") {
+		wireOrigin = ""
+	}
+	if wireOrigin == "" || origin.Type == "" {
+		l.failSignedExternalIntention(message, "invalid_external_origin", "external intention requires a local origin: a context or a user interface")
 		return
 	}
 	wireMessage := rewriteExternalWireDestination(message)
+	wireMessage.Intention.From.Context = circulation.ContextID(wireOrigin)
 	if err := inner.ValidateLocalContextPath(string(wireMessage.Intention.To.Context)); err != nil {
 		l.failSignedExternalIntention(message, "invalid_external_destination", "external destination path is not canonical")
 		return
@@ -153,7 +168,34 @@ func (l *CommLoop) failSignedExternalIntention(request circulation.Message, reas
 			Message: detail, Details: map[string]any{circulation.KeyReason: reason},
 		},
 	}}
-	l.forwardToContext(shared.ContextAddr(request.Intention.From.Context), response)
+	l.deliverToOrigin(request.Intention.From, response)
+}
+
+// uiOwner reports whether address is that of an element of a user interface ("@ui_<name>:/path")
+// and, if so, the context that owns the interface ("" when no context does).
+func (l *CommLoop) uiOwner(address string) (owner string, isUI bool) {
+	tag, _, ok := parseAtAddress(address)
+	if !ok || !strings.HasPrefix(tag, "ui_") {
+		return "", false
+	}
+	if l.frame == nil || l.frame.CtxCommReg == nil {
+		return "", true
+	}
+	ownerContext, found := l.frame.CtxCommReg.ResolveUI(strings.TrimPrefix(tag, "ui_"))
+	if !found {
+		return "", true
+	}
+	return string(ownerContext), true
+}
+
+// deliverToOrigin hands a message to the origin of a call: the context that emitted it, or the
+// user interface element, which the ordinary routing of a message addressed to an interface reaches.
+func (l *CommLoop) deliverToOrigin(origin circulation.Address, message circulation.Message) {
+	if _, isUI := l.uiOwner(string(origin.Context)); isUI {
+		l.routeEgress(message)
+		return
+	}
+	l.forwardToContext(shared.ContextAddr(origin.Context), message)
 }
 
 func (l *CommLoop) admitSignedExternalResponse(verified *wire.Verified) {
@@ -176,6 +218,17 @@ func (l *CommLoop) admitSignedExternalResponse(verified *wire.Verified) {
 	if l.frame == nil || l.frame.CtxCommReg == nil {
 		_ = securityRuntime.Pending().Abort(permit)
 		l.traceSignedAdmissionReject("response_destination_unavailable")
+		return
+	}
+	if _, isUI := l.uiOwner(string(permit.Origin().Context)); isUI {
+		// The call came from a user interface element: the answer goes where an answer to an
+		// interface goes.
+		l.routeEgress(message)
+		if err := securityRuntime.Pending().Commit(permit, l.externalReplyTime().UTC()); err != nil {
+			l.sendToTrace(message, circulation.ValueTraceCommReject, "pending_response_commit_failed", "pending response was delivered but could not be committed")
+			return
+		}
+		l.sendToTrace(message, circulation.ValueTraceCommIngress, "", "")
 		return
 	}
 	channel, found := l.frame.CtxCommReg.ResolveCh(shared.ContextAddr(permit.Origin().Context))
@@ -242,8 +295,9 @@ func (l *CommLoop) deliverPendingExternalFailure(expired pending.Expired, nonBlo
 	if l == nil || l.frame == nil || l.frame.CtxCommReg == nil {
 		return
 	}
+	_, originIsUI := l.uiOwner(string(expired.Request.Origin.Context))
 	channel, found := l.frame.CtxCommReg.ResolveCh(shared.ContextAddr(expired.Request.Origin.Context))
-	if !found || channel == nil {
+	if !originIsUI && (!found || channel == nil) {
 		return
 	}
 	code := circulation.ValueCodeTimeout
@@ -264,6 +318,10 @@ func (l *CommLoop) deliverPendingExternalFailure(expired pending.Expired, nonBlo
 			Details: map[string]any{circulation.KeyReason: string(expired.Reason)},
 		},
 	}}
+	if originIsUI {
+		l.routeEgress(message)
+		return
+	}
 	delivery, err := l.deliveryForMessage(message)
 	if err != nil {
 		return
