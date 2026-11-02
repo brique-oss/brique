@@ -269,6 +269,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	if strings.HasPrefix(toCtx, "@") && hasExternalAuthority(source...) {
 		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
 			"externally authorized delivery cannot cross a physical interface without a dedicated adapter")
+		l.refuseExternalEgress(msg, source[0])
 		return
 	}
 

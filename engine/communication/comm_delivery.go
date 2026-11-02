@@ -21,6 +21,8 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
+	"brique_engine/security/audit"
+	"brique_engine/security/refusal"
 )
 
 // deliveryStatus describes acceptance by the next local communication queue.
@@ -89,4 +91,26 @@ func hasExternalAuthority(source ...junction.Delivery) bool {
 	}
 	_, external := source[0].ExternalAdmission()
 	return external
+}
+
+// refuseExternalEgress answers an awaited intention that an admitted external authority, or a
+// restricted local principal, tried to send to another instance. No policy grants that
+// today (open item E1), so it is refused: the canonical refusal goes back to whoever waits
+// for it, and the denial is journaled under the principal's name. Without the answer the
+// caller would wait for its whole timeout.
+func (l *CommLoop) refuseExternalEgress(msg circulation.Message, source junction.Delivery) {
+	if l == nil || msg.Kind != circulation.ValueKindIntention {
+		return
+	}
+	if context, external := source.ExternalAdmission(); external {
+		context.RecordDenial(l.auditRecorder(), "egress", msg.Intention, audit.LayerTransport, audit.ReasonEgressDenied)
+	}
+	if !msg.Intention.AwaitResponse {
+		return
+	}
+	l.routeEgress(circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{
+		IntentionID: msg.Intention.IntentionID, To: msg.Intention.From, From: msg.Intention.To,
+		Identity: msg.Intention.Identity, Status: circulation.ValueStatusError,
+		Error: refusal.CapabilityDenied(circulation.ValueOriginCommunication),
+	}})
 }
