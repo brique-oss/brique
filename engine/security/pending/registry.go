@@ -57,10 +57,13 @@ type Request struct {
 	IntentionID         string
 	RequestHash         string
 	ExpectedPrincipalID string
-	Origin              circulation.Address
-	MinimumContentMode  string
-	SilenceTimeout      time.Duration
-	AbsoluteDeadline    time.Time
+	// ExpectedKeyIDs, when not empty, are the keys of the machine the request was sent to: the
+	// answer must be signed by one of them. Empty: any key of the principal.
+	ExpectedKeyIDs     []string
+	Origin             circulation.Address
+	MinimumContentMode string
+	SilenceTimeout     time.Duration
+	AbsoluteDeadline   time.Time
 }
 
 type Snapshot struct {
@@ -200,6 +203,7 @@ func (registry *Registry) BeginResponse(verified *wire.Verified, innerStatus str
 	}
 	if current.request.RequestHash != protected.RequestHash ||
 		current.request.ExpectedPrincipalID != verified.Admission().PrincipalID() ||
+		!signedByExpectedKey(current.request.ExpectedKeyIDs, verified.Admission().SigningKeyID()) ||
 		contentStrength(protected.ContentMode) < contentStrength(current.request.MinimumContentMode) {
 		return Permit{}, ErrMismatch
 	}
@@ -341,6 +345,19 @@ func snapshotOf(current *entry) Snapshot {
 		SilenceDeadline:    current.silenceDeadline, AbsoluteDeadline: current.request.AbsoluteDeadline,
 		HasSequence: current.hasSequence, LastSequence: current.lastSequence,
 	}
+}
+
+// signedByExpectedKey says whether an answer was signed by a key of the machine that was asked.
+func signedByExpectedKey(expected []string, keyID string) bool {
+	if len(expected) == 0 {
+		return true
+	}
+	for _, candidate := range expected {
+		if candidate == keyID {
+			return true
+		}
+	}
+	return false
 }
 
 func contentStrength(mode string) int {

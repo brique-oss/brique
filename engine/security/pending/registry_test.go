@@ -124,6 +124,23 @@ func TestBeginResponseChecksEveryBinding(t *testing.T) {
 			}(),
 			response: fixture.verifiedResponse(t, testHash(1), 0, "final"), status: circulation.ValueStatusOK, want: ErrMismatch,
 		},
+		{
+			// The request went to a machine whose keys do not include the one that signed the answer.
+			name: "key of another machine", request: func() Request {
+				value := fixture.pendingRequest(time.Minute)
+				value.ExpectedKeyIDs = []string{"bk1_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
+				return value
+			}(),
+			response: fixture.verifiedResponse(t, testHash(1), 0, "final"), status: circulation.ValueStatusOK, want: ErrMismatch,
+		},
+		{
+			name: "key of the machine asked", request: func() Request {
+				value := fixture.pendingRequest(time.Minute)
+				value.ExpectedKeyIDs = []string{fixture.keyID}
+				return value
+			}(),
+			response: fixture.verifiedResponse(t, testHash(1), 0, "final"), status: circulation.ValueStatusOK, want: nil,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -131,7 +148,7 @@ func TestBeginResponseChecksEveryBinding(t *testing.T) {
 			if err := registry.Register(test.request, fixture.now); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := registry.BeginResponse(test.response, test.status, fixture.now); !errors.Is(err, test.want) {
+			if _, err := registry.BeginResponse(test.response, test.status, fixture.now); !errors.Is(err, test.want) && (test.want != nil || err != nil) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
 		})

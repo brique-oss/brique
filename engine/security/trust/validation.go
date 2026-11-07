@@ -519,8 +519,14 @@ func validateExternalPeers(policy *Policy) error {
 		return fmt.Errorf("a policy carries at most %d external peers", maxExternalPeers)
 	}
 	known := make(map[string]struct{}, len(policy.Principals))
+	keysOf := make(map[string]map[string]struct{}, len(policy.Principals))
 	for _, principal := range policy.Principals {
 		known[principal.PrincipalID] = struct{}{}
+		keys := make(map[string]struct{}, len(principal.SigningKeys))
+		for _, key := range principal.SigningKeys {
+			keys[key.KeyID] = struct{}{}
+		}
+		keysOf[principal.PrincipalID] = keys
 	}
 	seen := make(map[string]struct{}, len(policy.ExternalPeers))
 	for _, peer := range policy.ExternalPeers {
@@ -530,8 +536,11 @@ func validateExternalPeers(policy *Policy) error {
 		if err := validateIdentifier("external peer audience_instance_id", peer.AudienceInstanceID); err != nil {
 			return err
 		}
-		if peer.Interface == "" || peer.Target == "" {
-			return fmt.Errorf("external peer %q needs an interface and a target", peer.PrincipalID)
+		if peer.Interface == "" {
+			return fmt.Errorf("external peer %q needs an interface", peer.PrincipalID)
+		}
+		if err := validatePeerEndpoints(&peer, keysOf[peer.PrincipalID]); err != nil {
+			return err
 		}
 		if _, declared := known[peer.PrincipalID]; !declared {
 			return fmt.Errorf("external peer %q is not a principal of the policy", peer.PrincipalID)
@@ -540,6 +549,51 @@ func validateExternalPeers(policy *Policy) error {
 			return fmt.Errorf("duplicate external peer %q", peer.PrincipalID)
 		}
 		seen[peer.PrincipalID] = struct{}{}
+	}
+	return nil
+}
+
+// validatePeerEndpoints checks that a peer is reached either on one machine (a target) or on
+// named machines (endpoints), and that every key an endpoint names is a key of the principal and
+// lives on one machine only.
+func validatePeerEndpoints(peer *ExternalPeer, principalKeys map[string]struct{}) error {
+	if len(peer.Endpoints) == 0 {
+		if peer.Target == "" {
+			return fmt.Errorf("external peer %q needs a target or endpoints", peer.PrincipalID)
+		}
+		return nil
+	}
+	if peer.Target != "" {
+		return fmt.Errorf("external peer %q has both a target and endpoints", peer.PrincipalID)
+	}
+	if len(peer.Endpoints) > MaxPeerEndpoints {
+		return fmt.Errorf("external peer %q has more than %d endpoints", peer.PrincipalID, MaxPeerEndpoints)
+	}
+	names := make(map[string]struct{}, len(peer.Endpoints))
+	bound := make(map[string]string)
+	for _, endpoint := range peer.Endpoints {
+		if err := validateIdentifier("external peer endpoint name", endpoint.Name); err != nil {
+			return fmt.Errorf("external peer %q: %w", peer.PrincipalID, err)
+		}
+		if _, duplicate := names[endpoint.Name]; duplicate {
+			return fmt.Errorf("external peer %q has two endpoints named %q", peer.PrincipalID, endpoint.Name)
+		}
+		names[endpoint.Name] = struct{}{}
+		if endpoint.Target == "" {
+			return fmt.Errorf("external peer %q endpoint %q needs a target", peer.PrincipalID, endpoint.Name)
+		}
+		if len(endpoint.KeyIDs) == 0 || len(endpoint.KeyIDs) > maxSigningKeysPerUser {
+			return fmt.Errorf("external peer %q endpoint %q needs between 1 and %d keys", peer.PrincipalID, endpoint.Name, maxSigningKeysPerUser)
+		}
+		for _, keyID := range endpoint.KeyIDs {
+			if _, owned := principalKeys[keyID]; !owned {
+				return fmt.Errorf("external peer %q endpoint %q names a key that is not one of the principal's", peer.PrincipalID, endpoint.Name)
+			}
+			if other, taken := bound[keyID]; taken {
+				return fmt.Errorf("external peer %q: a key lives on endpoints %q and %q", peer.PrincipalID, other, endpoint.Name)
+			}
+			bound[keyID] = endpoint.Name
+		}
 	}
 	return nil
 }

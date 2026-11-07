@@ -131,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "brique-sec : "+format+"\n", values...)
 		return 1
 	}
-	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "encryption", "depth", "audience", "interface", "target", "host", "addr", "days")
+	global, err := parse(args, "dir", "instance", "authority-public", "kind", "key", "except", "out", "in", "signed", "root", "since", "principal", "reason", "limit", "actor", "as-owner", "encryption", "depth", "name", "not-before", "audience", "interface", "target", "host", "addr", "days")
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -360,7 +360,7 @@ func reasonFR(reason string) string {
 
 func principalCommand(dir *secadmin.Dir, args []string, global options, stdout io.Writer, fail func(string, ...any) int) int {
 	if len(args) == 0 {
-		return fail("usage : principal add|encryption|limits|disable|enable|remove|list")
+		return fail("usage : principal add|key|encryption|limits|disable|enable|remove|list")
 	}
 	action, rest := args[0], args[1:]
 	need := func(count int) bool { return len(rest) == count }
@@ -373,6 +373,18 @@ func principalCommand(dir *secadmin.Dir, args []string, global options, stdout i
 		err = dir.PrincipalAdd(rest[0], global.one("kind"), global.one("key"))
 		if err == nil && global.has("encryption") {
 			err = dir.PrincipalSetEncryption(rest[0], global.one("encryption"))
+		}
+	case "key":
+		if len(rest) < 2 || (rest[0] != "add" && rest[0] != "remove") {
+			return fail("usage : principal key add <id> <clé publique> [--not-before <date RFC 3339 UTC>]  |  principal key remove <id> <clé publique ou identifiant>")
+		}
+		if len(rest) != 3 {
+			return fail("usage : principal key %s <id> <clé>", rest[0])
+		}
+		if rest[0] == "add" {
+			err = dir.PrincipalKeyAdd(rest[1], rest[2], global.one("not-before"))
+		} else {
+			err = dir.PrincipalKeyRemove(rest[1], rest[2])
 		}
 	case "limits":
 		if len(rest) < 2 || len(rest) > 3 {
@@ -633,6 +645,16 @@ func peerCommand(dir *secadmin.Dir, args []string, global options, stdout io.Wri
 	action, rest := args[0], args[1:]
 	switch action {
 	case "add":
+		if global.has("name") {
+			if len(rest) != 1 || global.one("target") == "" || len(global.flags["key"]) == 0 {
+				return fail("usage : peer add <principal> --name <machine> --target <url https> --key <clé publique>... [--audience <instance> --interface <adaptateur>]")
+			}
+			if err := dir.PeerEndpointAdd(rest[0], global.one("audience"), global.one("interface"), global.one("name"), global.one("target"), global.flags["key"]); err != nil {
+				return fail("%v", err)
+			}
+			fmt.Fprintf(stdout, "Machine %s ajoutée au pair %s. Appliquez avec apply.\n", global.one("name"), rest[0])
+			return 0
+		}
 		if len(rest) != 1 || global.one("audience") == "" || global.one("interface") == "" || global.one("target") == "" {
 			return fail("usage : peer add <principal> --audience <instance> --interface <adaptateur> --target <url https>")
 		}
@@ -643,7 +665,14 @@ func peerCommand(dir *secadmin.Dir, args []string, global options, stdout io.Wri
 		fmt.Fprintf(stdout, "Pair %s ajouté. Appliquez avec apply : une nouvelle génération le portera.\n", rest[0])
 	case "remove":
 		if len(rest) != 1 {
-			return fail("usage : peer remove <principal>")
+			return fail("usage : peer remove <principal> [--name <machine>]")
+		}
+		if global.has("name") {
+			if err := dir.PeerEndpointRemove(rest[0], global.one("name")); err != nil {
+				return fail("%v", err)
+			}
+			fmt.Fprintf(stdout, "Machine %s retirée du pair %s. Appliquez avec apply.\n", global.one("name"), rest[0])
+			return 0
 		}
 		if err := dir.PeerRemove(rest[0]); err != nil {
 			return fail("%v", err)
@@ -655,7 +684,14 @@ func peerCommand(dir *secadmin.Dir, args []string, global options, stdout io.Wri
 			return fail("%v", err)
 		}
 		for _, peer := range peers {
-			fmt.Fprintf(stdout, "%s  audience=%s  interface=%s  %s\n", peer.PrincipalID, peer.AudienceInstanceID, peer.Interface, peer.Target)
+			if len(peer.Endpoints) == 0 {
+				fmt.Fprintf(stdout, "%s  audience=%s  interface=%s  %s\n", peer.PrincipalID, peer.AudienceInstanceID, peer.Interface, peer.Target)
+				continue
+			}
+			fmt.Fprintf(stdout, "%s  audience=%s  interface=%s\n", peer.PrincipalID, peer.AudienceInstanceID, peer.Interface)
+			for _, endpoint := range peer.Endpoints {
+				fmt.Fprintf(stdout, "  %-12s %s  clés : %s\n", endpoint.Name, endpoint.Target, strings.Join(endpoint.KeyIDs, ", "))
+			}
 		}
 	default:
 		return fail("commande inconnue : peer %s", action)

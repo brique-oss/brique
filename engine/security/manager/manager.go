@@ -434,7 +434,7 @@ func peerDirectory(candidate *bootstrap.Candidate, decoded *trust.DecodeResult) 
 	peers := candidate.Peers().Peers()
 	for _, peer := range decoded.ExternalPeers() {
 		peers = append(peers, securityruntime.Peer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
-			Interface: peer.Interface, Target: peer.Target})
+			Interface: peer.Interface, Target: peer.Target, Endpoints: peer.Endpoints})
 	}
 	return securityruntime.NewPeerDirectory(peers)
 }

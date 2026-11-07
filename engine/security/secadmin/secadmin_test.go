@@ -20,6 +20,7 @@ import (
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -659,7 +660,7 @@ func TestPeersAreCarriedByTheNextGeneration(t *testing.T) {
 	if err := m.Reload(offlineCatalog()); err != nil {
 		t.Fatalf("the engine did not adopt the generation: %v", err)
 	}
-	if got, ok := m.Runtime().Peer("partner-a"); !ok || got != peer {
+	if got, ok := m.Runtime().Peer("partner-a"); !ok || !reflect.DeepEqual(got, peer) {
 		t.Fatalf("the engine's peer = %+v, %v", got, ok)
 	}
 	if again, err := d.Apply(ApplyOptions{}); err != nil || !again.Unchanged {

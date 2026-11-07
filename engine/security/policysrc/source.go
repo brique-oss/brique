@@ -104,6 +104,9 @@ type Principal struct {
 type Key struct {
 	PublicKey string `json:"public_key"`
 	State     string `json:"state,omitempty"`
+	// NotBefore is when the key starts to be valid (RFC 3339, UTC). Of the keys of a principal that
+	// live on one machine, the one that starts last is the one a message is sealed to.
+	NotBefore string `json:"not_before,omitempty"`
 }
 
 // Actor narrows a principal for one actor label (phase 6).

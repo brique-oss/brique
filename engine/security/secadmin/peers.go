@@ -18,6 +18,7 @@ package secadmin
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 
 	"brique_engine/security/policysrc"
@@ -33,14 +34,14 @@ func toRuntimePeers(peers []trust.ExternalPeer) []securityruntime.Peer {
 	out := make([]securityruntime.Peer, 0, len(peers))
 	for _, peer := range peers {
 		out = append(out, securityruntime.Peer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
-			Interface: peer.Interface, Target: peer.Target})
+			Interface: peer.Interface, Target: peer.Target, Endpoints: peer.Endpoints})
 	}
 	return out
 }
 
 func fromRuntimePeer(peer securityruntime.Peer) trust.ExternalPeer {
 	return trust.ExternalPeer{PrincipalID: peer.PrincipalID, AudienceInstanceID: peer.AudienceInstanceID,
-		Interface: peer.Interface, Target: peer.Target}
+		Interface: peer.Interface, Target: peer.Target, Endpoints: peer.Endpoints}
 }
 
 // PeerAdd declares the receiver-side binding of a peer principal to a remote
@@ -61,6 +62,85 @@ func (d *Dir) PeerAdd(peer securityruntime.Peer) error {
 	}
 	src.Peers = append(src.Peers, fromRuntimePeer(peer))
 	return d.savePeers(src)
+}
+
+// PeerEndpointAdd reaches a peer on one more machine: the base URL of its listener and the keys of
+// the principal that live there (public keys or identifiers). It creates the peer when it does not
+// exist, in which case the audience and the interface are required. A peer reached on a single
+// target must be removed and added again to be reached on named machines.
+func (d *Dir) PeerEndpointAdd(principalID, audience, iface, name, target string, keys []string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal := src.Principals[principalID]
+	if principal == nil {
+		return fmt.Errorf("peer %q: add the principal first", principalID)
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("peer %q: an endpoint needs at least one key of the principal", principalID)
+	}
+	ids := make([]string, 0, len(keys))
+	for _, key := range keys {
+		id, err := keyID(key)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	endpoint := trust.PeerEndpoint{Name: name, Target: target, KeyIDs: ids}
+	for index := range src.Peers {
+		peer := &src.Peers[index]
+		if peer.PrincipalID != principalID {
+			continue
+		}
+		if len(peer.Endpoints) == 0 {
+			return fmt.Errorf("peer %q is reached on a single target: remove it and add it again with named machines", principalID)
+		}
+		if (audience != "" && audience != peer.AudienceInstanceID) || (iface != "" && iface != peer.Interface) {
+			return fmt.Errorf("peer %q already exists with another audience or interface", principalID)
+		}
+		peer.Endpoints = append(peer.Endpoints, endpoint)
+		return d.savePeers(src)
+	}
+	if audience == "" || iface == "" {
+		return fmt.Errorf("peer %q does not exist yet: the audience and the interface are required", principalID)
+	}
+	src.Peers = append(src.Peers, trust.ExternalPeer{PrincipalID: principalID, AudienceInstanceID: audience, Interface: iface,
+		Endpoints: []trust.PeerEndpoint{endpoint}})
+	return d.savePeers(src)
+}
+
+// PeerEndpointRemove stops reaching a peer on one machine. The last machine of a peer cannot be
+// removed that way: remove the peer.
+func (d *Dir) PeerEndpointRemove(principalID, name string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	for index := range src.Peers {
+		peer := &src.Peers[index]
+		if peer.PrincipalID != principalID {
+			continue
+		}
+		kept := peer.Endpoints[:0:0]
+		for _, endpoint := range peer.Endpoints {
+			if endpoint.Name != name {
+				kept = append(kept, endpoint)
+			}
+		}
+		switch {
+		case len(peer.Endpoints) == 0:
+			return fmt.Errorf("peer %q has no named machines", principalID)
+		case len(kept) == len(peer.Endpoints):
+			return fmt.Errorf("peer %q has no machine named %q", principalID, name)
+		case len(kept) == 0:
+			return fmt.Errorf("peer %q: that is its last machine, remove the peer instead", principalID)
+		}
+		peer.Endpoints = kept
+		return d.savePeers(src)
+	}
+	return fmt.Errorf("unknown peer %q", principalID)
 }
 
 // PeerRemove deletes the peer of a principal.
@@ -112,7 +192,7 @@ func samePeers(a, b []trust.ExternalPeer) bool {
 		index[peer.PrincipalID] = peer
 	}
 	for _, peer := range b {
-		if index[peer.PrincipalID] != peer {
+		if !reflect.DeepEqual(index[peer.PrincipalID], peer) {
 			return false
 		}
 	}

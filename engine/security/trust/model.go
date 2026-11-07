@@ -64,12 +64,28 @@ type Policy struct {
 // ExternalPeer binds a principal to the remote instance it answers for: the audience
 // its messages are addressed to, the local HTTPS adapter that carries them and the exact
 // base URL of the remote listener.
+//
+// A peer reached on one machine has a Target. A peer reached on several has Endpoints instead:
+// each is a machine, with its own base URL and the keys of the principal that live there.
 type ExternalPeer struct {
-	PrincipalID        string `json:"principal_id"`
-	AudienceInstanceID string `json:"audience_instance_id"`
-	Interface          string `json:"interface"`
-	Target             string `json:"target"`
+	PrincipalID        string         `json:"principal_id"`
+	AudienceInstanceID string         `json:"audience_instance_id"`
+	Interface          string         `json:"interface"`
+	Target             string         `json:"target,omitempty"`
+	Endpoints          []PeerEndpoint `json:"endpoints,omitempty"`
 }
+
+// PeerEndpoint is one machine of a peer: its name, the base URL of its listener, and the
+// identifiers of the principal's signing keys that live on it. A message is sealed to one of
+// these keys, and the answer to a message signed by one of them goes to this machine.
+type PeerEndpoint struct {
+	Name   string   `json:"name"`
+	Target string   `json:"target"`
+	KeyIDs []string `json:"key_ids"`
+}
+
+// MaxPeerEndpoints bounds the machines one peer is reached on.
+const MaxPeerEndpoints = 8
 
 type Principal struct {
 	PrincipalID string       `json:"principal_id"`

@@ -17,6 +17,7 @@
 package policysrc
 
 import (
+	"reflect"
 	"testing"
 
 	"brique_engine/security/trust"
@@ -29,7 +30,7 @@ func TestPeersCompileIntoThePolicyAndKeepTheFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := result.Policy.ExternalPeers; len(got) != 1 || got[0] != src.Peers[0] {
+	if got := result.Policy.ExternalPeers; len(got) != 1 || !reflect.DeepEqual(got[0], src.Peers[0]) {
 		t.Fatalf("compiled peers = %+v", got)
 	}
 	if result.Policy.FormatVersion != trust.PolicyFormatVersionV2 {

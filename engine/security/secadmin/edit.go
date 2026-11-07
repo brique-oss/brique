@@ -19,8 +19,11 @@ package secadmin
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"brique_engine/security/policysrc"
+	"brique_engine/security/trust"
 )
 
 // PrincipalAdd adds an enabled principal with one signing key.
@@ -153,6 +156,79 @@ func (d *Dir) PrincipalSetDisabled(id string, disabled bool) error {
 		return fmt.Errorf("unknown principal %q", id)
 	}
 	principal.Disabled = disabled
+	return d.SaveSource(src)
+}
+
+// keyID is the identifier of a key given as a public key or as an identifier.
+func keyID(value string) (string, error) {
+	if strings.HasPrefix(value, "bk1_") {
+		return value, nil
+	}
+	raw, err := decodeKey(value)
+	if err != nil {
+		return "", err
+	}
+	return trust.SigningKeyID(raw)
+}
+
+// PrincipalKeyAdd gives a principal one more public key: another machine it runs on, or the key
+// that takes over in a rotation. notBefore (RFC 3339, UTC) says when it starts to be valid; the
+// key of a machine that starts last is the one a message is sealed to.
+func (d *Dir) PrincipalKeyAdd(id, publicKey, notBefore string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal := src.Principals[id]
+	if principal == nil {
+		return fmt.Errorf("principal %q does not exist", id)
+	}
+	if principal.Kind == "local" {
+		return fmt.Errorf("a local principal has no key")
+	}
+	if _, err := decodeKey(publicKey); err != nil {
+		return err
+	}
+	for _, existing := range principal.Keys {
+		if existing.PublicKey == publicKey {
+			return fmt.Errorf("principal %q already has this key", id)
+		}
+	}
+	if notBefore != "" {
+		if _, err := time.Parse(time.RFC3339, notBefore); err != nil || !strings.HasSuffix(notBefore, "Z") {
+			return fmt.Errorf("not-before is a date in RFC 3339, in UTC (for example 2026-11-07T09:00:00Z)")
+		}
+	}
+	principal.Keys = append(principal.Keys, policysrc.Key{PublicKey: publicKey, NotBefore: notBefore})
+	return d.SaveSource(src)
+}
+
+// PrincipalKeyRemove takes a key away from a principal, given as a public key or an identifier.
+// A key an endpoint of a peer still names cannot be removed: the source would not be valid.
+func (d *Dir) PrincipalKeyRemove(id, key string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	principal := src.Principals[id]
+	if principal == nil {
+		return fmt.Errorf("principal %q does not exist", id)
+	}
+	wanted, err := keyID(key)
+	if err != nil {
+		return err
+	}
+	kept := principal.Keys[:0:0]
+	for _, existing := range principal.Keys {
+		if current, err := keyID(existing.PublicKey); err == nil && current == wanted {
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	if len(kept) == len(principal.Keys) {
+		return fmt.Errorf("principal %q has no such key", id)
+	}
+	principal.Keys = kept
 	return d.SaveSource(src)
 }
 

@@ -213,7 +213,7 @@ func (c *compiler) principal(index int, id string, p *Principal) (trust.Principa
 			state = "active"
 		}
 		out.SigningKeys = append(out.SigningKeys, trust.SigningKey{
-			KeyID: keyID, Algorithm: trust.SigningAlgorithm, PublicKey: key.PublicKey, Status: state,
+			KeyID: keyID, Algorithm: trust.SigningAlgorithm, PublicKey: key.PublicKey, Status: state, NotBefore: key.NotBefore,
 		})
 	}
 

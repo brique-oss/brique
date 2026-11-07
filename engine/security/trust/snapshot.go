@@ -20,6 +20,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -353,10 +354,19 @@ func (snapshot *Snapshot) PeerRequiresSeal(principalID string) bool {
 	return false
 }
 
-// SealingKey is the key to seal a message to the principal with: its active key that is valid
-// at the given time and was valid longest. ok is false when it has none.
-func (snapshot *Snapshot) SealingKey(principalID string, at time.Time) (keyID string, publicKey ed25519.PublicKey, ok bool) {
-	var best keyBinding
+// PrincipalKey is a signing key of a principal that is usable at a given time.
+type PrincipalKey struct {
+	KeyID     string
+	PublicKey ed25519.PublicKey
+	// NotBefore is when the key starts to be valid; zero for a key with no start.
+	NotBefore time.Time
+}
+
+// ActiveKeys are the keys of the principal that can sign or be sealed to at the given time,
+// the most recent first: the latest NotBefore, then the smaller identifier, so the order is
+// the same everywhere. A principal that is not active has none.
+func (snapshot *Snapshot) ActiveKeys(principalID string, at time.Time) []PrincipalKey {
+	var keys []PrincipalKey
 	for id, binding := range snapshot.keys {
 		principal := snapshot.principals[binding.principalIndex]
 		if principal.id != principalID || principal.status != "active" || binding.status != "active" {
@@ -365,14 +375,15 @@ func (snapshot *Snapshot) SealingKey(principalID string, at time.Time) (keyID st
 		if (!binding.notBefore.IsZero() && at.Before(binding.notBefore)) || (!binding.notAfter.IsZero() && !at.Before(binding.notAfter)) {
 			continue
 		}
-		if !ok || binding.notBefore.Before(best.notBefore) || (binding.notBefore.Equal(best.notBefore) && id < keyID) {
-			keyID, best, ok = id, binding, true
+		keys = append(keys, PrincipalKey{KeyID: id, PublicKey: append(ed25519.PublicKey(nil), binding.publicKey...), NotBefore: binding.notBefore})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].NotBefore.Equal(keys[j].NotBefore) {
+			return keys[i].NotBefore.After(keys[j].NotBefore)
 		}
-	}
-	if !ok {
-		return "", nil, false
-	}
-	return keyID, append(ed25519.PublicKey(nil), best.publicKey...), true
+		return keys[i].KeyID < keys[j].KeyID
+	})
+	return keys
 }
 
 func (snapshot *Snapshot) Authenticate(keyID string, at time.Time) (Admission, error) {

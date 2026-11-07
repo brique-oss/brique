@@ -121,10 +121,50 @@ func validatePeers(src *Source) error {
 			return fmt.Errorf("access source: peer %d: %q is a local principal and has no remote instance", index, peer.PrincipalID)
 		case seen[peer.PrincipalID]:
 			return fmt.Errorf("access source: peer %d: %q is declared twice", index, peer.PrincipalID)
-		case !identifierPattern.MatchString(peer.AudienceInstanceID) || peer.Interface == "" || peer.Target == "":
-			return fmt.Errorf("access source: peer %d (%q): audience, interface and target are required", index, peer.PrincipalID)
+		case !identifierPattern.MatchString(peer.AudienceInstanceID) || peer.Interface == "":
+			return fmt.Errorf("access source: peer %d (%q): audience and interface are required", index, peer.PrincipalID)
+		}
+		if len(peer.Endpoints) == 0 && peer.Target == "" {
+			return fmt.Errorf("access source: peer %d (%q): a target, or endpoints, are required", index, peer.PrincipalID)
+		}
+		if err := checkPeerEndpoints(index, peer, principal); err != nil {
+			return err
 		}
 		seen[peer.PrincipalID] = true
+	}
+	return nil
+}
+
+// checkPeerEndpoints says early what the signed policy would refuse: a peer is reached on one
+// target or on named endpoints, and every key an endpoint names is a key of the principal.
+func checkPeerEndpoints(index int, peer trust.ExternalPeer, principal *Principal) error {
+	if len(peer.Endpoints) == 0 {
+		return nil
+	}
+	if peer.Target != "" {
+		return fmt.Errorf("access source: peer %d (%q): a target and endpoints are exclusive", index, peer.PrincipalID)
+	}
+	own := make(map[string]bool, len(principal.Keys))
+	for _, key := range principal.Keys {
+		raw, err := base64.RawURLEncoding.DecodeString(key.PublicKey)
+		if err != nil {
+			continue // the key itself is reported by the principal's own validation
+		}
+		if id, err := trust.SigningKeyID(ed25519.PublicKey(raw)); err == nil {
+			own[id] = true
+		}
+	}
+	bound := map[string]string{}
+	for _, endpoint := range peer.Endpoints {
+		for _, keyID := range endpoint.KeyIDs {
+			switch {
+			case !own[keyID]:
+				return fmt.Errorf("access source: peer %d (%q): endpoint %q names a key (%s) that is not one of the principal's", index, peer.PrincipalID, endpoint.Name, keyID)
+			case bound[keyID] != "":
+				return fmt.Errorf("access source: peer %d (%q): a key (%s) lives on endpoints %q and %q", index, peer.PrincipalID, keyID, bound[keyID], endpoint.Name)
+			}
+			bound[keyID] = endpoint.Name
+		}
 	}
 	return nil
 }
