@@ -44,8 +44,8 @@
       "_comment": "Optional. All values are resolved as runtime refs or passed as literals. Supported keys:",
       "<param_name>": "$input.<field> | $alias.payload.<field> | <literal>",
       "@matter": {
-        "<repr_name>": "$input.<matter_slot> | /root/ctx/matter_id",
-        "_note": "Binds a matter ref to the named repr slot declared in the target capacity inputs."
+        "<repr_name>": "$input.<matter_slot> | /root/ctx/matter_id | [\"/root/ctx/matter_id\", \"$input.<matter_slot>\"] | $input.<list_of_matter_refs>",
+        "_note": "Binds a matter ref to the named repr slot declared in the target capacity inputs. A list of refs (written out, or a $ref that resolves to a list) binds several Matters under the same name, in the order given: the slot is declared cardinality 'many'."
       },
       "@schema": "/root/schema/name | $alias.path",
       "@structure": "/root/structure/name",

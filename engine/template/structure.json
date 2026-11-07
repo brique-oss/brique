@@ -12,14 +12,14 @@
   },
 
   "objective": {
-    "_comment": "Optional. Projected by the reflexive meaning layer.",
+    "_comment": "Optional. Characterizes what this structure is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "<structure_id>",
     "_name_note": "Conventionally matches the structure filename without .json.",
     "description": "One sentence describing what this structure organizes."
   },
 
   "functional": {
-    "_comment": "Fully opaque to the engine. Use this section to describe the structure's content in any shape that fits your use case. Common pattern: an 'items' array of typed references.",
+    "_comment": "How this structure works, never what it is (that belongs in 'objective'). Fully opaque to the engine. Use this section to describe the structure's content in any shape that fits your use case. Common pattern: an 'items' array of typed references.",
 
     "items": [
       {

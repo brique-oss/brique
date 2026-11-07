@@ -176,13 +176,14 @@
   },
 
   "objective": {
-    "_comment": "Optional. Not read by the engine at startup — projected by the reflexive layer for indexing/search. Safe to omit entirely.",
+    "_comment": "Optional. Not read by the engine at startup — projected by the reflexive layer for indexing/search. Safe to omit entirely. Characterizes what this context is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "my-context",
     "description": "One sentence describing the role of this context."
   },
 
   "functional": {
-    "_comment": "Optional. Opaque to the engine entirely — free-form description of this context's business role, for humans and tooling only.",
+    "_comment": "How this context works, never what it is (that belongs in 'objective'). Optional. Opaque to the engine entirely — free-form, for humans and tooling only. Leaving it as {} is legitimate.",
+    "_role_note": "Optional and purely illustrative. 'role' is one example of a free-form key, and its value below only shows the kind of values some contexts use; it is not a field to fill, nothing reads it, and a context is already situated by its place in the tree and its objective.description. Omit it unless the architect wants it.",
     "role": "root | child | boundary | worker"
   },
 

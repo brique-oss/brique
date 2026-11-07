@@ -15,12 +15,13 @@
   },
 
   "objective": {
+    "_comment": "Optional but recommended. Characterizes what this capacity is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "<cap_name>",
     "description": "One sentence describing what this capacity does."
   },
 
   "functional": {
-    "_comment": "Exactly one root section required (key starting with '#'). Additional named sub-sections (#name) may appear inside resolution at any depth.",
+    "_comment": "How this capacity works, never what it is (that belongs in 'objective'). Exactly one root section required (key starting with '#'). Additional named sub-sections (#name) may appear inside resolution at any depth.",
 
     "#root": {
       "role": "One sentence describing the transformation performed by this capacity.",
@@ -28,14 +29,17 @@
 
       "inputs": {
         "params": {
+          "_list_note": "A parameter that is a list is declared with type 'array': one level, its elements are given to the capacity in order, each travelling as a parameter would. The type of the elements is not declared.",
           "<param_name>": {
             "type": "string | integer | boolean | array | object | any"
           }
         },
         "@matter": {
           "_comment": "Optional. Declare matter slots the caller must bind. Keys are logical slot names, not concrete matter IDs.",
+          "_cardinality_note": "Optional, 'one' (default) or 'many': the same key and values as in a schema. A 'many' slot receives an ordered list of Matters under its name: the caller binds them as repeated entries, in order; hosted code reads them with matters(name); a DSL capacity sees $input.<slot_name> as a list even when only one Matter is bound. Declarative: the engine does not refuse a binding that contradicts it, as it does not enforce 'required' or 'schema' either.",
           "<slot_name>": {
             "required": true,
+            "cardinality": "one",
             "schema": "/root/schema/<schema_name>"
           }
         }

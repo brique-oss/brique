@@ -15,14 +15,14 @@
   },
 
   "objective": {
-    "_comment": "Optional. Projected by the reflexive meaning layer.",
+    "_comment": "Optional. Characterizes what this document is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "<document_name>",
     "_name_note": "Conventionally matches the descriptor filename without .json.",
     "description": "One sentence describing what this document contains."
   },
 
   "functional": {
-    "_comment": "Opaque to the engine. Describe content type and source for tooling and wrappers.",
+    "_comment": "How this document works, never what it is (that belongs in 'objective'). Opaque to the engine. Describe content type and source for tooling and wrappers.",
     "content_kind": "markdown",
     "_content_kind_note": "Informational. Accepted values: 'markdown', 'text', 'json', 'html', 'other'.",
     "source_kind": "local",

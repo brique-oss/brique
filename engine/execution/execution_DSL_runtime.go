@@ -54,10 +54,26 @@ func newDSLExecState(in circulation.Intention, declaredInputs map[string]any) *d
 	for k, v := range params {
 		input[k] = v
 	}
-	// Expose incoming matter refs by their Repr name
+	// Expose incoming matter refs by their Repr name. Several Matters under one name, in the order received, or a name
+	// whose slot is declared cardinality "many", are a list of refs; one Matter under a one-valued name stays a plain ref.
+	many := declaredManyMatterSlots(declaredInputs)
+	var order []string
+	grouped := map[string][]any{}
 	for _, m := range in.Matters {
-		if m.Repr != "" {
-			input[m.Repr] = string(m.Context) + "/" + m.ID
+		if m.Repr == "" {
+			continue
+		}
+		if _, seen := grouped[m.Repr]; !seen {
+			order = append(order, m.Repr)
+		}
+		grouped[m.Repr] = append(grouped[m.Repr], string(m.Context)+"/"+m.ID)
+	}
+	for _, repr := range order {
+		refs := grouped[repr]
+		if len(refs) == 1 && !many[repr] {
+			input[repr] = refs[0]
+		} else {
+			input[repr] = refs
 		}
 	}
 	// Expose incoming typed element refs by their Repr name
@@ -71,6 +87,18 @@ func newDSLExecState(in circulation.Intention, declaredInputs map[string]any) *d
 		input:   input,
 		aliases: make(map[string]circulation.Response),
 	}
+}
+
+// declaredManyMatterSlots returns the names of the "@matter" input slots a descriptor declares with cardinality "many".
+func declaredManyMatterSlots(declaredInputs map[string]any) map[string]bool {
+	out := map[string]bool{}
+	slots, _ := declaredInputs["@matter"].(map[string]any)
+	for name, raw := range slots {
+		if slot, ok := raw.(map[string]any); ok && slot["cardinality"] == "many" {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 func (s *dslExecState) setAlias(name string, resp circulation.Response) {

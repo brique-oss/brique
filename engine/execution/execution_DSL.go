@@ -1226,19 +1226,26 @@ func resolveDSLMatterRefs(st *dslExecState, raw any) ([]circulation.MatterRef, e
 		if err != nil {
 			return nil, err
 		}
-		refStr, ok := resolved.(string)
-		if !ok || strings.TrimSpace(refStr) == "" {
-			return nil, fmt.Errorf("dsl @matter %s must resolve to a string ref", name)
+		// one ref, or a list of refs: several Matters under the same name, kept in the order given
+		refs := []any{resolved}
+		if list, isList := resolved.([]any); isList {
+			refs = list
 		}
-		ctx, id, err := parseDSLElementRef(st.in.To.Context, refStr)
-		if err != nil {
-			return nil, err
+		for index, item := range refs {
+			refStr, ok := item.(string)
+			if !ok || strings.TrimSpace(refStr) == "" {
+				return nil, fmt.Errorf("dsl @matter %s must resolve to a string ref or a list of string refs (item %d)", name, index)
+			}
+			ctx, id, err := parseDSLElementRef(st.in.To.Context, refStr)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, circulation.MatterRef{
+				Context: ctx,
+				ID:      id,
+				Repr:    name,
+			})
 		}
-		out = append(out, circulation.MatterRef{
-			Context: ctx,
-			ID:      id,
-			Repr:    name,
-		})
 	}
 	return out, nil
 }

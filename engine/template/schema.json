@@ -9,14 +9,14 @@
   },
 
   "objective": {
-    "_comment": "Optional. Projected by the reflexive meaning layer.",
+    "_comment": "Optional. Characterizes what this schema is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "<schema_name>",
     "_name_note": "Conventionally matches the schema filename without .json.",
     "description": "One sentence describing what shape this schema constrains."
   },
 
   "functional": {
-    "_comment": "Constraint language opaque to the engine. Holds directly the gabarit of the shape constrained by this schema. For a Brique-element schema, reproduce the target element's brique/objective/functional/subjective sections here. For a data schema, describe the data shape directly here. Wrappers and tooling may interpret this gabarit for validation, composition, or generation.",
+    "_comment": "The gabarit of the shape this schema constrains, never what it is (that belongs in 'objective'). Constraint language opaque to the engine. Holds directly the gabarit of the shape constrained by this schema. For a Brique-element schema, reproduce the target element's brique/objective/functional/subjective sections here. For a data schema, describe the data shape directly here. Wrappers and tooling may interpret this gabarit for validation, composition, or generation.",
 
     "_element_gabarit_example": {
       "brique": {

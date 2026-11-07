@@ -30,14 +30,14 @@
   },
 
   "objective": {
-    "_comment": "Optional but recommended. Projected by the reflexive layer for meaning queries.",
+    "_comment": "Optional but recommended. Characterizes what this matter is: name, description and any nested semantic keys (a first key, then sub-keys) that qualify its meaning. These paths are projected by the reflexive layer and are what make it discoverable by meaning. How it works belongs in 'functional', not here.",
     "name": "<matter_id>",
     "_name_note": "Conventionally matches the matter directory name.",
     "description": "One sentence describing what this matter holds."
   },
 
   "functional": {
-    "_comment": "Completely opaque to the engine. Describe business semantics, schema refs, and retrieval config here. No field in this section is read by MatterLoop during normal operation.",
+    "_comment": "How this matter works, never what it is (that belongs in 'objective'). Completely opaque to the engine. Describe business semantics, schema refs, and retrieval config here. No field in this section is read by MatterLoop during normal operation.",
 
     "format": "md",
     "_format_note": "Optional. Describes the specific format of the substance content (e.g. 'md', 'json', 'png', 'mp4', 'csv'). Also used by the engine as the payload file extension (<matter_id>.<format>) — pair with substance_type in brique section for serialization.",
