@@ -318,6 +318,24 @@ func TestEngine_N5_POLICY_07_ABurstFromOnePrincipalGetsOneTerminalAnswerEach(t *
 	defer func() { n5Limits = nil }()
 	h := newEngineN5HarnessWith(t, n5OnlyReadState)
 	const burst = 150
+	// The sink holds 16 messages, and the engine does not drop an answer for a consumer that is
+	// full: the sender of an answer waits. A consumer that reads only after it has sent all its
+	// calls is therefore stopped by its own backlog, and the test would depend on how fast the
+	// answers come back. This one reads while it sends, as a real consumer does.
+	answers := make(chan circulation.Message, 2*burst)
+	stopReading := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case out := <-h.sinkA:
+				answers <- out
+			case <-stopReading:
+				return
+			}
+		}
+	}()
 	for i := 0; i < burst; i++ {
 		label := "policy-burst-" + strconv.Itoa(i)
 		sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(label, "@ext_"+h.pubB+":/root/beta_child",
@@ -329,7 +347,7 @@ func TestEngine_N5_POLICY_07_ABurstFromOnePrincipalGetsOneTerminalAnswerEach(t *
 	reasons := map[string]int{}
 	for len(seen) < burst {
 		select {
-		case out := <-h.sinkA:
+		case out := <-answers:
 			seen[out.Response.IntentionID]++
 			switch {
 			case out.Response.Status == circulation.ValueStatusOK:
@@ -353,7 +371,16 @@ func TestEngine_N5_POLICY_07_ABurstFromOnePrincipalGetsOneTerminalAnswerEach(t *
 		t.Fatal("nothing of the burst was served")
 	}
 	t.Logf("burst of %d: %d served, %d refused by back-pressure %v", burst, served, backpressure, reasons)
-	recvNoN5Msg(t, h.sinkA, 300*time.Millisecond, "no duplicate after the burst")
+	// No second answer to any call, whether it reached the reader or is still in the sink.
+	time.Sleep(300 * time.Millisecond)
+	close(stopReading)
+	<-readerDone
+	select {
+	case extra := <-answers:
+		t.Fatalf("an answer came twice: %+v", extra.Response)
+	default:
+	}
+	recvNoN5Msg(t, h.sinkA, 50*time.Millisecond, "no duplicate after the burst")
 	if out, ok := h.readState(t, "policy-after-burst", 5*time.Second); !ok || out.Response.Status != circulation.ValueStatusOK {
 		t.Fatalf("the service changed after the burst: %#v ok=%v", out, ok)
 	}

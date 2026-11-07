@@ -25,7 +25,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestTLSInitMakesACertificateTheEngineAndPeersAccept(t *testing.T) {
@@ -58,7 +57,8 @@ func TestTLSInitMakesACertificateTheEngineAndPeersAccept(t *testing.T) {
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: "other.example", Roots: roots}); err == nil {
 		t.Error("valid for a name that was not given")
 	}
-	if days := time.Until(leaf.NotAfter).Hours() / 24; days < 360 || days > 366 {
+	// The certificate is dated by the directory's clock, not by the wall clock of the day the test runs.
+	if days := leaf.NotAfter.Sub(d.now()).Hours() / 24; days < 360 || days > 366 {
 		t.Errorf("validity is %.0f days", days)
 	}
 	if len(info.Fingerprint) != 64 || len(info.Hosts) != 3 {

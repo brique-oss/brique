@@ -122,7 +122,7 @@
             "stop_timeout_ms": 1000,
             "build": {
               "shell": true,
-              "timeout_ms": 5000,
+              "timeout_ms": 60000,
               "artifact": "sandbox_cpp",
               "artifact_kind": "file",
               "cmd": [
