@@ -68,7 +68,7 @@
               "tls_ca_file": "",
               "tls_insecure_skip_verify": false,
               "tls_server_name": "",
-              "_tls_note": "Optional. Only read for 'https' interfaces. tls_ca_file is a PEM bundle used to verify peers from a private PKI; signed external traffic still refuses tls_insecure_skip_verify=true."
+              "_tls_note": "Optional. Only read for 'https' interfaces. tls_cert_file and tls_key_file are the server certificate; when both are empty the engine uses <machine directory>/tls/cert.pem and key.pem, as made by 'brique-sec tls init', which also adds the interface to context.json. tls_ca_file is a PEM bundle used to verify peers from a private PKI; when empty the engine accepts the certificates in <machine directory>/tls/trusted.pem, added with 'brique-sec tls trust', and reads those files again while it runs. Signed external traffic still refuses tls_insecure_skip_verify=true."
             }
           }
         ],

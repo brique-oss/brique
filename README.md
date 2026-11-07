@@ -413,6 +413,19 @@ three and manages who may do what. It is built with the engine (`bin/brique-sec`
 Alice does the same with your name, public key and certificate. Nothing is active until `apply`, and
 whatever she is not granted is refused exactly like something that does not exist.
 
+**An instance on several machines.** Each machine has its own key, and all of them are one name. Register
+every key under the same principal and say which machine each one lives on:
+
+```bash
+./bin/brique-sec --root my-instance/root principal key add alice <her second machine's public key>
+./bin/brique-sec --root my-instance/root peer add alice --name laptop --target https://laptop:8443/brique --key <laptop key> --audience alice --interface outerCtx
+./bin/brique-sec --root my-instance/root peer add alice --name desk --target https://desk:8443/brique --key <desk key>
+```
+
+`@ext_alice:/path` then goes to the machine of her most recent key, and `@ext_alice~desk:/path` to the
+machine called `desk`. A message is sealed to the key of the machine it goes to, and her answer comes
+back from that machine's key.
+
 **What is where.**
 
 | Where | What | Versioned with the instance? |

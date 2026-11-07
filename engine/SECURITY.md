@@ -651,8 +651,8 @@ so a caller that forgets to open never treats ciphertext as content.
 
 - `hpke`: its messages are accepted only sealed. A clear message from it is refused although its
   signature is good, and the refusal is journaled against the principal (`encryption_required`).
-  Calls to it are sealed to its active key (the longest-standing one during a rotation overlap),
-  and its answer must come back sealed, else the pending call does not accept it.
+  Calls to it are sealed to the most recent key of the machine they go to (§7.4.1), and its answer
+  must come back sealed, else the pending call does not accept it.
 - absent or `clear`: either is accepted; a sealed message is opened, and answered sealed.
 
 A response is sealed to the key that signed its request. A message that cannot be opened is journaled
@@ -722,6 +722,37 @@ signed policy (`external_peers`: `principal_id`, `audience_instance_id`, `interf
 only, no credentials, one principal per audience, no duplicate, each a principal of the policy). A
 bootstrap may still list peers of its own; the engine refuses a principal named twice.
 
+#### 7.4.1 A principal on several machines
+
+An instance that runs on two machines has two keys, one per machine, under one name. Its peer lists
+**endpoints** instead of one `target`: each is a machine, with a name, the base URL of its listener and
+the identifiers of the principal's keys that live on it.
+
+```json
+"peers": [{ "principal_id": "alice", "audience_instance_id": "alice", "interface": "outerCtx",
+  "endpoints": [
+    { "name": "portable", "target": "https://portable:8443/brique", "key_ids": ["bk1_…"] },
+    { "name": "bureau",   "target": "https://bureau:8443/brique",   "key_ids": ["bk1_…", "bk1_…"] }
+] }]
+```
+
+- **A key lives on one machine.** Several keys can live on the same machine (a rotation). Every key an
+  endpoint names must be a key of the principal, at most 8 endpoints per peer, and a peer has either a
+  `target` or endpoints, never both. A peer with a single `target` is unchanged: every key of the
+  principal is on that machine.
+- **A message goes to one machine.** `@ext_alice:/path` goes to the machine of the principal's most
+  recent key, and `@ext_alice~bureau:/path` to the machine of that name. The most recent key is the one
+  whose `not_before` (in the access source, on each key) is the latest among the keys valid now, and then
+  the smaller key identifier; a key that starts later is not used yet. An unknown machine is refused at
+  once.
+- **It is sealed to that machine's key.** The key chosen is the most recent valid key of the machine, the
+  only holder of its private half.
+- **The answer goes back where the request came from.** A request signed by a key is answered at the
+  address of the machine that key lives on, sealed to that key.
+- **An answer is accepted only from the machine asked.** The pending call remembers the keys of the machine
+  it was sent to: a response signed by another key of the same principal, from another machine, is
+  refused.
+
 ### 7.5 Policy generations and activation
 
 The engine finds its two directories (§11.1) from the instance it is given, and recovers, or
@@ -790,9 +821,9 @@ WebSocket listener verifies it in constant time; a wrong or missing secret is a 
 `wrapper_secret_invalid`. The secret is replaced at every launch and revoked on stop or exit; it is
 **not** invalidated on disconnect, so a wrapper can reconnect.
 
-The listener setting `wrapper_auth` is `required` (a plain URL gets `404`; set in the template for new
-instances) or `optional` (the engine default, so existing instances keep working; a plain URL is
-accepted except for a wrapper the policy restricts). A restricted wrapper always requires the secret.
+The listener setting `wrapper_auth` is `required` (the engine default: a plain URL gets `404`) or
+`optional` (for explicit local development: a plain URL is accepted except for a wrapper the policy
+restricts). A restricted wrapper always requires the secret.
 
 ### 8.2 Restricted wrappers
 
@@ -831,8 +862,8 @@ engine, Go, Python and C++ suites.
 ### 8.5 Egress
 
 Messages that leave the instance go through the immutable peer directory (`@ext_<principal>:/path` is
-resolved to the HTTPS target configured for that principal; an unknown principal is refused with no
-send), and an externally admitted message never leaves except as the signed answer to its own request.
+resolved to the HTTPS target configured for that principal, or `@ext_<principal>~<machine>:/path` to one
+of its machines, §7.4.1; an unknown principal or machine is refused with no send), and an externally admitted message never leaves except as the signed answer to its own request.
 A call may be emitted by any context of the instance and by an element of its user interface
 (`@ui_main:/panel`): the other instance is told the context that owns the interface as the origin, and the
 answer — or the error, at once — is delivered back to the element.
@@ -1013,7 +1044,8 @@ context directory; `--dir` (or `BRIQUE_SECURITY_DIR`) overrides the machine's di
 | `tls init\|trust\|show` | the HTTPS certificate of this machine and the interface that uses it; trust a peer's certificate; show what a peer needs |
 | `principal add\|encryption\|limits\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates `local.<wrapper>` without a key; `--encryption required\|none` on `add`, or `principal encryption <id> required\|none\|default`, chooses how its messages travel (§3.7); `principal limits <id> default\|unlimited\|<rate> [<burst>]` sets its request budget (§3.8) |
 | `grant add\|remove\|list [--actor a] [--except t] [--as-owner local.x]` | edit grants; the rank is the position in `grant list` |
-| `peer add\|remove\|list` | where a principal is reached: `--audience`, `--interface`, `--target https://…`; part of the signed policy |
+| `peer add\|remove\|list` | where a principal is reached: `--audience`, `--interface`, `--target https://…`; part of the signed policy. With `--name <machine> --key <public key>…` (repeatable), `peer add` reaches the principal on one more machine, and `peer remove --name <machine>` stops (§7.4.1) |
+| `principal key add\|remove` | give a principal another public key, with `--not-before <RFC 3339 UTC date>`, or take one away (a key a machine still names stays) |
 | `compile [--out f]` | source to unsigned policy; prints warnings |
 | `simulate <principal> <verb> <target> [--actor a]` | `PERMIS`/`REFUSÉ`, the deciding rule and its rank (the reference evaluator) |
 | `diff` | source compiled against the active policy |
@@ -1168,6 +1200,7 @@ broken (most were checked by deliberately breaking it).
 | With two real engine processes whose only link is an intercepting HTTPS relay that both trust: the relay captures the exchange and finds neither the question, the answer nor the capacity called; once the operator opts the peers out, the same relay reads the clear exchange | `TestRealProcesses_AnInterceptingRelayReadsNothingOfASealedExchange` |
 | A principal that babbles is slowed to its budget and told so (the excess is answered `unavailable`, the burst is honored, a principal with no setting is limited, `unlimited` lifts it); a neighbour keeps its own budget; a lowered rate applies at once; memory stays bounded under a flood of keys; the policy and command validate the numbers | `TestABurstThenTheSustainedRate`, `TestOneCallerBabblingDoesNotTakeTheOthersTokens`, `TestALoweredRateAppliesAtOnce`, `TestInvalidRatesAllowNothingAndMemoryIsBounded`, `TestRateLimitDefaultsExplicitAndUnlimited`, `TestTheOperatorSetsLiftsAndResetsAPrincipalsRate`, `TestEngine_N5_RATE_01`/`_02` (over signed HTTPS between two engines) |
 | One admitted request cannot set off more derived calls than its budget or nest them deeper; the call over is cut with `ErrChainBudget`, the budget belongs to the request, and the operator sets it with `principal limits <id> chain` without touching the rate | `TestOneRequestCannotSetOffMoreCallsThanItsBudget`, `TestOneRequestCannotNestCallsDeeperThanItsBudget`, `TestTheBudgetBelongsToTheRequest`, `TestTheOperatorBoundsWhatOneRequestSetsOff` |
+| A principal on two machines is reached by key and by name: the default machine is the one of the most recent key, a named machine is reached with `~name`, an unknown one is refused, a key that starts later is not chosen, and the answer to a request goes to the machine of the key that signed it; a message is sealed to the key of the machine it goes to; an answer signed by another machine's key is refused; the signed policy refuses a key that is not the principal's, a key on two machines and a target together with endpoints | `TestAPeerOnTwoMachinesIsResolvedByKeyAndByName`, `TestRotationOnOneMachineSealsToTheMostRecentKey`, `TestAPeerWithOneTargetKeepsWorkingForEveryKey`, `TestEndpointsAndKeysAreCheckedBeforeAnythingIsWritten`, `TestKeysOfAPrincipalAreAddedAndRemovedWithTheirDate`, `TestPeerEndpointsAreSignedAndChecked`, `TestActiveKeysAreTheValidOnesMostRecentFirst`, `TestBeginResponseChecksEveryBinding`, `TestEngine_N5_MACH_01` to `_03`, `TestRealProcesses_APeerOnSeveralMachinesIsConfiguredWithTheCommandLine` (the command line alone configures the machines of a peer) |
 | `brique-sec key show` prints the public key a peer registers, derived from the key the engine signs with, and no private material | `TestIdentityGivesThePeerTheKeyTheInstanceSignsWith`, `TestKeyShowGivesTheOtherInstanceWhatItNeeds` |
 | Every engine capacity has exactly one class; a new capacity is unreachable until classified | `TestEveryClassifiedCapacityHasExactlyOneKnownClass`, `access.NewFamilyRegistry` |
 | No family has a bare-message inbox; the only route in is the delivery channel | `TestNoFamilyLoopOwnsABareMessageInbox` |
@@ -1257,6 +1290,7 @@ The model was settled decision by decision; this is the surviving list.
 | D30 | The message key is also the encryption key (Ed25519 converted to X25519); the content is sealed with HPKE to the recipient, bound to the signed header; an instance principal is sealed by default and the operator opts it out explicitly |
 | D31 | Every principal has a request budget by default; lifting it is an explicit setting. An over-budget request is answered `unavailable` when its caller waits, dropped when nobody does |
 | D32 | The calls one admitted request sets off inside the instance are counted in all and by depth, in a counter every derived delivery shares; the call over the budget is refused where it is created |
+| D33 | A key is bound to a machine: a peer lists endpoints, each with its address and the keys that live on it; messages are sealed to the most recent key of the machine they go to, answers go back to the machine of the key that signed the request, and an answer is accepted only from the machine asked |
 
 ## Appendix B. Package map
 
