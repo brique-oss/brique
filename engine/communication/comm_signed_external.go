@@ -46,7 +46,9 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		l.abortSignedExternal(message, reservation, "external response security context is unavailable")
 		return false
 	}
-	peer, found := securityRuntime.Peer(reservation.PrincipalID())
+	// The answer goes to the machine the request came from: the one the key that signed it lives on.
+	signingKeyID, _ := reservation.SealTo()
+	peer, machine, found := securityRuntime.DestinationOfKey(reservation.PrincipalID(), signingKeyID)
 	if !found {
 		l.abortSignedExternal(message, reservation, "external peer is not configured")
 		return false
@@ -85,7 +87,7 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 	}
 	item := signedExternalEgressItem{
 		Key:      built.SignedEnvelopeHash(),
-		Endpoint: peer.Target,
+		Endpoint: machine.Target,
 		Envelope: built.Bytes(),
 		Message:  message,
 		Purpose:  wire.PurposeResponse,

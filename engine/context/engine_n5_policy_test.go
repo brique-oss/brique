@@ -643,3 +643,75 @@ func TestEngine_N5_RATE_02_UnlimitedMustBeWrittenToLiftTheLimit(t *testing.T) {
 		t.Fatalf("the default burst of %d was not honored: %d served", trust.DefaultNetworkBurst, servedByDefault)
 	}
 }
+
+// N5_MACH: a peer reached on named machines, each with its own keys.
+
+// callBOn sends one call from A to the machine of B with this name ("" for the default).
+func (h *engineN5Harness) callBOn(t *testing.T, label, machine string, window time.Duration) (circulation.Message, bool) {
+	t.Helper()
+	address := "@ext_" + h.pubB
+	if machine != "" {
+		address += "~" + machine
+	}
+	sendToN5Context(t, h.regA, shared.RootContextID, mkN5Call(label, address+":/root/beta_child",
+		circulation.ValueTypeReflexive, "read.state", n5SinkAID, nil))
+	select {
+	case out := <-h.sinkA:
+		return out, true
+	case <-time.After(window):
+		return circulation.Message{}, false
+	}
+}
+
+func TestEngine_N5_MACH_01_ACallGoesToTheDefaultOrToANamedMachine(t *testing.T) {
+	h := newEngineN5HarnessMachines(t, func(realKey, otherKey, target string) []trust.PeerEndpoint {
+		return []trust.PeerEndpoint{{Name: "main", Target: target, KeyIDs: []string{realKey}}}
+	})
+	for _, machine := range []string{"", "main"} {
+		out, ok := h.callBOn(t, "mach-"+machine, machine, 15*time.Second)
+		if !ok || out.Response.Status != circulation.ValueStatusOK {
+			t.Fatalf("a call to machine %q was not answered: ok=%v %+v", machine, ok, out.Response)
+		}
+	}
+	// A machine that is not declared is refused at once, and nothing is sent.
+	out, ok := h.callBOn(t, "mach-nowhere", "nowhere", 5*time.Second)
+	if !ok || out.Response.Status == circulation.ValueStatusOK {
+		t.Fatalf("a machine that does not exist was served: ok=%v %+v", ok, out.Response)
+	}
+}
+
+// The answer must be signed by a key of the machine that was asked: B's real key is not one of
+// the keys A bound to machine "one", so what B answers there is not accepted.
+func TestEngine_N5_MACH_02_AnAnswerFromAnotherMachinesKeyIsRefused(t *testing.T) {
+	h := newEngineN5HarnessMachines(t, func(realKey, otherKey, target string) []trust.PeerEndpoint {
+		return []trust.PeerEndpoint{
+			{Name: "one", Target: target, KeyIDs: []string{otherKey}},
+			{Name: "two", Target: target, KeyIDs: []string{realKey}},
+		}
+	})
+	if out, ok := h.callBOn(t, "mach-two", "two", 15*time.Second); !ok || out.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("the machine whose key B holds was not served: ok=%v %+v", ok, out.Response)
+	}
+	if out, ok := h.callBOn(t, "mach-one", "one", 4*time.Second); ok && out.Response.Status == circulation.ValueStatusOK {
+		t.Fatalf("an answer signed by a key of another machine was accepted: %+v", out.Response)
+	}
+}
+
+// Sealing follows the machine: the message is sealed to the key bound to the machine asked, and B,
+// which holds that key, opens it. The same message sealed to a key B does not hold is not served.
+func TestEngine_N5_MACH_03_AMessageIsSealedToTheKeyOfItsMachine(t *testing.T) {
+	n5ContentMode = map[string]string{"instance-a": trust.ContentModeHPKE, "instance-b": trust.ContentModeHPKE}
+	t.Cleanup(func() { n5ContentMode = nil })
+	h := newEngineN5HarnessMachines(t, func(realKey, otherKey, target string) []trust.PeerEndpoint {
+		return []trust.PeerEndpoint{
+			{Name: "here", Target: target, KeyIDs: []string{realKey}},
+			{Name: "elsewhere", Target: target, KeyIDs: []string{otherKey}},
+		}
+	})
+	if out, ok := h.callBOn(t, "mach-here", "here", 15*time.Second); !ok || out.Response.Status != circulation.ValueStatusOK {
+		t.Fatalf("a message sealed to the key B holds was not served: ok=%v %+v", ok, out.Response)
+	}
+	if out, ok := h.callBOn(t, "mach-elsewhere", "elsewhere", 4*time.Second); ok && out.Response.Status == circulation.ValueStatusOK {
+		t.Fatalf("a message sealed to a key B does not hold was served: %+v", out.Response)
+	}
+}

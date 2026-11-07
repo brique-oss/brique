@@ -28,18 +28,29 @@ const (
 // routeSignedExternalIntention is the protected root egress membrane. The
 // logical remote path remains in the signed payload; only the peer directory
 // selects the physical HTTPS interface and endpoint.
+// splitExternalTag splits the tag of an external address, "ext_<principal>" or
+// "ext_<principal>~<machine>", into the principal and the machine ("" for the default one).
+func splitExternalTag(tag string) (principal, machine string) {
+	rest := strings.TrimPrefix(tag, "ext_")
+	if index := strings.IndexByte(rest, '~'); index >= 0 {
+		return rest[:index], rest[index+1:]
+	}
+	return rest, ""
+}
+
 func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag string) {
 	securityRuntime := l.securityRuntime()
 	if securityRuntime == nil || securityRuntime.Pending() == nil || securityRuntime.Signers() == nil || securityRuntime.Signers().Active() == nil {
 		l.failSignedExternalIntention(message, "security_runtime_unavailable", "external security runtime is unavailable")
 		return
 	}
-	principalID := strings.TrimPrefix(tag, "ext_")
-	peer, found := securityRuntime.Peer(principalID)
-	if principalID == "" || !found {
+	principalID, machine := splitExternalTag(tag)
+	destination, resolveErr := securityRuntime.Destination(principalID, machine, l.externalReplyTime().UTC())
+	if principalID == "" || resolveErr != nil {
 		l.failSignedExternalIntention(message, "external_peer_unknown", "external peer is not configured")
 		return
 	}
+	peer := destination.Peer
 	runtime := l.ifaces[peer.Interface]
 	if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
 		l.failSignedExternalIntention(message, "signed_external_interface_unavailable", "protected external interface is unavailable")
@@ -89,12 +100,9 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 	var sealTo *wire.Recipient
 	responseMode := wire.ContentModeClear
 	if securityRuntime.Trust().Active().PeerRequiresSeal(principalID) {
-		keyID, publicKey, ok := securityRuntime.Trust().Active().SealingKey(principalID, now)
-		if !ok {
-			l.failSignedExternalIntention(message, "signed_external_no_sealing_key", "external peer has no active key to seal to")
-			return
-		}
-		sealTo = &wire.Recipient{KeyID: keyID, PublicKey: publicKey}
+		// Sealed to the most recent key of the machine the message goes to, which is the one machine
+		// that holds its private half.
+		sealTo = &wire.Recipient{KeyID: destination.Key.KeyID, PublicKey: destination.Key.PublicKey}
 		responseMode = wire.ContentModeHPKE
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), signedExternalSignTimeout)
@@ -119,6 +127,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 			IntentionID:         message.Intention.IntentionID,
 			RequestHash:         requestHash,
 			ExpectedPrincipalID: principalID,
+			ExpectedKeyIDs:      destination.Endpoint.KeyIDs,
 			Origin:              origin,
 			MinimumContentMode:  responseMode,
 			SilenceTimeout:      pendingExternalSilence,
@@ -131,7 +140,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 	}
 
 	item := signedExternalEgressItem{
-		Key: built.SignedEnvelopeHash(), Endpoint: peer.Target, Envelope: built.Bytes(), Message: message,
+		Key: built.SignedEnvelopeHash(), Endpoint: destination.Endpoint.Target, Envelope: built.Bytes(), Message: message,
 		Purpose: wire.PurposeIntention, RequestHash: requestHash, AwaitResponse: message.Intention.AwaitResponse,
 	}
 	if !l.rememberSignedExternal(item) {

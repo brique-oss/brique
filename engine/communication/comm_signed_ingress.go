@@ -193,7 +193,7 @@ func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified, overR
 		l.sendToTrace(message, circulation.ValueTraceCommReject, "replay_conflict", "external intention identifier conflicts with an existing request")
 		return
 	case replay.ReservationDuplicate:
-		l.replayCachedExternalResponse(key, reservation.Entry)
+		l.replayCachedExternalResponse(key, reservation.Entry, admission.SigningKeyID())
 		return
 	case replay.ReservationNew:
 	default:
@@ -287,7 +287,9 @@ func (l *CommLoop) dispatchAdmittedExternal(delivery junction.Delivery, message 
 	}
 }
 
-func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Entry) {
+// replayCachedExternalResponse answers a duplicate request again from the ledger, to the machine the
+// key that signed the duplicate lives on.
+func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Entry, signingKeyID string) {
 	envelope := entry.TerminalEnvelope
 	if len(envelope) == 0 {
 		envelope = entry.LatestRunning
@@ -299,7 +301,7 @@ func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Ent
 	if securityRuntime == nil {
 		return
 	}
-	peer, found := securityRuntime.Peer(key.PrincipalID)
+	peer, machine, found := securityRuntime.DestinationOfKey(key.PrincipalID, signingKeyID)
 	if !found {
 		return
 	}
@@ -309,7 +311,7 @@ func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Ent
 	}
 	item := signedExternalEgressItem{
 		Key:      cachedExternalEnvelopeKey(key, envelope),
-		Endpoint: peer.Target,
+		Endpoint: machine.Target,
 		Envelope: append([]byte(nil), envelope...),
 		Purpose:  wire.PurposeResponse,
 	}

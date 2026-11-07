@@ -462,6 +462,18 @@ func newEngineN5HarnessLimits(t *testing.T, limitsOfA *trust.Limits) *engineN5Ha
 	return newEngineN5HarnessWith(t, nil)
 }
 
+// n5MachinesOfRemote, when set, reaches the remote principal of each instance on named machines
+// (see n5GenerationSpec.machines), keyed by instance id.
+var n5MachinesOfRemote map[string]func(realKeyID, otherKeyID, target string) []trust.PeerEndpoint
+
+// newEngineN5HarnessMachines starts the two instances with A reaching B on the machines it builds.
+func newEngineN5HarnessMachines(t *testing.T, machines func(realKeyID, otherKeyID, target string) []trust.PeerEndpoint) *engineN5Harness {
+	t.Helper()
+	n5MachinesOfRemote = map[string]func(string, string, string) []trust.PeerEndpoint{"instance-a": machines}
+	t.Cleanup(func() { n5MachinesOfRemote = nil })
+	return newEngineN5HarnessWith(t, nil)
+}
+
 // newEngineN5HarnessContent starts the two instances with the content mode each requires of
 // the other, and keeps it for the successor generations the test writes.
 func newEngineN5HarnessContent(t *testing.T, modeA, modeB string) *engineN5Harness {
@@ -613,6 +625,10 @@ type n5GenerationSpec struct {
 	// source, when set, replaces the generated names policy by a compiled access source
 	// (format 2/3): it receives the remote principal's public key (raw base64url).
 	source func(remotePublicKey string) *policysrc.Source
+	// machines, when set, reaches the remote principal on named machines instead of one target. It
+	// receives the identifier of the principal's real key, of a second key it also has in this policy
+	// (which the real remote instance does not hold), and the real address.
+	machines func(realKeyID, otherKeyID, target string) []trust.PeerEndpoint
 }
 
 func writeN5SecurityGeneration(t *testing.T, securityDir, rootDir, instanceID, remoteID, target string, messagePrivate ed25519.PrivateKey, remotePublic ed25519.PublicKey, authority trust.Authority, authorityPrivate ed25519.PrivateKey) {
@@ -620,6 +636,7 @@ func writeN5SecurityGeneration(t *testing.T, securityDir, rootDir, instanceID, r
 	writeN5GenerationSpec(t, n5GenerationSpec{
 		securityDir: securityDir, rootDir: rootDir, instanceID: instanceID, remoteID: remoteID, target: target,
 		messagePrivate: messagePrivate, remotePublic: remotePublic, authority: authority, authorityPrivate: authorityPrivate,
+		machines: n5MachinesOfRemote[instanceID],
 	})
 }
 
@@ -655,6 +672,27 @@ func writeN5GenerationSpec(t *testing.T, spec n5GenerationSpec) {
 		t.Fatal(err)
 	}
 	writeN5ProtectedFile(t, filepath.Join(generationDir, "message.pk8"), keyBytes, 0o400)
+	remoteKeyID, err := trust.SigningKeyID(remotePublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := securityruntime.Peer{PrincipalID: remoteID, AudienceInstanceID: remoteID, Interface: "outerCtx", Target: target}
+	principalKeys := []trust.SigningKey{{
+		KeyID: remoteKeyID, Algorithm: trust.SigningAlgorithm,
+		PublicKey: base64.RawURLEncoding.EncodeToString(remotePublic), Status: "active",
+	}}
+	if spec.machines != nil {
+		otherPublic, _, keyErr := ed25519.GenerateKey(rand.Reader)
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
+		otherID, _ := trust.SigningKeyID(otherPublic)
+		principalKeys = append(principalKeys, trust.SigningKey{
+			KeyID: otherID, Algorithm: trust.SigningAlgorithm,
+			PublicKey: base64.RawURLEncoding.EncodeToString(otherPublic), Status: "active",
+		})
+		peer.Target, peer.Endpoints = "", spec.machines(remoteKeyID, otherID, target)
+	}
 	document := bootstrap.Document{
 		Format: bootstrap.Format, FormatVersion: bootstrap.FormatVersion, InstanceID: instanceID,
 		ActiveMessageSigner: "message", PolicySignatureThreshold: "1",
@@ -662,9 +700,7 @@ func writeN5GenerationSpec(t *testing.T, spec n5GenerationSpec) {
 			Name: "message", Purpose: "message-signing", Provider: "file", ExpectedKeyID: messageID,
 			Config: bootstrap.MessageSignerConfig{KeyFile: "generations/" + spec.generation + "/message.pk8"},
 		}},
-		ExternalPeers: []securityruntime.Peer{{
-			PrincipalID: remoteID, AudienceInstanceID: remoteID, Interface: "outerCtx", Target: target,
-		}},
+		ExternalPeers: []securityruntime.Peer{peer},
 		PolicyAuthorities: []bootstrap.PolicyAuthority{{
 			KeyID: authority.KeyID, Algorithm: trust.SigningAlgorithm,
 			PublicKey: base64.RawURLEncoding.EncodeToString(authority.PublicKey),
@@ -680,10 +716,6 @@ func writeN5GenerationSpec(t *testing.T, spec n5GenerationSpec) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remoteKeyID, err := trust.SigningKeyID(remotePublic)
-	if err != nil {
-		t.Fatal(err)
-	}
 	allow := n5AllowAllPermissions(instanceCatalog)
 	if spec.allow != nil {
 		allow = spec.allow(instanceCatalog)
@@ -695,10 +727,7 @@ func writeN5GenerationSpec(t *testing.T, spec n5GenerationSpec) {
 			PrincipalID: remoteID, Kind: "instance", Status: spec.status, ScopeIDs: []string{"integration"},
 			ContentMode: n5ContentMode[instanceID],
 			Limits:      n5Limits[instanceID],
-			SigningKeys: []trust.SigningKey{{
-				KeyID: remoteKeyID, Algorithm: trust.SigningAlgorithm,
-				PublicKey: base64.RawURLEncoding.EncodeToString(remotePublic), Status: "active",
-			}},
+			SigningKeys: principalKeys,
 		}},
 		Scopes: []trust.Scope{{
 			ScopeID: "integration", Description: "N5/N7 signed inter-instance integration tests",
