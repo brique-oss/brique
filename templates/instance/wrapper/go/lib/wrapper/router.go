@@ -119,7 +119,15 @@ func incomingMatterParams(matters []map[string]any) map[string]any {
 		if ref.Mode != "" {
 			entry["mode"] = ref.Mode
 		}
-		out[repr] = entry
+		// several Matters under one name are an ordered list under that name, in the order of the array
+		switch held := out[repr].(type) {
+		case nil:
+			out[repr] = entry
+		case []any:
+			out[repr] = append(held, entry)
+		default:
+			out[repr] = []any{held, entry}
+		}
 	}
 	return out
 }

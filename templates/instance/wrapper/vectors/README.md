@@ -16,3 +16,19 @@ Each runtime runs the same cases in its own test suite and must agree with the
 
 A new case is added here first, then every suite is run. A runtime that disagrees is
 fixed to match this file, never the other way round without a protocol decision.
+
+# List parameters
+
+`transit_lists.json` is the shared corpus of the list parameters (`Wrapper.md` sections 10.1 and 17.3): how a list is emitted
+(inline, one object, one file or transient Matter, or element by element), how it is received, whether a target is local, how
+several Matters under one name are grouped and how a list of Matter references is sent.
+
+| Runtime | Test |
+|---|---|
+| Python | `python/lib/tests/test_transit_list_vectors.py` |
+| Go | `go/lib/wrapper/transit_list_vectors_test.go` |
+| C++ | `cpp/lib/tests/runtime_test.cpp` (`listvec::run`; build with `-lcurl`) |
+
+The inline limit is fixed at 64 KiB, so the cases use sizes far from the boundary. A case marked `unrepresentable_in` cannot be
+written in that language. A runtime that disagrees is fixed to match this file, never the other way round without a protocol
+decision.

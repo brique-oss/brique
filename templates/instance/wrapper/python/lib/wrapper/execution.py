@@ -193,7 +193,11 @@ class CapacityExecutor:
             }
             if mode:
                 entry["mode"] = mode
-            out[repr_name] = entry
+            if repr_name in out:           # one name, several Matters: an ordered list under that name
+                held = out[repr_name]
+                out[repr_name] = held + [entry] if isinstance(held, list) else [held, entry]
+            else:
+                out[repr_name] = entry
         return out
 
     async def _invoke(self, symbol, *args):

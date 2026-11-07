@@ -296,7 +296,103 @@ class EmitTests(unittest.TestCase):
                 svc.emit(b"abc", target=external)
 
 
+class ListEmitTests(unittest.IsolatedAsyncioTestCase):
+    """A list parameter is walked, one level, when it is too large to stay inline (Wrapper.md section 17.3)."""
+
+    async def test_a_small_list_stays_inline_whole(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            small = ["a", "b", {"k": 1}]
+            self.assertIs(await svc.emit_async(small, target=INSTANCE), small)
+
+    async def test_a_big_element_becomes_its_own_file_and_the_others_stay_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            big = "x" * 5000
+            sent = await svc.emit_async(["head", big, "tail"], target=INSTANCE)
+            self.assertIsInstance(sent, list)
+            self.assertEqual((sent[0], sent[2]), ("head", "tail"))
+            self.assertEqual(reference_kind(sent[1]), "file")                 # the element, not the list
+            self.assertEqual(svc.resolve(sent[1]), big)
+
+    async def test_a_list_of_small_elements_that_is_big_as_a_whole_travels_as_one_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            items = ["0123456789"] * 200                                       # each element is small, the list is not
+            sent = await svc.emit_async(items, target=INSTANCE)
+            self.assertEqual(reference_kind(sent), "file")                     # as before: nothing is left half-posted
+            self.assertEqual(svc.resolve(sent), items)
+            self.assertEqual(list((Path(tmp) / "tmp" / "wrapper_w1" / "transit").glob("*")), [])
+
+    async def test_elements_are_decided_as_a_whole_and_not_walked_again(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            inner = ["y" * 5000, "z" * 5000]
+            sent = await svc.emit_async(["head", inner], target=INSTANCE)
+            self.assertEqual(reference_kind(sent[1]), "file")                  # the inner list is one element: one file
+            self.assertEqual(svc.resolve(sent[1]), inner)
+
+    async def test_a_receiver_in_this_wrapper_gets_the_whole_list_as_one_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            items = ["x" * 5000, "y" * 500]
+            sent = await svc.emit_async(items, target=LOCAL)
+            self.assertEqual(reference_kind(sent), "object")
+            self.assertIs(svc.resolve(sent), items)
+
+    async def test_a_list_that_cannot_be_serialized_leaves_nothing_behind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = service(tmp, limit=1024)
+            with self.assertRaises(Exception):
+                await svc.emit_async(["x" * 5000, object()], target=INSTANCE)    # one element cannot be serialized
+            self.assertEqual(list((Path(tmp) / "tmp" / "wrapper_w1" / "transit").glob("*")), [])
+
+
 class ParamsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_list_parameter_is_walked_and_each_element_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = fake_runtime(tmp)
+            first = rt.transit.files.write("first text")
+            obj = {"live": True}
+            params = Params({"parts": ["plain", first, 7]}, rt)
+            self.assertEqual(await params.value("parts"), ["plain", "first text", 7])
+            self.assertEqual(await params.value("parts"), ["plain", "first text", 7])     # memoized
+            self.assertFalse(Path(first[MARK_FILE]).exists())
+
+    async def test_a_plain_list_is_returned_as_it_is(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = fake_runtime(tmp)
+            plain = ["a", "b"]
+            params = Params({"parts": plain}, rt)
+            self.assertIs(await params.value("parts"), plain)
+
+    async def test_unconsumed_references_inside_a_list_are_released(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = fake_runtime(tmp)
+            a, b = rt.transit.files.write("a"), rt.transit.files.write("b")
+            params = Params({"parts": [a, "x", b]}, rt)
+            await params.release_unconsumed_async()
+            self.assertFalse(Path(a[MARK_FILE]).exists())
+            self.assertFalse(Path(b[MARK_FILE]).exists())
+
+    async def test_several_matters_under_one_name_come_back_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = fake_runtime(tmp)
+            entries = [{"ref": f"/root/demo/{i}", "context": "/root/demo", "id": i} for i in ("one", "two", "three")]
+            params = Params({"@matter": {"prompts": entries, "lone": entries[0]}}, rt)
+            refs = params.matters("prompts")
+            self.assertEqual([r.id for r in refs], ["one", "two", "three"])
+            self.assertTrue(all(isinstance(r, MatterRef) for r in refs))
+            self.assertEqual([r.id for r in await params.value("prompts")], ["one", "two", "three"])
+            self.assertEqual([r.id for r in params.matters("lone")], ["one"])         # one Matter: a list of one
+            self.assertEqual(params.matter("lone").id, "one")                        # and the single access still works
+            with self.assertRaises(TransitError) as ctx:
+                params.matter("prompts")                                             # a list is never taken for one Matter
+            self.assertEqual(ctx.exception.reason, "type_mismatch")
+            with self.assertRaises(TransitError) as ctx:
+                params.matters("absent")
+            self.assertEqual(ctx.exception.reason, "not_found")
+
     async def test_value_resolves_every_form_and_memoizes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             rt = fake_runtime(tmp)

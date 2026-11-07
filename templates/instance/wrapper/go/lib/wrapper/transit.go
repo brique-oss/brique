@@ -160,8 +160,30 @@ func (s *TransitService) sameWrapper(target Address) bool {
 	return err == nil
 }
 
+// asList accepts the list types hosted code and JSON decoding produce.
+func asList(value any) ([]any, bool) {
+	switch v := value.(type) {
+	case []any:
+		return v, true
+	case []string:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = item
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // Emit returns the transport representation selected from target.
+//
+// A list is the one case where the runtime looks inside a value, one level deep: see emitList.
 func (s *TransitService) Emit(value any, target Address, origin *IntentionMsg, delegation ...string) (any, error) {
+	return s.emit(value, target, origin, false, delegation...)
+}
+
+// emit is Emit; element is true for an element of a list, which is decided as a whole and never walked again.
+func (s *TransitService) emit(value any, target Address, origin *IntentionMsg, element bool, delegation ...string) (any, error) {
 	if isTransitRef(value) || (isScalar(value) && !isString(value)) {
 		return value, nil
 	}
@@ -174,6 +196,15 @@ func (s *TransitService) Emit(value any, target Address, origin *IntentionMsg, d
 		s.objects[id] = value
 		s.mu.Unlock()
 		return map[string]any{"@object": id, "wrapper": s.runtime.wrapperName, "type": ""}, nil
+	}
+	if items, ok := asList(value); ok && len(items) > 0 && !element {
+		walked, err := s.emitList(items, target, origin, delegation...)
+		if err != nil {
+			return nil, err
+		}
+		if walked != nil {
+			return walked, nil
+		}
 	}
 	format := "json"
 	var data []byte
@@ -195,6 +226,39 @@ func (s *TransitService) Emit(value any, target Address, origin *IntentionMsg, d
 		return s.createMatter(data, format, target, origin, delegation...)
 	}
 	return s.writeFile(data, format)
+}
+
+// emitList walks a list that is too large to stay inline as a whole: each element takes the form its own size and nature call
+// for, so a few large elements become references and the others stay inline. An element is decided as a whole (an object, or
+// a list inside the list, is one element). The result is used only if it is small enough to travel inline; otherwise what was
+// posted is released and nil is returned: the caller keeps the whole list, as for any large value.
+func (s *TransitService) emitList(items []any, target Address, origin *IntentionMsg, delegation ...string) ([]any, error) {
+	whole, err := json.Marshal(items)
+	if err != nil {
+		return nil, fmt.Errorf("encode transit value: %w", err)
+	}
+	if len(whole) <= transitInlineLimit {
+		return nil, nil
+	}
+	emitted := make([]any, 0, len(items))
+	posted := make([]any, 0)
+	for _, item := range items {
+		out, err := s.emit(item, target, origin, true, delegation...)
+		if err != nil {
+			s.releaseAll(posted, origin, delegation...)
+			return nil, err
+		}
+		if isTransitRef(out) {
+			posted = append(posted, out)
+		}
+		emitted = append(emitted, out)
+	}
+	encoded, err := json.Marshal(emitted)
+	if err == nil && len(encoded) <= transitInlineLimit {
+		return emitted, nil
+	}
+	s.releaseAll(posted, origin, delegation...)
+	return nil, nil
 }
 
 func (s *TransitService) writeFile(data []byte, format string) (map[string]any, error) {
@@ -224,11 +288,15 @@ func (p *Params) Value(key string) (any, error) {
 	raw, ok := p.values[key]
 	if !ok {
 		if matters, yes := p.values["@matter"].(map[string]any); yes {
-			if item, found := matters[key].(map[string]any); found {
-				value, valid := newMatterRef(item["context"], item["id"], item["mode"])
-				if !valid {
+			if entry, found := matters[key]; found {
+				refs, err := incomingRefs(key, entry)
+				if err != nil {
 					p.mu.Unlock()
-					return nil, fmt.Errorf("matter parameter %q is incomplete", key)
+					return nil, err
+				}
+				var value any = refs[0]
+				if _, several := entry.([]any); several {
+					value = refs
 				}
 				p.resolved[key], p.consumed[key] = value, true
 				p.mu.Unlock()
@@ -239,7 +307,7 @@ func (p *Params) Value(key string) (any, error) {
 		return nil, fmt.Errorf("missing parameter %q", key)
 	}
 	p.mu.Unlock()
-	value, err := p.runtime.transit.resolve(raw, p.origin, p.delegation)
+	value, err := p.resolveParam(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +315,63 @@ func (p *Params) Value(key string) (any, error) {
 	p.resolved[key], p.consumed[key] = value, true
 	p.mu.Unlock()
 	return value, nil
+}
+
+// resolveParam resolves one parameter. A list is walked, one level: each element that is a reference is resolved as a
+// parameter would be; a list without reference is returned as it is.
+func (p *Params) resolveParam(raw any) (any, error) {
+	items, isList := raw.([]any)
+	if !isList {
+		return p.runtime.transit.resolve(raw, p.origin, p.delegation)
+	}
+	hasRef := false
+	for _, item := range items {
+		if isTransitRef(item) {
+			hasRef = true
+			break
+		}
+	}
+	if !hasRef {
+		return raw, nil
+	}
+	out := make([]any, len(items))
+	for i, item := range items {
+		value, err := p.runtime.transit.resolve(item, p.origin, p.delegation)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// incomingRefs reads the entry (or the ordered list of entries) bound under a name of the "@matter" input.
+func incomingRefs(key string, entry any) ([]MatterRef, error) {
+	entries, several := entry.([]any)
+	if !several {
+		entries = []any{entry}
+	}
+	refs := make([]MatterRef, 0, len(entries))
+	for _, item := range entries {
+		obj, _ := item.(map[string]any)
+		ref, valid := newMatterRef(obj["context"], obj["id"], obj["mode"])
+		if !valid {
+			return nil, &TransitError{Reason: "type_mismatch", Message: fmt.Sprintf("matter parameter %q is incomplete", key)}
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// Matters returns the ordered Matters bound under one name, never read. A name bound to one Matter gives a list of one. It
+// returns a *TransitError with reason "not_found" when no Matter is bound under the name.
+func (p *Params) Matters(key string) ([]MatterRef, error) {
+	if matters, ok := p.values["@matter"].(map[string]any); ok {
+		if entry, found := matters[key]; found {
+			return incomingRefs(key, entry)
+		}
+	}
+	return nil, &TransitError{Reason: "not_found", Message: fmt.Sprintf("missing matter parameter %q", key)}
 }
 
 // Matter returns a parameter, or a field of a call result, as a MatterRef. The
@@ -260,11 +385,15 @@ func (p *Params) Value(key string) (any, error) {
 // "type_mismatch" when the field is not a Matter reference.
 func (p *Params) Matter(key string) (MatterRef, error) {
 	if matters, ok := p.values["@matter"].(map[string]any); ok {
-		if item, found := matters[key].(map[string]any); found {
-			if ref, valid := newMatterRef(item["context"], item["id"], item["mode"]); valid {
-				return ref, nil
+		if entry, found := matters[key]; found {
+			if list, several := entry.([]any); several {
+				return MatterRef{}, &TransitError{Reason: "type_mismatch", Message: fmt.Sprintf("matter parameter %q holds %d Matters: read it with Matters()", key, len(list))}
 			}
-			return MatterRef{}, &TransitError{Reason: "type_mismatch", Message: fmt.Sprintf("matter parameter %q is incomplete", key)}
+			refs, err := incomingRefs(key, entry)
+			if err != nil {
+				return MatterRef{}, err
+			}
+			return refs[0], nil
 		}
 	}
 	raw, ok := p.values[key]
@@ -289,17 +418,13 @@ func (p *Params) Call(target Address, values map[string]any) (*Params, error) {
 	posted := make([]any, 0)
 	matters := make([]map[string]any, 0)
 	for key, value := range values {
-		if matter, isMatter := asMatterRef(value); isMatter {
-			ref, valid := newMatterRef(matter.Context, matter.ID, matter.Mode)
-			if !valid {
-				p.runtime.transit.releaseAll(posted, p.origin, p.delegation)
-				return nil, fmt.Errorf("matter parameter %q is incomplete", key)
-			}
-			item := map[string]any{"context": ref.Context, "id": ref.ID, "repr": key}
-			if ref.Mode != "" {
-				item["mode"] = ref.Mode
-			}
-			matters = append(matters, item)
+		entries, isMatters, err := matterEntries(key, value)
+		if err != nil {
+			p.runtime.transit.releaseAll(posted, p.origin, p.delegation)
+			return nil, err
+		}
+		if isMatters {
+			matters = append(matters, entries...)
 			continue
 		}
 		out, err := p.Emit(value, target)
@@ -320,11 +445,81 @@ func (p *Params) Call(target Address, values map[string]any) (*Params, error) {
 	return newParams(payload, p.runtime, p.origin, p.delegation), nil
 }
 
+// matterEntries turns a parameter that is a MatterRef, or a list of them, into the entries of intention.matters: the parameter
+// name as repr, the order of the list kept. A list that mixes MatterRef and other values is refused. It reports false for any
+// other parameter.
+func matterEntries(key string, value any) ([]map[string]any, bool, error) {
+	entry := func(matter MatterRef) (map[string]any, error) {
+		ref, valid := newMatterRef(matter.Context, matter.ID, matter.Mode)
+		if !valid {
+			return nil, &TransitError{Reason: "invalid_reference", Message: fmt.Sprintf("matter parameter %q is incomplete", key)}
+		}
+		item := map[string]any{"context": ref.Context, "id": ref.ID, "repr": key}
+		if ref.Mode != "" {
+			item["mode"] = ref.Mode
+		}
+		return item, nil
+	}
+	if matter, isMatter := asMatterRef(value); isMatter {
+		item, err := entry(matter)
+		if err != nil {
+			return nil, false, err
+		}
+		return []map[string]any{item}, true, nil
+	}
+	var items []any
+	switch list := value.(type) {
+	case []any:
+		items = list
+	case []MatterRef:
+		for _, ref := range list {
+			items = append(items, ref)
+		}
+	case []*MatterRef:
+		for _, ref := range list {
+			items = append(items, ref)
+		}
+	default:
+		return nil, false, nil
+	}
+	count := 0
+	for _, item := range items {
+		if _, isMatter := asMatterRef(item); isMatter {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil, false, nil
+	}
+	if count != len(items) {
+		return nil, false, &TransitError{Reason: "invalid_reference", Message: fmt.Sprintf("parameter %q mixes Matter references and other values", key)}
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		matter, _ := asMatterRef(item)
+		built, err := entry(matter)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, built)
+	}
+	return out, true, nil
+}
+
 func (p *Params) releaseUnconsumed() error {
 	p.mu.Lock()
 	pending := make([]any, 0)
 	for key, value := range p.values {
-		if key != "@matter" && !p.consumed[key] && isTransitRef(value) {
+		if key == "@matter" || p.consumed[key] {
+			continue
+		}
+		if items, isList := value.([]any); isList {
+			for _, item := range items {
+				if isTransitRef(item) {
+					pending = append(pending, item)
+				}
+			}
+		} else if isTransitRef(value) {
 			pending = append(pending, value)
 		}
 	}

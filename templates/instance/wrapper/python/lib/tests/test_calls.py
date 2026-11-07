@@ -273,6 +273,34 @@ class EngineCallTests(CallTestCase):
                 [{"context": "/root/demo", "id": "state", "repr": "source", "mode": "read"}],
             )
 
+    async def test_a_list_of_matter_refs_is_repeated_entries_under_one_name_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = build(tmp, ok({}))
+            refs = [MatterRef({"context": "/root/demo", "id": i}) for i in ("a", "b", "c")]
+            await rt.calls.call(to_context="/root/other", to_cap="cap.remote", params={"prompts": refs, "n": 1})
+            sent = rt.outbound.waited[0]
+            self.assertEqual(sent["params"], {"n": 1})
+            self.assertEqual([(m["repr"], m["id"]) for m in sent["matters"]], [("prompts", "a"), ("prompts", "b"), ("prompts", "c")])
+
+    async def test_a_list_mixing_matter_refs_and_values_is_refused_before_any_send(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = build(tmp, ok({}))
+            ref = MatterRef({"context": "/root/demo", "id": "a"})
+            with self.assertRaises(TransitError) as ctx:
+                await rt.calls.call(to_context="/root/other", to_cap="cap.remote", params={"prompts": [ref, "text"]})
+            self.assertEqual(ctx.exception.reason, "invalid_reference")
+            self.assertEqual(rt.outbound.waited, [])
+
+    async def test_a_list_with_one_huge_element_sends_that_element_as_a_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = build(tmp, ok({}), limit=1024)
+            huge = "x" * 5000
+            await rt.calls.call(to_context="/root/other", to_cap="cap.remote", params={"parts": ["intro", huge, "outro"]})
+            sent = rt.outbound.waited[0]["params"]["parts"]
+            self.assertEqual((sent[0], sent[2]), ("intro", "outro"))
+            self.assertEqual(reference_kind(sent[1]), "file")
+            self.assertEqual(rt.transit.resolve(sent[1]), huge)
+
     async def test_the_producer_releases_when_the_callee_is_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             rt = build(tmp, {"status": "error", "error": {"code": "not_found", "message": "no cap", "details": {"reason": "unknown_cap"}}})

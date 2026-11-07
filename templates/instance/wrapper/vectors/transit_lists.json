@@ -1,0 +1,57 @@
+{
+  "_comment": "Shared corpus of the list parameters (Wrapper.md sections 10.1 and 17.3): how a list is emitted, how it is received, how several Matters under one name are grouped. Each runtime runs the same cases in its own test suite and must give the same answer. A case is added here first, then every suite is run.",
+  "inline_limit_bytes": 65536,
+  "values": {
+    "_comment": "Value specs: {\"text\": N} is a string of N bytes; {\"object\": N} is an object holding a string of N bytes; {\"list\": [spec...]} is a list; a number, true, null or a short string is itself.",
+    "_note": "In the emit cases a target is local (a capacity bound in the same wrapper: /root, consume), instance (a capacity that is not bound here: child, elsewhere) or external (an @ext_ address)."
+  },
+  "locality": {
+    "_comment": "A target is local when it is a capacity bound in this wrapper. The wrapper root is /root and two capacities are bound: consume at the root and consume in the sub-context child. An absolute context is expressed relative to the root; a relative one is taken as it is; an @ext_ address and anything outside the root are never local.",
+    "root": "/root",
+    "bound": [["", "consume"], ["child", "consume"]],
+    "cases": [
+      {"context": "/root", "cap": "consume", "local": true},
+      {"context": "/root/child", "cap": "consume", "local": true},
+      {"context": "child", "cap": "consume", "local": true},
+      {"context": "/root/other", "cap": "consume", "local": false},
+      {"context": "other", "cap": "consume", "local": false},
+      {"context": "/root", "cap": "unknown", "local": false},
+      {"context": "/elsewhere", "cap": "consume", "local": false},
+      {"context": "/rootless", "cap": "consume", "local": false},
+      {"context": "@ext_peer:/root", "cap": "consume", "local": false}
+    ]
+  },
+  "emit": [
+    {"name": "a small list stays inline for another wrapper", "target": "instance", "list": [{"text": 10}, 1, "b"], "expect": {"form": "inline"}},
+    {"name": "a small list stays inline for an external target", "target": "external", "list": [{"text": 10}, 1, "b"], "expect": {"form": "inline"}},
+    {"name": "a list for a capacity of the same wrapper is one object", "target": "local", "list": [{"text": 10}, {"text": 10}], "expect": {"form": "object"}},
+    {"name": "a big list for the same wrapper is still one object", "target": "local", "list": [{"text": 70000}, {"text": 70000}], "expect": {"form": "object"}},
+    {"name": "a big element becomes a file, the others stay inline", "target": "instance", "list": [{"text": 10}, {"text": 70000}, {"text": 10}], "expect": {"form": "elements", "elements": ["inline", "file", "inline"]}},
+    {"name": "a big element becomes a transient Matter for an external target", "target": "external", "list": [{"text": 10}, {"text": 70000}, {"text": 10}], "expect": {"form": "elements", "elements": ["inline", "matter", "inline"]}},
+    {"name": "every big element gets its own form", "target": "instance", "list": [{"text": 70000}, {"text": 70000}], "expect": {"form": "elements", "elements": ["file", "file"]}},
+    {"name": "a big object is an element decided as a whole", "target": "instance", "list": [1, {"object": 70000}], "expect": {"form": "elements", "elements": ["inline", "file"]}},
+    {"name": "an inner list is one element and is not walked", "target": "instance", "list": [1, {"list": [{"text": 70000}, {"text": 70000}]}], "expect": {"form": "elements", "elements": ["inline", "file"]}},
+    {"name": "a list big only as a whole is one file", "target": "instance", "list": {"repeat": {"text": 400}, "times": 300}, "expect": {"form": "file"}},
+    {"name": "a list big only as a whole is one transient Matter for an external target", "target": "external", "list": {"repeat": {"text": 400}, "times": 300}, "expect": {"form": "matter"}},
+    {"name": "an empty list stays inline", "target": "instance", "list": [], "expect": {"form": "inline"}}
+  ],
+  "receive": [
+    {"name": "a list without reference is returned as it is", "elements": [{"plain": "a"}, {"plain": 7}, {"plain": null}], "expect": ["a", 7, null]},
+    {"name": "files and objects among the elements are resolved in place", "elements": [{"plain": "head"}, {"file": "from a file"}, {"object": "from an object"}, {"plain": "tail"}], "expect": ["head", "from a file", "from an object", "tail"], "consumed": {"files": 1, "objects": 1}},
+    {"name": "an element that is an object is data, not walked", "elements": [{"plain": {"k": "v"}}, {"file": "x"}], "expect": [{"k": "v"}, "x"], "consumed": {"files": 1, "objects": 0}}
+  ],
+  "incoming_matters": [
+    {"name": "one Matter under a name", "matters": [{"context": "/root/a", "id": "one", "repr": "role"}], "expect": {"role": ["/root/a/one"]}, "single": {"role": "/root/a/one"}},
+    {"name": "several Matters under one name keep their order", "matters": [{"context": "/root/a", "id": "one", "repr": "prompts"}, {"context": "/root/b", "id": "two", "repr": "prompts"}, {"context": "/root/a", "id": "three", "repr": "prompts"}], "expect": {"prompts": ["/root/a/one", "/root/b/two", "/root/a/three"]}, "single": {"prompts": "type_mismatch"}},
+    {"name": "names are independent and interleaved entries keep each order", "matters": [{"context": "/root/a", "id": "p1", "repr": "prompts"}, {"context": "/root/a", "id": "r1", "repr": "role"}, {"context": "/root/a", "id": "p2", "repr": "prompts"}], "expect": {"prompts": ["/root/a/p1", "/root/a/p2"], "role": ["/root/a/r1"]}, "single": {"role": "/root/a/r1", "prompts": "type_mismatch"}},
+    {"name": "a missing repr is the id", "matters": [{"context": "/root/a", "id": "state"}], "expect": {"state": ["/root/a/state"]}, "single": {"state": "/root/a/state"}},
+    {"name": "an incomplete entry is ignored", "matters": [{"context": "/root/a", "repr": "x"}, {"id": "y", "repr": "x"}, {"context": "/root/a", "id": "ok", "repr": "x"}], "expect": {"x": ["/root/a/ok"]}, "single": {"x": "/root/a/ok"}},
+    {"name": "a name that is absent is not found", "matters": [{"context": "/root/a", "id": "one", "repr": "role"}], "expect": {"role": ["/root/a/one"]}, "absent": ["other"]}
+  ],
+  "_outgoing_note": "The order between different names is not significant; the order inside a name is. A case marked unrepresentable_in cannot be written in that language: its API types the Matter references apart from the other values, so a list mixing them never exists.",
+  "outgoing_matters": [
+    {"name": "a list of Matter references becomes repeated entries under the parameter name", "params": {"prompts": [{"matter": "/root/a/one"}, {"matter": "/root/b/two"}], "n": 1}, "expect": {"matters": {"prompts": ["/root/a/one", "/root/b/two"]}, "params": ["n"]}},
+    {"name": "a single Matter reference is one entry", "params": {"source": {"matter": "/root/a/one"}}, "expect": {"matters": {"source": ["/root/a/one"]}, "params": []}},
+    {"name": "a list mixing Matter references and values is refused", "unrepresentable_in": ["cpp"], "params": {"prompts": [{"matter": "/root/a/one"}, "text"]}, "expect": {"error": "invalid_reference"}}
+  ]
+}
