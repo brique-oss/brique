@@ -30,6 +30,8 @@ import { usePreview } from "../../../Overlay/PreviewContext.js";
 import type { FlowCapacityTarget } from "../../contracts.js";
 import type { FlowExpansion } from "./contracts.js";
 import type { FlowLayoutBox } from "./flowLayoutModel.js";
+import { allStrings, withRows } from "./flowRefs.js";
+import { HoverText } from "../../../shared/HoverText.js";
 import {
   BRANCH_LABEL_HEIGHT,
   CONTRACT_MAX_WIDTH,
@@ -320,13 +322,17 @@ function ActionContent({
             <div style={styles.withRefs}>
               {outputBlock.entries.map(({ key, value: v }) => {
                 const val = typeof v === "string" ? v : null;
+                // a value that is a list or an object (messages: [...]) is shown by the runtime refs it is built from
+                const built = val === null ? allStrings(v).filter((s) => s.startsWith("$")) : [];
                 return (
-                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 9, color: "#64748b", fontWeight: 700 }}>{key}</span>
                     <span style={{ fontSize: 9, color: "#64748b" }}>←</span>
                     {val
                       ? <span style={styles.asChip}>{val}</span>
-                      : <span style={{ fontSize: 9, color: "#94a3b8" }}>—</span>
+                      : built.length > 0
+                        ? built.map((ref, i) => <span key={i} style={styles.asChip}>{ref}</span>)
+                        : <span style={{ fontSize: 9, color: "#94a3b8" }}>—</span>
                     }
                   </div>
                 );
@@ -358,23 +364,7 @@ function ActionContent({
 
   const asAlias = readString(flowDataGet(invoke, "as"));
   const withBlock = readObject(flowDataGet(invoke, "with"));
-  const withRefs: BriqueRef[] = [];
-  if (withBlock) {
-    for (const { key, value: v } of withBlock.entries) {
-      // Direct string refs: @schema, @structure, @document, @capacity as slot
-      const directRef = detectBriqueRef(key, v, undefined);
-      if (directRef) { withRefs.push(directRef); continue; }
-      // Named-map refs: @matter { name: "/path" }, @capacity { name: "/path" }
-      const obj = readObject(v);
-      if (obj && (key === "@matter" || key === "@schema" || key === "@structure" || key === "@document" || key === "@capacity")) {
-        const kind = key.slice(1) as BriqueRefKind;
-        for (const { value: inner } of obj.entries) {
-          const s = typeof inner === "string" ? inner : undefined;
-          if (s && s.startsWith("/")) withRefs.push({ kind, value: s });
-        }
-      }
-    }
-  }
+  const withEntries = withBlock ? withRows(withBlock.entries, detectBriqueRef) : [];
 
   const callbacks = briqueRefCallbacks ?? {
     onInspectElement: () => undefined,
@@ -400,12 +390,26 @@ function ActionContent({
           </>
         )}
       </div>
-      {withRefs.length > 0 && (
+      {withEntries.length > 0 && (
         <div style={styles.withBlock}>
           <span style={styles.withLabel}>with</span>
-          <div style={styles.withRefs}>
-            {withRefs.map((r, i) => (
-              <BriqueToken key={i} ref={r} briqueRefCallbacks={callbacks} />
+          <div style={{ display: "grid", gap: 3 }}>
+            {withEntries.map((row, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 9, color: "#64748b", fontWeight: 700 }}>{row.name}</span>
+                <span style={{ fontSize: 9, color: "#64748b" }}>{row.refs.length > 0 ? "←" : "="}</span>
+                {row.refs.length > 0
+                  ? row.refs.map((r, j) => <BriqueToken key={j} ref={r} briqueRefCallbacks={callbacks} />)
+                  : (
+                    // a value shown in short opens in full, at once, when the pointer is on it
+                    <HoverText
+                      text={row.full !== row.literal ? row.full : undefined}
+                      style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", overflowWrap: "anywhere" }}
+                    >
+                      {row.literal}
+                    </HoverText>
+                  )}
+              </div>
             ))}
           </div>
         </div>

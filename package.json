@@ -82,7 +82,7 @@
     "start": "node dist/spark/index.js",
     "start:sandbox": "node dist/spark/index.js spark/test/sandbox/root/context.json",
     "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts spark/test/relay.test.ts",
-    "test:brique-editor": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test briqueEditorUI/Brique_Substrate/test/brique-substrate.test.ts",
+    "test:brique-editor": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test briqueEditorUI/Brique_Substrate/test/brique-substrate.test.ts briqueEditorUI/spaces/Projection/Flow/SectionFlow/flowRefs.test.ts briqueEditorUI/spaces/shared/hoverPosition.test.ts",
     "start:mcp": "node scripts/start-brique-instance-mcp.mjs"
   }
 }

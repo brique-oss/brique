@@ -347,6 +347,9 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+    // The list is a flex column with a maximum height. Without this, a row (overflow: hidden, so its minimum height is 0)
+    // shrinks to fit instead of overflowing: the rows are squashed and the list never scrolls.
+    flexShrink: 0,
   },
   categoryItemSelected: {
     background: "var(--syn-selected-bg)",
