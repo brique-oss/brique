@@ -231,10 +231,17 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 			"unprotected external ingress is disabled outside the root security membrane")
 		return
 	}
+	// Stamp the UI origin before validating the message family so a malformed
+	// awaited request can still receive its correlated error on the interface
+	// that submitted it.
+	if endpoint == EndpointUI {
+		stampFromUIContext(&msg, ifacename)
+	}
 
 	t := msgType(&msg)
 	if t == "" {
 		l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidMsgType, "missing message type")
+		l.sendInvalidMessageTypeAck(&msg)
 		return
 	}
 
@@ -452,8 +459,6 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	// --------------------------------------
 	if endpoint == EndpointUI {
 		// UI may target @ui_<name> or @ext_<pubkey>
-		stampFromUIContext(&msg, ifacename)
-
 		if len(toCtx) > 0 && toCtx[0] == '@' {
 			handleAtAddress(endpoint)
 			return

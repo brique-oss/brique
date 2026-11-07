@@ -52,6 +52,36 @@ func TestCommIngress_N1_CMIG_01_LocalMissingTypeRejects(t *testing.T) {
 	}
 }
 
+func TestCommIngress_LocalUIMissingTypeAnswersAwaitedRequest(t *testing.T) {
+	reg := newMockCommReg()
+	l, traceCh := newIngressLoop("/ctx/local", reg)
+	uiCh := make(chan circulation.Message, 1)
+	reg.RegisterUI("main", "/ctx/local")
+	l.ifaces["main"] = &InterfaceRuntime{Name: "main", Egress: uiCh, status: InterfaceRunning}
+
+	msg := mkIntentionMsg("/ctx/local", "", "")
+	msg.Intention.AwaitResponse = true
+	l.routeIngressLocal(msg, EndpointUI, "main")
+
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidMsgType) {
+		t.Fatal("expected invalid_msg_type reject trace")
+	}
+	response := recvMsg(t, uiCh, "missing type error response")
+	if response.Kind != circulation.ValueKindResponse || response.Response.IntentionID != msg.Intention.IntentionID {
+		t.Fatalf("unexpected response correlation: %#v", response)
+	}
+	if response.Response.Status != circulation.ValueStatusError || response.Response.Error == nil {
+		t.Fatalf("expected explicit error response, got %#v", response.Response)
+	}
+	if response.Response.Error.Code != circulation.ValueCodeInvalid ||
+		response.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonInvalidMsgType {
+		t.Fatalf("unexpected missing-type problem: %#v", response.Response.Error)
+	}
+	if response.Response.To.Context != circulation.ContextID("@ui_main") {
+		t.Fatalf("response target = %q, want @ui_main", response.Response.To.Context)
+	}
+}
+
 func TestCommIngress_LocalOuterContextAlwaysFailsClosed(t *testing.T) {
 	reg := newMockCommReg()
 	l, traceCh := newIngressLoop("/root/child", reg)

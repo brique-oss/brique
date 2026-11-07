@@ -992,6 +992,41 @@ func (l *CommLoop) sendDeliveryFailureAck(req *circulation.Message, target strin
 	l.routeEgress(ack)
 }
 
+// sendInvalidMessageTypeAck answers an awaited intention that cannot be
+// dispatched because its target family is missing. Without this response the
+// caller would remain pending until its own timeout even though Communication
+// has already rejected the request definitively.
+func (l *CommLoop) sendInvalidMessageTypeAck(req *circulation.Message) {
+	if req == nil || req.Kind != circulation.ValueKindIntention || !req.Intention.AwaitResponse {
+		return
+	}
+	ctxID := ""
+	if l != nil && l.frame != nil {
+		ctxID = l.frame.CtxId
+	}
+	ack := circulation.Message{
+		Kind: circulation.ValueKindResponse,
+		Response: circulation.Response{
+			IntentionID: req.Intention.IntentionID,
+			Status:      circulation.ValueStatusError,
+			To:          req.Intention.From,
+			From: circulation.Address{
+				Context: circulation.ContextID(ctxID),
+				Type:    circulation.ValueTypeCommunication,
+				Cap:     req.Intention.To.Cap,
+			},
+			Identity: req.Intention.Identity,
+			Error: &circulation.ResponseProblem{
+				Origin:  circulation.ValueOriginCommunication,
+				Code:    circulation.ValueCodeInvalid,
+				Message: "missing intention target type",
+				Details: map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidMsgType},
+			},
+		},
+	}
+	l.routeEgress(ack)
+}
+
 // sendToIface
 //
 // Functional role (Brique DSL):
