@@ -169,6 +169,19 @@ class CapacityCaller:
         matters: list[dict[str, Any]] = []
         try:
             for name, value in params.items():
+                if isinstance(value, list) and any(isinstance(v, MatterRef) for v in value):
+                    # several Matters under one name: repeated entries, in the order of the list
+                    if not all(isinstance(v, MatterRef) for v in value):
+                        raise TransitError("invalid_reference", f"parameter {name!r} mixes Matter references and other values")
+                    for item in value:
+                        context, matter_id = item.context.strip(), item.id.strip()
+                        if not context or not matter_id:
+                            raise TransitError("invalid_reference", f"matter parameter {name!r} is incomplete")
+                        matter = {"context": context, "id": matter_id, "repr": name}
+                        if item.mode:
+                            matter["mode"] = item.mode
+                        matters.append(matter)
+                    continue
                 if isinstance(value, MatterRef):
                     context = value.context.strip()
                     matter_id = value.id.strip()

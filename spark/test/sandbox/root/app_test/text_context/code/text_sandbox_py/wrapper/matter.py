@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-import inspect
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from .constants import MODE_WRAPPER
 from .models import MatterBinding
+from .util import invoke_callable
 
 
 def build_matter_binding(
@@ -67,51 +67,61 @@ def _wrap_notifying_writer(
     runtime: "WrapperRuntime",
     relative_context: str,
     matter_name: str,
-    symbol: Callable[..., Any],
+    symbol: Any,
     *,
-    event_value: Callable[..., Any] | None = None,
-) -> Callable[..., Any]:
+    event_value: Any = None,
+):
     @wraps(symbol)
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
-        result = symbol(*args, **kwargs)
-        if inspect.isawaitable(result):
-            result = await result
-        if callable(event_value):
-            notify_value = event_value(args=args, kwargs=kwargs, result=result)
-        else:
-            notify_value = _extract_notification_value(args, result)
-        notified = await runtime.notify_matter_written(
-            relative_context,
-            matter_name,
-            value=notify_value,
-        )
+        result = await invoke_callable(symbol, *args, **kwargs)
+        notification_failed = False
+        try:
+            if callable(event_value):
+                notify_value = await invoke_callable(
+                    event_value, args=args, kwargs=kwargs, result=result
+                )
+            elif isinstance(result, dict) and "value" in result:
+                notify_value = result.get("value")
+            else:
+                notify_value = args[0] if args else result
+            notified = await runtime.notify_matter_written(
+                relative_context,
+                matter_name,
+                value=notify_value,
+            )
+        except Exception as exc:
+            notified = 0
+            notification_failed = True
+            logger = getattr(runtime, "log_exception", None)
+            if callable(logger):
+                logger(
+                    "matter_notification_failed",
+                    exc,
+                    context=relative_context,
+                    matter=matter_name,
+                )
+
         if result is None:
-            return {
+            payload = {
                 "ok": True,
                 "matter_id": matter_name,
                 "substance_mode": MODE_WRAPPER,
-                "notified": notified,
             }
-        if isinstance(result, dict):
+        elif isinstance(result, dict):
             payload = dict(result)
             payload.setdefault("matter_id", matter_name)
             payload.setdefault("substance_mode", MODE_WRAPPER)
-            payload["notified"] = notified
-            return payload
-        return {
-            "ok": True,
-            "matter_id": matter_name,
-            "substance_mode": MODE_WRAPPER,
-            "value": result,
-            "notified": notified,
-        }
+        else:
+            payload = {
+                "ok": True,
+                "matter_id": matter_name,
+                "substance_mode": MODE_WRAPPER,
+                "value": result,
+            }
+        payload["notified"] = notified
+        if notification_failed:
+            payload["notification_failed"] = True
+        return payload
 
+    setattr(wrapped, "_brique_notifies_on_write", True)
     return wrapped
-
-
-def _extract_notification_value(args: tuple[Any, ...], result: Any) -> Any:
-    if isinstance(result, dict) and "value" in result:
-        return result.get("value")
-    if args:
-        return args[0]
-    return result

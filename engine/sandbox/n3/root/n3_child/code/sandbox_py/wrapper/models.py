@@ -19,11 +19,28 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
+# Set on a capacity by wrapper.serial; the registry reads it when it builds the binding.
+SERIAL_ATTRIBUTE = "_brique_serial"
+
+
+def serial(capacity: Callable[..., Any]) -> Callable[..., Any]:
+    """Mark a capacity to run one call at a time, in arrival order.
+
+    A capacity is parallel by default. Use this for one that cannot run two calls at once,
+    and that never waits on another call of itself (it would wait for its own turn).
+    """
+    setattr(capacity, SERIAL_ATTRIBUTE, True)
+    return capacity
+
+
 @dataclass
 class CapacityBinding:
     context_id: str
     name: str
     symbol: Callable[..., Any]
+    # A capacity runs its calls in parallel, as many at once as the wrapper's concurrency allows.
+    # serial=True makes it run one call at a time, in arrival order (see wrapper.serial).
+    serial: bool = False
 
 
 @dataclass
@@ -32,4 +49,6 @@ class MatterBinding:
     name: str
     read_symbol: Callable[..., Any] | None = None
     write_symbol: Callable[..., Any] | None = None
+    notify_on_write: bool = False
+    event_value: Callable[..., Any] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)

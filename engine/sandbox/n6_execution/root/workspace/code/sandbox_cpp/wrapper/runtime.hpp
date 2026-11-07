@@ -188,7 +188,12 @@ public:
             const auto& incoming = incoming_matters();
             const auto found = incoming.find(key);
             if (found != incoming.end()) {
-                const std::string value = found->second.json();
+                std::string value = found->second.front().json();
+                if (found->second.size() > 1) {         // several Matters under one name: the ordered list of their references
+                    value = "[";
+                    for (std::size_t i = 0; i < found->second.size(); ++i) value += (i == 0 ? "" : ",") + found->second[i].json();
+                    value += "]";
+                }
                 resolved_[key] = value; consumed_.insert(key); return value;
             }
         }
@@ -216,7 +221,13 @@ public:
     MatterRef matter(const std::string& key) const {
         const auto& incoming = incoming_matters();
         const auto found = incoming.find(key);
-        if (found != incoming.end()) return found->second;
+        if (found != incoming.end()) {
+            if (found->second.size() > 1) {
+                throw TransitError("type_mismatch", "matter parameter '" + key + "' holds " + std::to_string(found->second.size()) +
+                                                         " Matters: read it with matters()");
+            }
+            return found->second.front();
+        }
         if (!json::has_key(raw_, key)) throw TransitError("not_found", "missing parameter '" + key + "'");
         MatterRef ref;
         if (!detail::matter_ref_from(json::raw_field(raw_, key, ""), true, ref)) {
@@ -226,12 +237,21 @@ public:
         return ref;
     }
 
+    // matters returns the ordered Matters bound under one name, never read. A name bound to one Matter gives a list of one.
+    // Throws TransitError "not_found" when no Matter is bound under the name.
+    std::vector<MatterRef> matters(const std::string& key) const {
+        const auto& incoming = incoming_matters();
+        const auto found = incoming.find(key);
+        if (found == incoming.end()) throw TransitError("not_found", "missing matter parameter '" + key + "'");
+        return found->second;
+    }
+
     const std::string& raw() const {
         return raw_;
     }
 
 private:
-    const std::unordered_map<std::string, MatterRef>& incoming_matters() const {
+    const std::unordered_map<std::string, std::vector<MatterRef>>& incoming_matters() const {
         if (matters_parsed_) return matters_;
         matters_parsed_ = true;
         try {
@@ -240,7 +260,7 @@ private:
                 if (!detail::matter_ref_from(item, false, ref)) continue;
                 std::string repr = detail::trimmed(json::string_field(item, "repr"));
                 if (repr.empty()) repr = ref.id;
-                matters_[repr] = ref;
+                matters_[repr].push_back(ref);          // several Matters under one name keep the order of the array
             }
         } catch (...) {
             matters_.clear();
@@ -253,7 +273,7 @@ private:
     Releaser releaser_;
     std::string matters_raw_;
     mutable bool matters_parsed_ = false;
-    mutable std::unordered_map<std::string, MatterRef> matters_;
+    mutable std::unordered_map<std::string, std::vector<MatterRef>> matters_;
     mutable std::unordered_map<std::string, std::string> resolved_;
     mutable std::unordered_set<std::string> consumed_;
 };
@@ -264,10 +284,14 @@ struct TransitTarget {
     std::string type = kTypeUser;
 };
 
+// A capacity runs its calls in parallel, as many at once as the wrapper's concurrency allows.
+// serial makes it run one call at a time, in arrival order; use it for a capacity that cannot
+// run two calls at once and never waits on another call of itself.
 struct CapacityBinding {
     std::string relative_context;
     std::string name;
     std::function<std::string(const ParamsView&)> callback;
+    bool serial = false;
 };
 
 struct MatterBinding {
@@ -359,6 +383,13 @@ public:
         if (wrapper_name_.empty()) {
             throw std::runtime_error("missing BRIQUE_WRAPPER_NAME");
         }
+        register_bindings(fragment);
+        transport_.connect(boundary_url());
+        start_expiry_worker();
+    }
+
+    // register_bindings prepares the work directories and registers the bindings, without connecting to the engine.
+    void register_bindings(const BindingsFragment& fragment) {
         std::filesystem::create_directories(wrapper_work_dir_);
         std::filesystem::create_directories(transit_dir_);
         sweep_transit_files();
@@ -371,6 +402,9 @@ public:
                 throw std::runtime_error("duplicate capacity binding: " + binding.name);
             }
             capacity_bindings_[key] = binding.callback;
+            if (binding.serial) {
+                serial_capacities_.insert(key);
+            }
         }
         for (const auto& binding : fragment.matters) {
             if (binding.name.empty() || (!binding.read && !binding.write)) {
@@ -388,8 +422,6 @@ public:
             }
         }
         shutdown_hooks_ = fragment.shutdown;
-        transport_.connect(boundary_url());
-        start_expiry_worker();
     }
 
     int run() {
@@ -426,6 +458,7 @@ public:
         }
         try {
             send_message(outbound_message(params, true, id));
+            SlotYield waiting_gives_its_slot_back;
             std::unique_lock<std::mutex> lock(pending->mu);
             std::size_t observed_activity = pending->activity;
             while (!pending->done) {
@@ -453,27 +486,50 @@ public:
     }
 
     // Emit selects inline, @object, @file or transient @matter from target.
-    std::string emit(const std::string& value_raw, const TransitTarget& target) {
-        if (is_transit_reference(value_raw) || (is_json_scalar(value_raw) && value_raw.size() <= 64U * 1024U)) return value_raw;
-        if (same_wrapper(target)) {
-            const std::string id = "obj_" + new_id();
-            std::lock_guard<std::mutex> lock(transit_mu_); transit_objects_[id] = value_raw;
-            return "{\"@object\":" + json::quote(id) + ",\"wrapper\":" + json::quote(wrapper_name_) + ",\"type\":\"\"}";
-        }
-        if (value_raw.size() <= 64U * 1024U) return value_raw;
-        if (target.context.rfind("@ext_", 0) == 0 || value_raw.size() > transit_max_bytes_) return create_transient_matter(value_raw, "json", target);
-        return write_transit_file(value_raw, "json");
+    //
+    // A list is the one case where the runtime looks inside a value, one level deep: see emit_list.
+    std::string emit(const std::string& value_raw, const TransitTarget& target) { return emit_value(value_raw, target, false); }
+
+    // The hosted-code-facing halves of get and of the end of a call: resolve a raw parameter, release one nobody consumed.
+    std::string resolve(const std::string& raw) { return resolve_transit(raw); }
+    void release(const std::string& raw, bool received = true) { release_transit(raw, received); }
+
+    // post_object posts a value for a capacity of this wrapper; post_file writes a JSON value as a transit file.
+    std::string post_object(const std::string& value_raw) {
+        const std::string id = "obj_" + new_id();
+        std::lock_guard<std::mutex> lock(transit_mu_); transit_objects_[id] = value_raw;
+        return "{\"@object\":" + json::quote(id) + ",\"wrapper\":" + json::quote(wrapper_name_) + ",\"type\":\"\"}";
     }
+    std::string post_file(const std::string& value_raw) { return write_transit_file(value_raw, "json"); }
+    std::size_t posted_objects() { std::lock_guard<std::mutex> lock(transit_mu_); return transit_objects_.size(); }
+    std::size_t transit_files() const {
+        std::size_t count = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(transit_dir_)) if (entry.is_regular_file()) ++count;
+        return count;
+    }
+
+    // Test seams: replace the engine round trip and the HTTP data plane of the transient Matters.
+    std::function<std::string(const std::string& context, const std::string& cap, const std::string& params)> matter_call_hook;
+    std::function<std::string(const std::string& method, const std::string& url, const std::string& body)> http_hook;
 
     // Call prepares every JSON parameter using the destination address.
     std::string call(const TransitTarget& target, const std::unordered_map<std::string, std::string>& params) {
-        return call(target, params, {});
+        return call(target, params, std::unordered_map<std::string, std::vector<MatterRef>>{});
     }
 
     // A MatterRef parameter travels in intention.matters with its name as repr,
     // never read; every other parameter is emitted from the destination address.
     std::string call(const TransitTarget& target, const std::unordered_map<std::string, std::string>& params,
                      const std::unordered_map<std::string, MatterRef>& matters) {
+        std::unordered_map<std::string, std::vector<MatterRef>> lists;
+        for (const auto& item : matters) lists[item.first] = {item.second};
+        return call(target, params, lists);
+    }
+
+    // A list of MatterRef under one name travels as repeated entries of intention.matters with that name as repr, in the order
+    // of the list.
+    std::string call(const TransitTarget& target, const std::unordered_map<std::string, std::string>& params,
+                     const std::unordered_map<std::string, std::vector<MatterRef>>& matters) {
         std::string raw = "{"; bool first = true;
         for (const auto& item : params) { if (!first) raw += ','; first = false; raw += json::quote(item.first) + ":" + emit(item.second, target); }
         raw += "}";
@@ -483,14 +539,22 @@ public:
     }
 
     static std::string matters_array(const std::unordered_map<std::string, MatterRef>& matters) {
+        std::unordered_map<std::string, std::vector<MatterRef>> lists;
+        for (const auto& item : matters) lists[item.first] = {item.second};
+        return matters_array(lists);
+    }
+
+    static std::string matters_array(const std::unordered_map<std::string, std::vector<MatterRef>>& matters) {
         std::string out = "["; bool first = true;
         for (const auto& item : matters) {
-            const std::string context = detail::trimmed(item.second.context), id = detail::trimmed(item.second.id), mode = detail::trimmed(item.second.mode);
-            if (context.empty() || id.empty()) throw TransitError("invalid_reference", "matter parameter '" + item.first + "' is incomplete");
-            if (!first) out += ','; first = false;
-            out += "{\"context\":" + json::quote(context) + ",\"id\":" + json::quote(id) + ",\"repr\":" + json::quote(item.first);
-            if (!mode.empty()) out += ",\"mode\":" + json::quote(mode);
-            out += "}";
+            for (const MatterRef& ref : item.second) {
+                const std::string context = detail::trimmed(ref.context), id = detail::trimmed(ref.id), mode = detail::trimmed(ref.mode);
+                if (context.empty() || id.empty()) throw TransitError("invalid_reference", "matter parameter '" + item.first + "' is incomplete");
+                if (!first) out += ','; first = false;
+                out += "{\"context\":" + json::quote(context) + ",\"id\":" + json::quote(id) + ",\"repr\":" + json::quote(item.first);
+                if (!mode.empty()) out += ",\"mode\":" + json::quote(mode);
+                out += "}";
+            }
         }
         return out + "]";
     }
@@ -575,6 +639,7 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::unique_ptr<WorkScheduler> scheduler_;
     std::unordered_map<std::string, CapacityFn> capacity_bindings_;
+    std::unordered_set<std::string> serial_capacities_;   // the others run their calls in parallel
     std::unordered_map<std::string, std::shared_ptr<MatterState>> matter_bindings_;
     std::vector<std::function<void()>> shutdown_hooks_;
     std::mutex subscriptions_mu_;
@@ -769,7 +834,7 @@ private:
                                                     "internal", "wrapper capacity failed",
 												"{\"reason\":\"wrapper_capacity_failed\",\"error_id\":" + json::quote(error_id) + "}"));
             }
-        });
+        }, serial_capacities_.count(make_key(rel_ctx, to_cap)) != 0);   // parallel unless declared serial
         if (!accepted) {
 			ExecutionContext next = current_execution;
 			next.delegation = delegation;
@@ -1046,9 +1111,19 @@ private:
         return notified;
     }
 
+    // The target is a capacity bound in this wrapper. An absolute context is expressed relative to the wrapper root (the root
+    // itself is ""); one outside the root is not local. Every wrapper language applies this rule.
     bool same_wrapper(const TransitTarget& target) const {
         if (target.type != kTypeUser || target.context.rfind("@ext_", 0) == 0) return false;
-        std::string rel = target_context(target.context);
+        std::string rel;
+        if (!target.context.empty() && target.context.front() == '/') {
+            const std::string base = trim_slashes(ctx_id_), full = trim_slashes(target.context);
+            if (full == base) rel = "";
+            else if (full.rfind(base + "/", 0) == 0) rel = full.substr(base.size() + 1);
+            else return false;
+        } else {
+            rel = target_context(target.context);
+        }
         return capacity_bindings_.count(make_key(rel, target.cap)) != 0;
     }
 
@@ -1081,6 +1156,49 @@ private:
         return is_file_reference(raw) || is_object_reference(raw) || is_matter_reference(raw);
     }
 
+    static bool is_json_array(const std::string& raw) {
+        const std::size_t pos = json::skip_ws(raw, 0);
+        return pos < raw.size() && raw[pos] == '[';
+    }
+
+    // emit_value is emit; element is true for an element of a list, which is decided as a whole and never walked again.
+    std::string emit_value(const std::string& value_raw, const TransitTarget& target, bool element) {
+        if (is_transit_reference(value_raw) || (is_json_scalar(value_raw) && value_raw.size() <= 64U * 1024U)) return value_raw;
+        if (same_wrapper(target)) return post_object(value_raw);
+        if (value_raw.size() <= 64U * 1024U) return value_raw;
+        if (!element && is_json_array(value_raw)) {
+            std::string walked;
+            if (emit_list(value_raw, target, walked)) return walked;
+        }
+        if (target.context.rfind("@ext_", 0) == 0 || value_raw.size() > transit_max_bytes_) return create_transient_matter(value_raw, "json", target);
+        return write_transit_file(value_raw, "json");
+    }
+
+    // emit_list walks a list that is too large to stay inline as a whole: each element takes the form its own size and nature
+    // call for. The result is used only if it is small enough to travel inline; otherwise what was posted is released and the
+    // whole list is kept, as for any large value. It reports whether the walked list was produced.
+    bool emit_list(const std::string& raw, const TransitTarget& target, std::string& out) {
+        const std::vector<std::string> items = json::array_items(raw);
+        if (items.empty()) return false;
+        std::vector<std::string> emitted, posted;
+        try {
+            for (const std::string& item : items) {
+                std::string form = emit_value(item, target, true);
+                if (form != item && is_transit_reference(form)) posted.push_back(form);
+                emitted.push_back(std::move(form));
+            }
+        } catch (...) {
+            for (const std::string& ref : posted) release_transit(ref, false);
+            throw;
+        }
+        std::string joined = "[";
+        for (std::size_t i = 0; i < emitted.size(); ++i) joined += (i == 0 ? "" : ",") + emitted[i];
+        joined += "]";
+        if (joined.size() <= 64U * 1024U) { out = std::move(joined); return true; }
+        for (const std::string& ref : posted) release_transit(ref, false);
+        return false;
+    }
+
     std::string write_transit_file(const std::string& data, const std::string& format) {
         const std::filesystem::path path = transit_dir_ / ("transit_" + new_id() + ".bin");
         const std::filesystem::path pending = path.string() + ".tmp";
@@ -1089,7 +1207,20 @@ private:
         return "{\"@file\":" + json::quote(path.string()) + ",\"format\":" + json::quote(format) + "}";
     }
 
+    // resolve_transit resolves one parameter. A list is walked, one level: each element that is a reference is resolved as a
+    // parameter would be; a list without reference is returned as it is.
     std::string resolve_transit(const std::string& raw) {
+        if (!is_json_array(raw)) return resolve_one(raw);
+        const std::vector<std::string> items = json::array_items(raw);
+        bool has_reference = false;
+        for (const std::string& item : items) if (is_transit_reference(item)) { has_reference = true; break; }
+        if (!has_reference) return raw;
+        std::string out = "[";
+        for (std::size_t i = 0; i < items.size(); ++i) out += (i == 0 ? "" : ",") + resolve_one(items[i]);
+        return out + "]";
+    }
+
+    std::string resolve_one(const std::string& raw) {
         if (is_object_reference(raw)) {
             if (json::string_field(raw, "wrapper") != wrapper_name_) throw std::runtime_error("transit object belongs to another wrapper");
             const std::string id = json::string_field(raw, "@object"); std::lock_guard<std::mutex> lock(transit_mu_);
@@ -1118,6 +1249,7 @@ private:
     }
 
     std::string matter_call(const std::string& context,const std::string& cap,const std::string& params) {
+        if (matter_call_hook) return matter_call_hook(context, cap, params);
         OutboundParams out; out.to_context=context; out.to_cap=cap; out.to_type=kTypeMatter; out.params_raw=params; return emit_and_wait(out);
     }
 
@@ -1136,7 +1268,7 @@ private:
         try {
             const std::string opened=matter_call(target.context,"matter.write","{\"matter_id\":"+json::quote(id)+",\"expected_revision\":"+std::to_string(revision)+",\"http_data\":true}");
             const std::string handle=json::object_field(opened,"http_data",""); if(handle.empty())throw std::runtime_error("matter.write returned no upload lease");
-            const std::string committed=http::request("PUT",lease_url(handle),data,1024U*1024U).body; revision=json::integer_field(committed,"revision"); if(revision<1)throw std::runtime_error("Matter upload returned no revision");
+            const std::string committed=http_hook?http_hook("PUT",lease_url(handle),data):http::request("PUT",lease_url(handle),data,1024U*1024U).body; revision=json::integer_field(committed,"revision"); if(revision<1)throw std::runtime_error("Matter upload returned no revision");
         } catch (...) {
             try { matter_call(target.context,"matter.delete","{\"matter_id\":"+json::quote(id)+",\"expected_revision\":"+std::to_string(created_revision)+"}"); } catch (...) {}
             throw;
@@ -1154,7 +1286,7 @@ private:
         const std::string data_info=json::object_field(payload,"data",""); if(data_info.empty())throw std::runtime_error("matter.read returned no transit data");
         std::string data; const std::string kind=json::string_field(data_info,"kind");
         if(kind=="inline"){data=json::string_field(data_info,"bytes");if(json::string_field(data_info,"encoding")=="base64")data=base64_decode(data);}
-        else if(kind=="http"){const std::string handle=json::object_field(data_info,"http","");data=http::request("GET",lease_url(handle),"",static_cast<std::size_t>(size)+1).body;}
+        else if(kind=="http"){const std::string handle=json::object_field(data_info,"http","");data=http_hook?http_hook("GET",lease_url(handle),""):http::request("GET",lease_url(handle),"",static_cast<std::size_t>(size)+1).body;}
         else throw std::runtime_error("unsupported Matter data kind");
         if(static_cast<long long>(data.size())!=size)throw std::runtime_error("transient Matter size mismatch");
         const std::string value=json::string_field(ref,"format")=="json"?data:json::quote(data);
@@ -1164,6 +1296,11 @@ private:
     }
 
     void release_transit(const std::string& raw,bool received) {
+        if (is_json_array(raw)) { for (const std::string& item : json::array_items(raw)) release_one(item, received); return; }
+        release_one(raw, received);
+    }
+
+    void release_one(const std::string& raw,bool received) {
         try {
             if(is_object_reference(raw)){std::lock_guard<std::mutex>lock(transit_mu_);transit_objects_.erase(json::string_field(raw,"@object"));return;}
             if(is_file_reference(raw)){std::filesystem::remove(json::string_field(raw,"@file"));return;}

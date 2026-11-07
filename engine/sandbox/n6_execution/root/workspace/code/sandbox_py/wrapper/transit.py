@@ -452,12 +452,58 @@ class TransitService:
         self.objects.sweep_expired()
         self.files.sweep_expired()
 
-    async def emit_async(self, value: Any, *, target: TransitTarget, type_tag: str = "") -> Any:
-        """Run potentially heavy emission off-loop without leaking on cancellation."""
+    async def _emit_elements(self, items: list, target: TransitTarget, type_tag: str) -> list | None:
+        """A list too large to stay inline, element by element: each element takes the form its own size and nature call for.
+
+        One level only: an element is decided as a whole, whatever it contains. The result is used only if it is small enough
+        to travel inline (a few big elements became references); otherwise what was posted is released and the caller keeps the
+        list whole, as before. Returns None when the list stays whole.
+        """
+        emitted: list = []
+        posted: list = []
+        try:
+            for element in items:
+                out = await self.emit_async(element, target=target, type_tag=type_tag, _element=True)
+                if out is not element and reference_kind(out) is not None:
+                    posted.append(out)
+                emitted.append(out)
+            encoded = await asyncio.to_thread(_encode, emitted, FORMAT_JSON)
+        except BaseException:
+            await self._discard(posted)
+            raise
+        if len(encoded) <= self.inline_limit:
+            return emitted
+        await self._discard(posted)
+        return None
+
+    async def _discard(self, posted: list) -> None:
+        for ref in posted:
+            if reference_kind(ref) == "matter":
+                runtime = self.runtime
+                if runtime is not None and hasattr(runtime, "transit_matters"):
+                    try:
+                        await runtime.transit_matters.discard(ref)
+                    except Exception:
+                        pass                       # releasing is best effort: the runtime also sweeps
+            else:
+                self.release(ref)
+
+    async def emit_async(self, value: Any, *, target: TransitTarget, type_tag: str = "", _element: bool = False) -> Any:
+        """Run potentially heavy emission off-loop without leaking on cancellation.
+
+        A list parameter is walked (Wrapper.md section 17.3): when it is too large to stay inline as a whole and the receiver
+        is not in this wrapper, each element gets its own form. ``_element`` marks an element: it is never walked again.
+        """
         if reference_kind(value) is not None or (_is_scalar(value) and not isinstance(value, str)):
             return self.emit(value, target=target, type_tag=type_tag)
         if target.same_wrapper and not isinstance(value, str):
             return self.emit(value, target=target, type_tag=type_tag)
+        if isinstance(value, list) and value and not _element:
+            whole = await asyncio.to_thread(_encode, value, FORMAT_JSON)
+            if len(whole) > self.inline_limit:
+                walked = await self._emit_elements(value, target, type_tag)
+                if walked is not None:
+                    return walked
 
         fmt = (
             FORMAT_BYTES
@@ -580,22 +626,29 @@ class Params(dict):
         matters = dict.get(self, "@matter")
         if name in self and name != "@matter":
             raw = dict.__getitem__(self, name)
-            kind = reference_kind(raw)
-            if kind == "matter":
-                result = await self._runtime.transit_matters.consume(raw)
-            elif kind == "file":
-                # Transit files may be large: disk I/O and decoding must not block
-                # the wrapper's communication event loop.
-                result = await asyncio.to_thread(self._runtime.transit.resolve, raw, expect_type)
+            if isinstance(raw, list) and any(reference_kind(e) is not None for e in raw):
+                # a list parameter is walked: each element is resolved as a parameter would be
+                result = list(await asyncio.gather(*[self._resolve_one(e, None) for e in raw]))
             else:
-                result = self._runtime.transit.resolve(raw, expect_type)
+                result = await self._resolve_one(raw, expect_type)
         elif isinstance(matters, dict) and name in matters:
-            result = self._incoming_matter(name, matters[name])
+            result = self._incoming_matters(name, matters[name])
+            result = result if isinstance(matters[name], list) else result[0]
         else:
             raise TransitError("not_found", f"missing parameter {name!r}")
         self._resolved[name] = result
         self._consumed.add(name)
         return result
+
+    async def _resolve_one(self, raw: Any, expect_type: str | None) -> Any:
+        kind = reference_kind(raw)
+        if kind == "matter":
+            return await self._runtime.transit_matters.consume(raw)
+        if kind == "file":
+            # Transit files may be large: disk I/O and decoding must not block
+            # the wrapper's communication event loop.
+            return await asyncio.to_thread(self._runtime.transit.resolve, raw, expect_type)
+        return self._runtime.transit.resolve(raw, expect_type)
 
     def matter(self, name: str) -> MatterRef:
         """Return a parameter, or a field of a call result, as a ``MatterRef``.
@@ -611,6 +664,11 @@ class Params(dict):
         """
         matters = dict.get(self, "@matter")
         if isinstance(matters, dict) and name in matters:
+            if isinstance(matters[name], list):
+                raise TransitError(
+                    "type_mismatch",
+                    f"matter parameter {name!r} holds {len(matters[name])} Matters: read it with matters()",
+                )
             return self._incoming_matter(name, matters[name])
         if name == "@matter" or name not in self:
             raise TransitError("not_found", f"missing parameter {name!r}")
@@ -621,6 +679,21 @@ class Params(dict):
                 f"parameter {name!r} is not a Matter reference (expected context, id and optional mode)",
             )
         return ref
+
+    def matters(self, name: str) -> list[MatterRef]:
+        """The ordered Matters bound under one name (Wrapper.md section 10.1), never read.
+
+        A name bound to one Matter gives a list of one. Raises ``not_found`` when no Matter is bound under the name.
+        """
+        matters = dict.get(self, "@matter")
+        if not (isinstance(matters, dict) and name in matters):
+            raise TransitError("not_found", f"missing matter parameter {name!r}")
+        return self._incoming_matters(name, matters[name])
+
+    @classmethod
+    def _incoming_matters(cls, name: str, entry: Any) -> list[MatterRef]:
+        entries = entry if isinstance(entry, list) else [entry]
+        return [cls._incoming_matter(name, e) for e in entries]
 
     @staticmethod
     def _incoming_matter(name: str, entry: Any) -> MatterRef:
@@ -638,7 +711,9 @@ class Params(dict):
         for name, raw in dict.items(self):
             if name in self._consumed or name == "@matter":
                 continue
-            self._runtime.transit.release(raw)
+            for element in (raw if isinstance(raw, list) else [raw]):
+                if reference_kind(element) is not None:
+                    self._runtime.transit.release(element)
 
     async def release_unconsumed_async(self) -> None:
         """Release local references and guarded-delete unread transient Matters."""
@@ -646,9 +721,10 @@ class Params(dict):
         for name, raw in dict.items(self):
             if name in self._consumed or name == "@matter":
                 continue
-            if reference_kind(raw) == "matter":
-                transient_matters.append(raw)
-            else:
-                self._runtime.transit.release(raw)
+            for element in (raw if isinstance(raw, list) else [raw]):
+                if reference_kind(element) == "matter":
+                    transient_matters.append(element)
+                elif reference_kind(element) is not None:
+                    self._runtime.transit.release(element)
         for ref in transient_matters:
             await self._runtime.transit_matters.discard_received(ref)

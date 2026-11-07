@@ -21,10 +21,13 @@ import os
 import struct
 from urllib.parse import urlparse
 
+from .constants import CONTROL_MESSAGE_LIMIT_BYTES
+
 
 class StdlibWebSocketClient:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, max_message_bytes: int = CONTROL_MESSAGE_LIMIT_BYTES) -> None:
         self.url = url
+        self.max_message_bytes = max_message_bytes
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._closed = False
@@ -83,10 +86,25 @@ class StdlibWebSocketClient:
         await self._send_frame(0x1, payload.encode("utf-8"))
 
     async def recv_text(self) -> str:
+        fragments = bytearray()
+        fragment_opcode: int | None = None
         while True:
-            opcode, payload = await self._read_frame()
+            final, opcode, payload = await self._read_frame()
             if opcode == 0x1:
-                return payload.decode("utf-8")
+                if final:
+                    return payload.decode("utf-8")
+                fragments.extend(payload)
+                fragment_opcode = opcode
+                continue
+            if opcode == 0x0:
+                if fragment_opcode is None:
+                    raise RuntimeError("unexpected websocket continuation frame")
+                fragments.extend(payload)
+                if len(fragments) > self.max_message_bytes:
+                    raise ValueError("fragmented websocket message exceeds the control-message limit")
+                if final:
+                    return bytes(fragments).decode("utf-8")
+                continue
             if opcode == 0x8:
                 await self.close()
                 raise EOFError("websocket closed")
@@ -102,13 +120,13 @@ class StdlibWebSocketClient:
         self._closed = True
         writer = self._writer
         self._reader = None
-        self._writer = None
         if writer is None:
             return
         try:
             await self._send_frame(0x8, b"")
         except Exception:
             pass
+        self._writer = None
         writer.close()
         try:
             await writer.wait_closed()
@@ -136,11 +154,12 @@ class StdlibWebSocketClient:
         writer.write(bytes(header) + masked)
         await writer.drain()
 
-    async def _read_frame(self) -> tuple[int, bytes]:
+    async def _read_frame(self) -> tuple[bool, int, bytes]:
         reader = self._reader
         if reader is None:
             raise RuntimeError("websocket is not connected")
         head = await reader.readexactly(2)
+        final = (head[0] & 0x80) != 0
         opcode = head[0] & 0x0F
         masked = (head[1] & 0x80) != 0
         size = head[1] & 0x7F
@@ -148,8 +167,13 @@ class StdlibWebSocketClient:
             size = struct.unpack("!H", await reader.readexactly(2))[0]
         elif size == 127:
             size = struct.unpack("!Q", await reader.readexactly(8))[0]
+        if size > self.max_message_bytes:
+            raise ValueError(
+                f"control message is {size} bytes, limit is {self.max_message_bytes}; "
+                "store large payloads in Matter substance"
+            )
         mask = await reader.readexactly(4) if masked else b""
         payload = await reader.readexactly(size)
         if masked:
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        return opcode, payload
+        return final, opcode, payload
