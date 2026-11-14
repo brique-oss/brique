@@ -660,9 +660,15 @@ func (l *ExecutionLoop) loopInbox() {
 			if !ok {
 				return
 			}
-			l.handleInboxDelivery(delivery)
+			l.handleInboxDeliverySafely(delivery)
 		}
 	}
+}
+
+// handleInboxDeliverySafely serves one delivery; a panic costs that delivery only.
+func (l *ExecutionLoop) handleInboxDeliverySafely(delivery junction.Delivery) {
+	defer shared.Recover(l.answerPanicDelivery(delivery))
+	l.handleInboxDelivery(delivery)
 }
 
 func (l *ExecutionLoop) handleInboxDelivery(delivery junction.Delivery) {
@@ -853,6 +859,11 @@ func (l *ExecutionLoop) dispatchIntentionAuthorized(msg circulation.Message, sou
 		go func(m circulation.Message, delivery []junction.Delivery) {
 			defer l.wg.Done()
 			defer l.releaseJob()
+			// Declared last, so it runs first: the answer leaves while the job slot is held.
+			defer shared.Recover(func(text string) {
+				l.answerPanic(m.Intention, delivery...)(text)
+				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyExit)
+			})
 			l.runUserJobAuthorized(m, delivery...)
 			l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyExit)
 		}(msg, source)
@@ -1288,9 +1299,15 @@ func (l *ExecutionLoop) enqueueForward(delivery junction.Delivery) {
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
-			l.emitDeliveryToComm(delivery)
+			l.emitDeliverySafely(delivery)
 		}()
 	}
+}
+
+// emitDeliverySafely emits one forwarded delivery; a panic costs that delivery only.
+func (l *ExecutionLoop) emitDeliverySafely(delivery junction.Delivery) {
+	defer shared.Recover(l.tracePanic)
+	l.emitDeliveryToComm(delivery)
 }
 
 // forwardLoop
@@ -1305,7 +1322,7 @@ func (l *ExecutionLoop) forwardLoop() {
 		case <-l.done:
 			return
 		case delivery := <-l.fwd:
-			l.emitDeliveryToComm(delivery)
+			l.emitDeliverySafely(delivery)
 		}
 	}
 }

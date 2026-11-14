@@ -197,7 +197,7 @@ func (l *CommLoop) loopSignedExternalEgressOutcomes() {
 			if !ok {
 				return
 			}
-			l.reportSignedExternalEgressOutcome(report)
+			l.reportSignedExternalEgressOutcomeSafely(report)
 		}
 	}
 }

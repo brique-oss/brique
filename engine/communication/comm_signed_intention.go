@@ -290,13 +290,7 @@ func (l *CommLoop) loopPendingExternalExpirations() {
 		case <-l.done:
 			return
 		case <-ticker.C:
-			securityRuntime := l.securityRuntime()
-			if securityRuntime == nil || securityRuntime.Pending() == nil {
-				continue
-			}
-			for _, expired := range securityRuntime.Pending().Expire(l.externalReplyTime().UTC()) {
-				l.deliverPendingExternalFailure(expired, false)
-			}
+			l.expirePendingExternalSafely()
 		}
 	}
 }

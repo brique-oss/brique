@@ -956,7 +956,7 @@ func (l *CommLoop) loopInterfaceEgressOutcomes() {
 			if !ok {
 				return
 			}
-			l.reportInterfaceEgressOutcome(report.Message, report.Outcome)
+			l.reportInterfaceEgressOutcomeSafely(report)
 		}
 	}
 }

@@ -133,26 +133,33 @@ func (l *MatterLoop) enqueueDurableEventWithID(subscription MatterSubscription, 
 	cloned[circulation.KeyEventId] = eventID
 	cloned[circulation.KeySubID] = subscription.ID
 	pending := MatterPendingEvent{EventID: eventID, SubID: subscription.ID, MatterID: subscription.MatterID, Target: subscription.Target, Params: cloned, CreatedAt: time.Now().UnixNano()}
-	l.outboxMu.Lock()
-	for _, existing := range l.outbox {
-		if existing.EventID == eventID && existing.SubID == subscription.ID {
-			l.outboxMu.Unlock()
-			return nil
+	// The outbox is written to a file under its lock: a deferred Unlock keeps a
+	// panic of that code from leaving the lock taken.
+	duplicate, shouldDeliver, err := func() (bool, bool, error) {
+		l.outboxMu.Lock()
+		defer l.outboxMu.Unlock()
+		for _, existing := range l.outbox {
+			if existing.EventID == eventID && existing.SubID == subscription.ID {
+				return true, false, nil
+			}
 		}
-	}
-	l.outbox = append(l.outbox, pending)
-	err := l.persistMatterOutboxLocked()
-	if err != nil {
-		l.outbox = l.outbox[:len(l.outbox)-1]
-	}
-	shouldDeliver := true
-	for index := 0; index < len(l.outbox)-1; index++ {
-		if l.outbox[index].SubID == subscription.ID {
-			shouldDeliver = false
-			break
+		l.outbox = append(l.outbox, pending)
+		err := l.persistMatterOutboxLocked()
+		if err != nil {
+			l.outbox = l.outbox[:len(l.outbox)-1]
 		}
+		shouldDeliver := true
+		for index := 0; index < len(l.outbox)-1; index++ {
+			if l.outbox[index].SubID == subscription.ID {
+				shouldDeliver = false
+				break
+			}
+		}
+		return false, shouldDeliver, err
+	}()
+	if duplicate {
+		return nil
 	}
-	l.outboxMu.Unlock()
 	if err == nil && shouldDeliver {
 		l.emitPendingMatterEvent(pending)
 	}
@@ -303,9 +310,24 @@ func withSubscriptionID(params map[string]any, subID string) map[string]any {
 }
 
 func (l *MatterLoop) ackPendingMatterEvent(subID, eventID string) (bool, error) {
+	removed, next, err := l.ackOutbox(subID, eventID)
+	if err != nil {
+		return false, err
+	}
+	if next != nil {
+		l.emitPendingMatterEvent(*next)
+	}
+	return removed, nil
+}
+
+// ackOutbox removes an acknowledged event from the outbox and persists it, under
+// the outbox lock (released by defer, whatever happens in the file write). It
+// returns the next pending event of the subscription, if any, for the caller to
+// emit once the lock is released.
+func (l *MatterLoop) ackOutbox(subID, eventID string) (removed bool, next *MatterPendingEvent, err error) {
 	l.outboxMu.Lock()
+	defer l.outboxMu.Unlock()
 	original := append([]MatterPendingEvent(nil), l.outbox...)
-	removed := false
 	for index, event := range l.outbox {
 		if event.SubID == subID && event.EventID == eventID {
 			l.outbox = append(l.outbox[:index], l.outbox[index+1:]...)
@@ -316,12 +338,8 @@ func (l *MatterLoop) ackPendingMatterEvent(subID, eventID string) (bool, error) 
 	if removed {
 		if err := l.persistMatterOutboxLocked(); err != nil {
 			l.outbox = original
-			l.outboxMu.Unlock()
-			return false, err
+			return false, nil, err
 		}
-	}
-	var next *MatterPendingEvent
-	if removed {
 		for index := range l.outbox {
 			if l.outbox[index].SubID == subID {
 				copy := l.outbox[index]
@@ -330,15 +348,12 @@ func (l *MatterLoop) ackPendingMatterEvent(subID, eventID string) (bool, error) 
 			}
 		}
 	}
-	l.outboxMu.Unlock()
-	if next != nil {
-		l.emitPendingMatterEvent(*next)
-	}
-	return removed, nil
+	return removed, next, nil
 }
 
 func (l *MatterLoop) removePendingEventsForSubscription(subID string) error {
 	l.outboxMu.Lock()
+	defer l.outboxMu.Unlock()
 	original := append([]MatterPendingEvent(nil), l.outbox...)
 	filtered := l.outbox[:0]
 	for _, event := range l.outbox {
@@ -351,7 +366,6 @@ func (l *MatterLoop) removePendingEventsForSubscription(subID string) error {
 	if err != nil {
 		l.outbox = original
 	}
-	l.outboxMu.Unlock()
 	return err
 }
 

@@ -97,6 +97,7 @@ func (l *ExecutionLoop) watchWrapperProc(name string, pid int) {
 		return
 	}
 	go func() {
+		defer shared.Recover(l.tracePanic)
 		_ = p.cmd.Wait()
 		p.log.Marker("exit pid=%d %s", p.pid, exitDescription(p.cmd))
 		close(p.exited)

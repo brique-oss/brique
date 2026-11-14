@@ -194,28 +194,33 @@ const notFoundReason = "child not found"
 // an absent one; for such a caller the reasons that describe the host (paths,
 // system errors) are replaced as well, so that absence has one wording.
 func (c *ContextLoop) runChildOpScoped(op childOp, names []string, in circulation.Intention, scope *controlScope) {
-	c.opMu.Lock()
-	results := make([]map[string]any, 0, len(names))
-	allOK := len(names) > 0
-	for _, name := range names {
-		var ok bool
-		var reason string
-		if scope.refused(name) {
-			ok, reason = false, notFoundReason
-		} else {
-			ok, reason = c.controlOneChild(op, name)
-			if scope != nil && !ok && (strings.Contains(reason, "not found") || strings.Contains(reason, "no context.json on disk")) {
-				reason = notFoundReason
+	// Each child operation creates or stops a whole context: the lock is released by
+	// defer, so that a panic in one cannot leave every later operation blocked.
+	results, allOK := func() ([]map[string]any, bool) {
+		c.opMu.Lock()
+		defer c.opMu.Unlock()
+		results := make([]map[string]any, 0, len(names))
+		allOK := len(names) > 0
+		for _, name := range names {
+			var ok bool
+			var reason string
+			if scope.refused(name) {
+				ok, reason = false, notFoundReason
+			} else {
+				ok, reason = c.controlOneChild(op, name)
+				if scope != nil && !ok && (strings.Contains(reason, "not found") || strings.Contains(reason, "no context.json on disk")) {
+					reason = notFoundReason
+				}
 			}
+			allOK = allOK && ok
+			entry := map[string]any{circulation.KeyChild: name, circulation.KeyOK: ok}
+			if reason != "" {
+				entry[circulation.KeyReason] = reason
+			}
+			results = append(results, entry)
 		}
-		allOK = allOK && ok
-		entry := map[string]any{circulation.KeyChild: name, circulation.KeyOK: ok}
-		if reason != "" {
-			entry[circulation.KeyReason] = reason
-		}
-		results = append(results, entry)
-	}
-	c.opMu.Unlock()
+		return results, allOK
+	}()
 
 	if allOK {
 		c.respond(in, circulation.Response{

@@ -138,7 +138,21 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		srcLatest, srcErr = l.latestSourceModTime(cfg.Name)
 	}
 
-	st.Lock()
+	// The state mutex is taken and released several times around long operations
+	// (build, start, waits), so one deferred Unlock cannot cover it. Whether this
+	// goroutine holds it is tracked, and whatever is held when the function ends,
+	// by return or by panic, is released: a mutex left taken would block every
+	// later call for this wrapper.
+	stateLocked := false
+	lockState := func() { st.Lock(); stateLocked = true }
+	unlockState := func() { stateLocked = false; st.Unlock() }
+	defer func() {
+		if stateLocked {
+			st.Unlock()
+		}
+	}()
+
+	lockState()
 
 	// Decide what must be done (explicit build/start split)
 	isCompiled := (cfg.Mode == configuration.ValueConfigStyleCompiled)
@@ -146,7 +160,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 
 	// Invalid mode => configuration error (fail fast)
 	if !isCompiled && !isInterpreted {
-		st.Unlock()
+		unlockState()
 		l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperNotConfigured, "mode": cfg.Mode},
 			"invalid wrapper mode"))
@@ -157,7 +171,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 	if isCompiled && cfg.Build != nil {
 		changed, err := sourceChangedSince(st.BuiltAt, srcLatest, srcErr)
 		if err != nil && st.BuiltAt.IsZero() {
-			st.Unlock()
+			unlockState()
 			l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperNotConfigured},
 				err.Error()))
@@ -174,13 +188,13 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 
 	// Fast path: already ready (current running process) and not stale.
 	if st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil && !sourceChanged && !runningStale && !interpretedStale && !st.GetBuilding() && !st.GetStarting() {
-		st.Unlock()
+		unlockState()
 		return false
 	}
 
 	// If readiness already failed for current process, fail-fast
 	if st.ReadyErr != nil {
-		st.Unlock()
+		unlockState()
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, "wrapper failed to be ready"))
 		return true
 	}
@@ -199,9 +213,9 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		st.SetBuilding(true)
 		l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceWrpStartBuilding)
 		// do build outside lock
-		st.Unlock()
+		unlockState()
 		if err := l.buildWrapper(cfg); err != nil {
-			st.Lock()
+			lockState()
 			st.SetBuilding(false)
 			// Unblock any waiters: build failure means readiness failed.
 			st.ReadyErr = err
@@ -210,12 +224,15 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 				close(ch)
 				st.ResetReadyCh()
 			}
+			unlockState()
+			// Answered once the lock is released: the send waits for room in the
+			// communication channel, and every other call for this wrapper would wait
+			// behind the lock meanwhile.
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperBuildFailed}, err.Error()))
-			st.Unlock()
 			return true
 		}
 		l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceWrpEndBuilding)
-		st.Lock()
+		lockState()
 		st.BuiltAt = time.Now()
 		st.SetBuilding(false)
 	}
@@ -223,18 +240,18 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 	// Compiled runtime is stale when a newer build exists than the currently running generation.
 	if isCompiled && wrapperRuntimeStaleLocked(st) && st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil {
 		pid := markWrapperRestartingLocked(st)
-		st.Unlock()
+		unlockState()
 		killWrapperPIDBestEffort(pid)
-		st.Lock()
+		lockState()
 	}
 
 	// Interpreted runtime is stale when its sources changed since it started:
 	// restart it so the next call runs the current code.
 	if interpretedStale && st.ProcState == junction.ProcRunning && st.Ready && st.ReadyErr == nil {
 		pid := markWrapperRestartingLocked(st)
-		st.Unlock()
+		unlockState()
 		killWrapperPIDBestEffort(pid)
-		st.Lock()
+		lockState()
 	}
 
 	// startToDo:
@@ -273,11 +290,11 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		st.ProcState = junction.ProcStarting
 		st.StartedAt = time.Now()
 
-		st.Unlock()
+		unlockState()
 		l.killWrapperProc(wrapper, oldPID)
 		pid, err := l.startWrapperProcess(cfg)
 		if err != nil {
-			st.Lock()
+			lockState()
 			st.ProcState = junction.ProcUnknown
 			st.SetStarting(false)
 			st.LastError = err
@@ -287,13 +304,13 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 				close(ch)
 				st.ResetReadyCh()
 			}
-			st.Unlock()
+			unlockState()
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperRunFailed}, err.Error()))
 			return true
 		}
 
 		// Mark running early so wrapper_ready can unlock the waiter.
-		st.Lock()
+		lockState()
 		st.PID = pid
 		st.ProcState = junction.ProcRunning
 		l.watchWrapperProc(wrapper, pid)
@@ -301,7 +318,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		// wrapper_ready may already have been processed between the process
 		// start and this point: it closes and clears the channel.
 		alreadySettled := st.Ready || st.ReadyErr != nil
-		st.Unlock()
+		unlockState()
 
 		if ch == nil && !alreadySettled {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -313,7 +330,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 			if err := l.waitWrapperReady(ch, cfg.ReadyTimeoutMs); err != nil {
 				// The process never became ready: do not leave it running.
 				l.killWrapperProc(wrapper, pid)
-				st.Lock()
+				lockState()
 				st.SetStarting(false)
 				st.ProcState = junction.ProcUnknown
 				ch := st.GetReadyCh()
@@ -327,7 +344,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 				} else {
 					st.ReadyErr = fmt.Errorf("wrapper readiness timeout")
 				}
-				st.Unlock()
+				unlockState()
 				if stopped {
 					l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonContextStopped}, "Context has been stopped"))
 				} else {
@@ -338,7 +355,7 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		}
 
 		l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceWrpStartDone)
-		st.Lock()
+		lockState()
 		st.SetStarting(false)
 		if isCompiled {
 			st.RunningBuiltAt = st.BuiltAt
@@ -348,11 +365,11 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		}
 
 		if readyErr := st.ReadyErr; readyErr != nil {
-			st.Unlock()
+			unlockState()
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, readyErr.Error()))
 			return true
 		}
-		st.Unlock()
+		unlockState()
 		return false
 
 	} else {
@@ -362,13 +379,13 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		if ch == nil {
 			// Invariant violation: another job started, but no ready channel to wait on.
 			// Do not create a new channel here (it would never be closed).
-			st.Unlock()
+			unlockState()
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure},
 				"internal error: wrapper starting without ready channel"))
 			return true
 		}
-		st.Unlock()
+		unlockState()
 		if err := l.waitWrapperReady(ch, cfg.ReadyTimeoutMs); err != nil {
 			if err.Error() == "stopped" {
 				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonContextStopped}, "Context has been stopped"))
@@ -377,10 +394,10 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 			}
 			return true
 		}
-		st.Lock()
+		lockState()
 		readyErr := st.ReadyErr
 		ready := st.ProcState == junction.ProcRunning && st.Ready
-		st.Unlock()
+		unlockState()
 		if readyErr != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, readyErr.Error()))
 			return true
@@ -1458,6 +1475,7 @@ func (l *ExecutionLoop) stopAllWrappersBestEffort() {
 		wg.Add(1)
 		go func(t target) {
 			defer wg.Done()
+			defer shared.Recover(l.tracePanic)
 			l.terminateWrapper(t.name, t.pid, t.grace, false)
 		}(t)
 	}

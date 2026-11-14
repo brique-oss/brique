@@ -225,6 +225,7 @@ func (l *ExecutionLoop) signalWrapperStop(in circulation.Intention) bool {
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
+			defer shared.Recover(l.tracePanic)
 			// Gives up when the loop stops: shutdown terminates every wrapper
 			// itself (stopAllWrappersBestEffort).
 			l.terminateWrapper(name, pid, timeout, true)
@@ -341,13 +342,13 @@ func (l *ExecutionLoop) handleExecutionIntention(in circulation.Intention) {
 	// External control caps — spawned async to avoid blocking the inbox.
 	case execCapWrapperStart:
 		l.wg.Add(1)
-		go func() { defer l.wg.Done(); l.execWrapperStart(in) }()
+		go func() { defer l.wg.Done(); defer shared.Recover(l.answerPanic(in)); l.execWrapperStart(in) }()
 	case execCapWrapperStopCmd:
 		l.wg.Add(1)
-		go func() { defer l.wg.Done(); l.execWrapperStopCmd(in) }()
+		go func() { defer l.wg.Done(); defer shared.Recover(l.answerPanic(in)); l.execWrapperStopCmd(in) }()
 	case execCapWrapperRestart:
 		l.wg.Add(1)
-		go func() { defer l.wg.Done(); l.execWrapperRestart(in) }()
+		go func() { defer l.wg.Done(); defer shared.Recover(l.answerPanic(in)); l.execWrapperRestart(in) }()
 
 	default:
 		// unknown cap: ignore

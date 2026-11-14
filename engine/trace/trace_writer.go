@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/shared"
 )
 
 const (
@@ -309,7 +310,7 @@ func (l *TraceLoop) loopWriter() {
 		if len(batch) == 0 {
 			continue
 		}
-		sw.writeBatch(batch)
+		l.writeBatchSafely(sw, batch)
 		l.recycleBatch(batch)
 	}
 }
@@ -414,4 +415,17 @@ func (l *TraceLoop) enforceRetention(root, current string) {
 		total -= oldest.size
 		segs = segs[1:]
 	}
+}
+
+// writeBatchSafely writes one batch; a panic costs that batch only, counted as
+// dropped, and the writer keeps serving the next ones.
+func (l *TraceLoop) writeBatchSafely(sw *segmentWriter, batch []circulation.TraceWire) {
+	defer shared.Recover(func(string) { l.counters.writerDropped.Add(uint64(len(batch))) })
+	sw.writeBatch(batch)
+}
+
+// emitToCommSafely sends one answer; a panic costs that answer only.
+func (l *TraceLoop) emitToCommSafely(msg circulation.Message) {
+	defer shared.Recover(func(string) {})
+	l.emitToComm(msg)
 }

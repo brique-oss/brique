@@ -1068,6 +1068,14 @@ func (l *MatterLoop) handleInboxMessageWithCompletion(msg circulation.Message, c
 				if completion != nil {
 					defer completion()
 				}
+				// Declared after completion so that it runs first: the error answer
+				// must leave while the request is still bound. A panic of one
+				// operation is answered as an internal error; the engine carries on.
+				defer shared.Recover(func(text string) {
+					l.traceResponseError(m.Intention.IntentionID, circulation.ValueCodeInternal, text)
+					l.emitResponseError(errorResp(m.Intention, circulation.ValueCodeInternal,
+						map[string]any{circulation.KeyReason: "handler_panic"}, "internal error"))
+				})
 				parentID, rootID := matterCorrelationIDs(m.Intention)
 				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, parentID, rootID, circulation.ValueTraceFamilyEnter)
 				l.runJob(m)

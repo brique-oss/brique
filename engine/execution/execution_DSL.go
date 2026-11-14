@@ -30,6 +30,7 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/shared"
 )
 
 type DSLDescriptor struct {
@@ -834,6 +835,7 @@ func (l *ExecutionLoop) evalDSLParallelNode(st *dslExecState, node map[string]an
 		go func(idx int, item map[string]any) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer shared.Recover(func(text string) { results[idx] = branchResult{idx: idx, err: l.dslBranchPanicked(st, text)} })
 
 			child := cloneDSLExecState(st)
 			resp, err := l.evalDSLNode(child, item)
@@ -925,6 +927,8 @@ func (l *ExecutionLoop) evalDSLRaceNode(st *dslExecState, node map[string]any) (
 	resultCh := make(chan branchResult, len(items))
 	for _, item := range items {
 		go func(item map[string]any) {
+			// A branch that panics must still report: the parent waits for every one.
+			defer shared.Recover(func(text string) { resultCh <- branchResult{err: l.dslBranchPanicked(st, text)} })
 			child := cloneDSLExecState(st)
 			resp, err := l.evalDSLNode(child, item)
 			resultCh <- branchResult{resp: resp, err: err, aliases: cloneAliases(child.aliases)}
@@ -994,6 +998,7 @@ func (l *ExecutionLoop) evalDSLForEachNode(st *dslExecState, node map[string]any
 		go func(idx int, item any) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer shared.Recover(func(text string) { results[idx] = iterResult{idx: idx, err: l.dslBranchPanicked(st, text)} })
 
 			child := cloneDSLExecState(st)
 			child.pushScope(map[string]any{

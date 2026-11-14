@@ -118,6 +118,9 @@ func (r *ContextRegistry) SetFamily(name shared.FamilyName, ch chan<- Delivery) 
 	if ch == nil {
 		delete(r.FamIn, name)
 	} else {
+		if r.FamIn == nil {
+			r.FamIn = make(FamiliesInChanRegistry)
+		}
 		r.FamIn[name] = ch
 	}
 	r.famInMu.Unlock()

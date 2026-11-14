@@ -809,7 +809,7 @@ func (l *CommLoop) loopContextIngress() {
 			if !valid {
 				continue
 			}
-			l.routeEgress(msg, delivery)
+			l.routeEgressSafely(msg, delivery)
 		}
 	}
 }
@@ -888,7 +888,7 @@ func (l *CommLoop) loopInterContextIngress() {
 			if !valid {
 				continue
 			}
-			l.routeIngress(msg, EndpointInnerCtx, "", delivery)
+			l.routeIngressSafely(msg, EndpointInnerCtx, delivery)
 		}
 	}
 }
@@ -963,7 +963,7 @@ func (l *CommLoop) loopInterfaceIngress() {
 			if !ok {
 				return
 			}
-			l.handleInterfaceIngress(it)
+			l.handleInterfaceIngressSafely(it)
 		}
 	}
 }

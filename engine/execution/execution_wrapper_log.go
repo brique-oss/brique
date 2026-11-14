@@ -170,10 +170,12 @@ func (l *wrapperLog) Tail() string {
 	if l == nil {
 		return ""
 	}
-	l.mu.Lock()
-	l.flushPendingLocked()
-	path := l.path
-	l.mu.Unlock()
+	path := func() string {
+		l.mu.Lock()
+		defer l.mu.Unlock() // the flush writes a file: keep a panic from leaving the lock taken
+		l.flushPendingLocked()
+		return l.path
+	}()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

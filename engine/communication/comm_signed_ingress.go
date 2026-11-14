@@ -35,7 +35,7 @@ func (l *CommLoop) loopSignedExternalIngress() {
 			if !ok {
 				return
 			}
-			l.admitSignedExternalEnvelope(item)
+			l.admitSignedExternalEnvelopeSafely(item)
 		}
 	}
 }

@@ -283,6 +283,10 @@ func (c *ContextLoop) createChildrenFromDescriptor(parentContextDir string, pare
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem; wg.Done() }()
+			defer shared.Recover(func(text string) {
+				c.tracePanic(text)
+				errs[i] = "internal error on child " + parentContextId + "/" + childName
+			})
 			child, err := NewContextLoop(filepath.Join(parentContextDir, childName), parentContextId+"/"+childName, ctxCommReg)
 			if err != nil {
 				errs[i] = err.Error() + " on child " + parentContextId + "/" + childName
@@ -565,6 +569,7 @@ func (c *ContextLoop) Stop() {
 		stopWG.Add(1)
 		go func() {
 			defer stopWG.Done()
+			defer shared.Recover(c.tracePanic)
 			ch.Stop()
 		}()
 	}
@@ -619,32 +624,47 @@ func (c *ContextLoop) run() {
 			if !ok {
 				return
 			}
-			msg, scope, valid := c.controlRequest(delivery)
-			if !valid || msg.Kind != circulation.ValueKindIntention || msg.Intention.To.Type != circulation.ValueTypeControl {
-				continue
-			}
-			in := msg.Intention
-			if in.To.Cap == "stop" {
-				go c.Stop()
+			if c.serveControl(delivery) {
 				return
 			}
-			op, known := childOpForCap(in.To.Cap)
-			if !known {
-				c.respondControlError(in, circulation.ValueCodeInvalid, "unsupported control capacity: "+in.To.Cap, nil)
-				continue
-			}
-			children, err := parseControlChildren(in.Params)
-			if err != nil {
-				c.respondControlError(in, circulation.ValueCodeInvalid, err.Error(), nil)
-				continue
-			}
-			c.wg.Add(1)
-			go func() {
-				defer c.wg.Done()
-				c.runChildOpScoped(op, children, in, scope)
-			}()
 		}
 	}
+}
+
+// serveControl serves one control delivery and reports whether the loop must end
+// (the context was asked to stop). A panic costs that request only.
+func (c *ContextLoop) serveControl(delivery junction.Delivery) (stop bool) {
+	var in circulation.Intention
+	defer shared.Recover(func(text string) { c.answerPanic(in)(text) })
+	msg, scope, valid := c.controlRequest(delivery)
+	if !valid || msg.Kind != circulation.ValueKindIntention || msg.Intention.To.Type != circulation.ValueTypeControl {
+		return false
+	}
+	in = msg.Intention
+	if in.To.Cap == "stop" {
+		go func() {
+			defer shared.Recover(c.tracePanic)
+			c.Stop()
+		}()
+		return true
+	}
+	op, known := childOpForCap(in.To.Cap)
+	if !known {
+		c.respondControlError(in, circulation.ValueCodeInvalid, "unsupported control capacity: "+in.To.Cap, nil)
+		return false
+	}
+	children, err := parseControlChildren(in.Params)
+	if err != nil {
+		c.respondControlError(in, circulation.ValueCodeInvalid, err.Error(), nil)
+		return false
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		defer shared.Recover(c.answerPanic(in))
+		c.runChildOpScoped(op, children, in, scope)
+	}()
+	return false
 }
 
 // initFamiliesFromDescriptor

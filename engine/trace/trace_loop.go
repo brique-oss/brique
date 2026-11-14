@@ -584,7 +584,7 @@ func (l *TraceLoop) respond(msg circulation.Message) {
 // closed (end of ingress), which drains it first.
 func (l *TraceLoop) loopResponder() {
 	for msg := range l.respQ {
-		l.emitToComm(msg)
+		l.emitToCommSafely(msg)
 	}
 }
 
@@ -966,6 +966,10 @@ func (l *TraceLoop) loopIngress() {
 
 	deliveryIn := l.deliveryIn
 	handleDelivery := func(d junction.Delivery) {
+		// The trace cannot trace its own failure: a panic costs the one message,
+		// which is counted as rejected, and the loop that every other family writes
+		// to goes on.
+		defer shared.Recover(func(string) { l.counters.ringRejected.Add(1) })
 		if msg, valid := l.messageFromDelivery(d); valid {
 			handle(msg)
 		}
