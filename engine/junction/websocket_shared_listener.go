@@ -149,6 +149,10 @@ type webSocketSharedListener struct {
 	closed   bool
 }
 
+// CloseCodeReplaced is the application close code sent to a client whose
+// connection is replaced by a newer one on the same route (one client per route).
+const CloseCodeReplaced = 4001
+
 type webSocketRouteState struct {
 	parent *webSocketSharedListener
 	route  WebSocketRoute
@@ -394,6 +398,12 @@ func (l *webSocketSharedListener) handleHTTP(rw http.ResponseWriter, r *http.Req
 	state.pingDone = done
 	state.connMu.Unlock()
 	if old != nil {
+		connectionLog("replace %s: a new connection from %s replaces the previous one, which is closed", state.routeLabel(), r.RemoteAddr)
+		// Say why before closing: the displaced client must not fight the new one
+		// by reconnecting (a plain close reads as a network loss, code 1006).
+		_ = old.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(CloseCodeReplaced, "replaced by a newer connection"),
+			time.Now().Add(time.Second))
 		_ = old.Close()
 	}
 	if oldDone != nil {

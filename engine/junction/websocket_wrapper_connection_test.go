@@ -143,6 +143,11 @@ func TestWebSocketWrapperConnectionIsBoundToFramesAndRotatesOnReconnect(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("reconnect did not revoke the previous connection")
 	}
+	// The displaced client is told why, with the application code, not left to read a network loss.
+	_ = firstClient.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := firstClient.ReadMessage(); !websocket.IsCloseError(err, CloseCodeReplaced) {
+		t.Fatalf("displaced client must receive close code %d, got %v", CloseCodeReplaced, err)
+	}
 	if err := handle.SendWrapper(firstConnection, WrapperFrame{Message: message, Delegation: delegation}); err == nil {
 		t.Fatal("frame bound to the previous connection reached the replacement")
 	}
