@@ -282,8 +282,24 @@ func (l *MatterLoop) emitMatterSubscriptionEvent(subscription MatterSubscription
 		IntentionID: circulation.NewIntentionID(),
 		To:          subscription.Target,
 		From:        circulation.Address{Context: circulation.ContextID(l.frame.CtxId), Type: circulation.ValueTypeMatter, Cap: circulation.ValueCapMatterEvent},
-		Params:      eventParamsFor(subscription, params),
+		Params:      withSubscriptionID(eventParamsFor(subscription, params), subscription.ID),
 	}})
+}
+
+// withSubscriptionID returns a copy of params carrying the id of the subscription
+// the event is delivered for (durable events already carry it). Without it a
+// client following one Matter under several keys cannot tell which of its
+// subscriptions an event belongs to. The input map is never modified: it may be
+// shared by the events of several subscriptions.
+func withSubscriptionID(params map[string]any, subID string) map[string]any {
+	cloned := make(map[string]any, len(params)+1)
+	for key, value := range params {
+		cloned[key] = value
+	}
+	if subID != "" {
+		cloned[circulation.KeySubID] = subID
+	}
+	return cloned
 }
 
 func (l *MatterLoop) ackPendingMatterEvent(subID, eventID string) (bool, error) {
