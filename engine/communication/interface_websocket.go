@@ -64,7 +64,7 @@ func NewWebSocketRuntimeWithFrame(frame *junction.ContextRegistry, cfg Interface
 		Driver: cfg.Driver,
 		Cfg:    cfg,
 	}
-	impl := &wsInterface{rt: rt, frame: frame}
+	impl := &wsInterface{rt: rt, frame: frame, inflight: newInflightTracker()}
 	if err := impl.loadConfig(cfg.Config); err != nil {
 		return nil, err
 	}
@@ -86,6 +86,9 @@ type wsInterface struct {
 	handle junction.WebSocketRouteHandle
 	done   chan struct{}
 	once   sync.Once
+
+	// inflight: the awaited intentions written to the wrapper connection, answered `connection_lost` when it drops.
+	inflight *inflightTracker
 }
 
 func (w *wsInterface) loadConfig(m map[string]any) error {
@@ -148,12 +151,12 @@ func (w *wsInterface) Start() error {
 		IfaceName:     w.rt.Name,
 		Endpoint:      w.rt.Type,
 		Ingress:       w.rt.Ingress,
-		Decode:        decodeRawWebSocketMessage,
+		Decode:        w.observingDecode(decodeRawWebSocketMessage),
 		Encode:        encodeRawWebSocketMessage,
 		Wrapper:       w.rt.Type == EndpointWrapper,
-		DecodeWrapper: decodeWrapperWebSocketFrame,
+		DecodeWrapper: w.observingWrapperDecode(decodeWrapperWebSocketFrame),
 		EncodeWrapper: encodeWrapperWebSocketFrame,
-		OnDisconnect:  w.revokeWrapperConnection,
+		OnDisconnect:  w.onWrapperDisconnect,
 	})
 	if err != nil {
 		return err
@@ -163,6 +166,43 @@ func (w *wsInterface) Start() error {
 		w.done = make(chan struct{})
 	}
 	return nil
+}
+
+// onWrapperDisconnect revokes what was delegated on the lost connection and answers
+// `connection_lost` to the awaited intentions written to it.
+func (w *wsInterface) onWrapperDisconnect(connection junction.WrapperConnection) {
+	w.revokeWrapperConnection(connection)
+	if w == nil || w.rt == nil || w.rt.ReportEgressOutcome == nil {
+		return
+	}
+	for _, request := range w.inflight.lose(connection) {
+		w.rt.ReportEgressOutcome(request, InterfaceEgressOutcome{
+			Definitive: true,
+			Err:        errors.New("wrapper connection lost before the response"),
+			Reason:     circulation.ValueReasonConnectionLost,
+		})
+	}
+}
+
+// observingDecode lets the registry see every terminal Response a wrapper writes.
+func (w *wsInterface) observingDecode(decode func([]byte) (circulation.Message, bool)) func([]byte) (circulation.Message, bool) {
+	return func(data []byte) (circulation.Message, bool) {
+		msg, ok := decode(data)
+		if ok {
+			w.inflight.settle(msg)
+		}
+		return msg, ok
+	}
+}
+
+func (w *wsInterface) observingWrapperDecode(decode func([]byte) (junction.WrapperFrame, bool)) func([]byte) (junction.WrapperFrame, bool) {
+	return func(data []byte) (junction.WrapperFrame, bool) {
+		frame, ok := decode(data)
+		if ok {
+			w.inflight.settle(frame.Message)
+		}
+		return frame, ok
+	}
 }
 
 func (w *wsInterface) revokeWrapperConnection(connection junction.WrapperConnection) {
@@ -242,7 +282,11 @@ func (w *wsInterface) WriteLoop() error {
 				rawEgress = nil
 				continue
 			}
-			_ = w.handle.Send(msg)
+			if err := w.handle.Send(msg); err == nil && w.rt.Type == EndpointWrapper {
+				if connection, ok := w.currentWrapperConnection(); ok {
+					w.inflight.add(connection, msg)
+				}
+			}
 		case item, ok := <-wrapperEgress:
 			if !ok {
 				wrapperEgress = nil
@@ -253,6 +297,8 @@ func (w *wsInterface) WriteLoop() error {
 				if w.rt.ReportEgressOutcome != nil {
 					w.rt.ReportEgressOutcome(item.Frame.Message, InterfaceEgressOutcome{Err: err})
 				}
+			} else {
+				w.inflight.add(item.Connection, item.Frame.Message)
 			}
 		}
 	}

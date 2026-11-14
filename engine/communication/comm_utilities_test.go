@@ -537,3 +537,32 @@ func TestCommUtilities_AmbiguousInterfaceFailureNeverManufacturesResponse(t *tes
 	l.reportInterfaceEgressOutcome(response, InterfaceEgressOutcome{Definitive: true, StatusCode: 503, Err: errors.New("remote HTTP 503")})
 	noMsg(t, sourceCh, "rejected response must not create response-to-response")
 }
+
+func TestCommUtilities_ConnectionLostRepliesToAwaitedIntentionWithItsOwnReason(t *testing.T) {
+	reg := newMockCommReg()
+	sourceCh := make(chan junction.Delivery, 2)
+	reg.chByID["/ctx/source"] = sourceCh
+	l, traceCh := newUtilitiesLoop("/ctx/source", reg)
+
+	awaited := mkIntentionMsg("@wrapper_w:/target", circulation.ValueTypeExecution, "/ctx/source")
+	awaited.Intention.AwaitResponse = true
+	l.reportInterfaceEgressOutcome(awaited, InterfaceEgressOutcome{
+		Definitive: true, Err: errors.New("wrapper connection lost before the response"), Reason: circulation.ValueReasonConnectionLost,
+	})
+	ack := recvMsg(t, sourceCh, "connection lost ack")
+	if ack.Kind != circulation.ValueKindResponse || ack.Response.IntentionID != awaited.Intention.IntentionID || ack.Response.Status != "error" {
+		t.Fatalf("unexpected ack: %#v", ack)
+	}
+	if reason := ack.Response.Error.Details[circulation.KeyReason]; reason != circulation.ValueReasonConnectionLost {
+		t.Fatalf("the answer must say connection_lost (outcome unknown), got %v", reason)
+	}
+	if !traceContains(traceCh, circulation.ValueTraceCommReject, circulation.ValueReasonConnectionLost) {
+		t.Fatal("expected a trace with the connection_lost reason")
+	}
+
+	fire := awaited
+	fire.Intention.IntentionID = "fire"
+	fire.Intention.AwaitResponse = false
+	l.reportInterfaceEgressOutcome(fire, InterfaceEgressOutcome{Definitive: true, Err: errors.New("lost"), Reason: circulation.ValueReasonConnectionLost})
+	noMsg(t, sourceCh, "a fire-and-forget intention is not answered")
+}

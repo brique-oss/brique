@@ -205,6 +205,8 @@ const (
 
 	ValueReasonContextStopped     = "context_stopped"
 	ValueReasonContextUnreachable = "context_unreachable"
+	// ValueReasonConnectionLost: the wrapper connection an awaited intention was written to dropped before its Response; the outcome is unknown.
+	ValueReasonConnectionLost = "connection_lost"
 
 	ValueReasonPendingRegisterError   = "pending_register_error"
 	ValueReasonMissingContextFrame    = "missing_context_frame"

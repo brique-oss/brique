@@ -927,6 +927,13 @@ func (l *CommLoop) reportInterfaceEgressOutcome(msg circulation.Message, outcome
 		l.sendToTrace(msg, circulation.ValueTraceCommDrop, "delivery_outcome_unknown", outcome.Err.Error())
 		return
 	}
+	if outcome.Reason != "" {
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, outcome.Reason, outcome.Err.Error())
+		if msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
+			l.sendDeliveryFailureAck(&msg, target, outcome.Reason)
+		}
+		return
+	}
 	l.reportDeliveryFailure(msg, newDeliveryResult(deliveryUnavailable, target, outcome.Err))
 }
 

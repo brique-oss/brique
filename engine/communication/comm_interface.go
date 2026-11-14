@@ -103,6 +103,8 @@ type InterfaceEgressOutcome struct {
 	Definitive bool
 	StatusCode int
 	Err        error
+	// Reason, when set, is the reason the caller's answer carries (default: context_unreachable).
+	Reason string
 }
 
 type interfaceEgressReport struct {
