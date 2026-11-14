@@ -20,6 +20,7 @@ class _Lease:
     def __init__(self) -> None:
         self.holding = True
         self.waiting = 0
+        self.ended = False      # the work is over and its slot is back: a task it started that is still alive owns no slot
 
 
 # The lease of the work running in the current task; its sub-tasks share it.
@@ -74,7 +75,7 @@ class WorkScheduler:
         is there. Outside scheduled work this does nothing.
         """
         lease = _current_lease.get()
-        if lease is None:
+        if lease is None or lease.ended:        # a task that outlives its work (a background wake) shares a lease that has already given its slot back
             yield
             return
         lease.waiting += 1
@@ -86,10 +87,13 @@ class WorkScheduler:
             yield
         finally:
             lease.waiting -= 1
-            if lease.waiting == 0 and not lease.holding:
+            if lease.waiting == 0 and not lease.holding and not lease.ended:
                 await self._slots.acquire()
-                lease.holding = True
-                self._active += 1
+                if lease.ended:                  # the work ended while this waited for its slot: nobody would give it back
+                    self._slots.release()
+                else:
+                    lease.holding = True
+                    self._active += 1
 
     @property
     def queued(self) -> int:
@@ -116,7 +120,9 @@ class WorkScheduler:
                 pass
             finally:
                 _current_lease.reset(token)
+                lease.ended = True
                 if lease.holding:
+                    lease.holding = False
                     self._active -= 1
                     self._slots.release()
         finally:

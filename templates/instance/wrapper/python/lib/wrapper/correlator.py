@@ -60,10 +60,13 @@ class AwaitCorrelator:
     def __init__(self) -> None:
         self._pending: dict[str, PendingResponse] = {}
         self._lock = asyncio.Lock()
+        self._closed: str | None = None          # once the waits were cancelled, a new wait could never be answered: it fails at once
 
     async def register(self, intention_id: str) -> PendingResponse:
         pending = PendingResponse()
         async with self._lock:
+            if self._closed is not None:
+                raise asyncio.CancelledError(self._closed)
             if intention_id in self._pending:
                 raise RuntimeError(f"duplicate pending intention id {intention_id!r}")
             self._pending[intention_id] = pending
@@ -91,6 +94,7 @@ class AwaitCorrelator:
 
     async def cancel_all(self, reason: str) -> None:
         async with self._lock:
+            self._closed = reason
             pending = list(self._pending.values())
             self._pending.clear()
         for waiter in pending:

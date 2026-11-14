@@ -220,3 +220,32 @@ class SlotsWhileWaitingTests(unittest.IsolatedAsyncioTestCase):
         await scheduler.close()
         self.assertEqual(sorted(order), ["first-done", "other"])
         self.assertEqual(scheduler._slots._value, 1)   # one slot, given back exactly once
+
+    async def test_a_task_that_outlives_its_work_neither_gives_back_nor_takes_a_slot(self) -> None:
+        """A background task started by a capacity (the wake that mailbox.send fires) shares the lease of the work that started it. When the work has ended and
+        its slot is back, the task is still waiting for an answer: it must not give the slot back a second time (17 slots free out of 16, active -1, seen on
+        the real wrapper), nor take one when its wait ends (it would hold it for ever, the work being over)."""
+        scheduler = WorkScheduler(max_concurrency=2, queue_limit=8)
+        waiting, may_end, seen = asyncio.Event(), asyncio.Event(), {}
+
+        async def background() -> None:
+            await asyncio.sleep(0.03)                        # the work that started it is over by now (it ends after 0.01 s)
+            async with scheduler.yielding():
+                waiting.set()
+                await may_end.wait()
+
+        async def work() -> None:
+            asyncio.ensure_future(background())              # shares the context, so the lease, of this work
+            await asyncio.sleep(0.01)                        # the work ends first, with its slot
+
+        scheduler.submit("cap", work, ordered=False)
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(waiting.wait(), 1)
+        seen["during"] = (scheduler._slots._value, scheduler._active)
+        may_end.set()
+        await asyncio.sleep(0.05)
+        seen["after"] = (scheduler._slots._value, scheduler._active)
+        self.assertEqual(seen["during"], (2, 0))             # not (3, -1): the slot of the ended work was given back once
+        self.assertEqual(seen["after"], (2, 0))              # and the task took none when its wait ended
+        await scheduler.close()
+

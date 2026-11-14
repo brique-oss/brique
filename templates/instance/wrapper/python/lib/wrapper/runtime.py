@@ -168,6 +168,10 @@ class WrapperRuntime:
             if not self.stop_requested.is_set():
                 raise
         finally:
+            # The connection is closed, by the engine or on request: no Response can come any more. The calls that wait for one are freed BEFORE the
+            # work in flight is waited for, since that work is stuck on those very waits (otherwise the process stays alive and unreachable until each
+            # wait has run out: 60 s, 600 s ...).
+            await self.correlator.cancel_all("connection closed")
             await self._drain_inflight()
             await self._shutdown()
         return 0
