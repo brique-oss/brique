@@ -163,6 +163,14 @@ func (l *CommLoop) rateLimiter() *limits.Limiter {
 // Contract:
 // - Unknown or failing interface drivers are skipped during construction; no goroutine or registry registration happens here.
 
+// ingressBufferOf: the configured size of the ingress channel, or the default.
+func ingressBufferOf(cfg CommCfg) int {
+	if cfg.IngressBuffer > 0 {
+		return cfg.IngressBuffer
+	}
+	return defaultIngressBuffer
+}
+
 func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *CommLoop {
 	cfg := ParseCommCfg(engineCfg)
 	var signedExternalIngress chan signedExternalIngressItem
@@ -177,7 +185,7 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 		// Runtime-owned channels (created by Comm):
 		in:                     make(chan junction.Delivery, 16),
 		ctxIn:                  make(chan junction.Delivery, 16),
-		ingress:                make(chan IngressItem, 16),
+		ingress:                make(chan IngressItem, ingressBufferOf(cfg)),
 		signedExternalIngress:  signedExternalIngress,
 		interfaceOutcomes:      make(chan interfaceEgressReport, 16),
 		signedExternalOutcomes: make(chan signedExternalEgressReport, 16),

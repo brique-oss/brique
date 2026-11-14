@@ -77,6 +77,7 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 		ReadLimit:      shared.DefaultControlMessageBytes,
 		WriteTimeout:   5 * time.Second,
 		PingInterval:   20 * time.Second,
+		IngressWait:    5 * time.Second,
 		AllowAnyOrigin: false,
 		WrapperAuth:    junction.WrapperAuthRequired,
 	}
@@ -94,6 +95,9 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 	}
 	if v, ok := raw[configuration.KeyIntPingInter].(float64); ok && v > 0 {
 		cfg.PingInterval = time.Duration(v) * time.Millisecond
+	}
+	if v, ok := raw[configuration.KeyIntIngressWait].(float64); ok && v > 0 {
+		cfg.IngressWait = time.Duration(v) * time.Millisecond
 	}
 	if v, ok := raw[configuration.KeyIntAnyOri].(bool); ok {
 		cfg.AllowAnyOrigin = v

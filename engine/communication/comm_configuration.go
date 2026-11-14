@@ -18,6 +18,7 @@ package comm
 
 import (
 	"brique_engine/configuration"
+	"brique_engine/shared"
 	"strings"
 )
 
@@ -36,7 +37,14 @@ type CommCfg struct {
 	AllowedScatter map[string]map[string]bool
 	// MaxScatterItems is a hard guard for fan-out burst control.
 	MaxScatterItems int
+
+	// IngressBuffer is the number of places of the channel that every interface read loop feeds and a single goroutine empties.
+	// A read loop that finds it full waits for a place (listener setting ingress_wait_ms) before it closes its connection. 0 = default.
+	IngressBuffer int
 }
+
+// defaultIngressBuffer: at the observed rate of a loaded wrapper (about 3000 messages per second) 16 places held 5 ms of traffic.
+const defaultIngressBuffer = 4096
 
 type InterfaceCfg struct {
 	Name   string
@@ -117,6 +125,9 @@ func ParseCommCfg(engineCfg map[string]any) CommCfg {
 	}
 	if engineCfg == nil {
 		return cfg
+	}
+	if v := shared.AnyToInt64(engineCfg[configuration.KeyIngressBuffer]); v > 0 {
+		cfg.IngressBuffer = int(v)
 	}
 
 	// trust / scope

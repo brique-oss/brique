@@ -30,6 +30,7 @@ const (
 	KeyTrust                 = "trust"
 	KeyScope                 = "scope"
 	KeyInterfaces            = "interfaces"
+	KeyIngressBuffer         = "ingress_buffer"
 	KeyIntName               = "name"
 	KeyIntType               = "type"
 	KeyIntDriver             = "driver"
@@ -47,6 +48,7 @@ const (
 	KeyIntIdleTO             = "idle_timeout_ms"
 	KeyIntTargets            = "targets"
 	KeyIntPingInter          = "ping_interval_ms"
+	KeyIntIngressWait        = "ingress_wait_ms"
 	KeyIntWrapperAuth        = "wrapper_auth"
 	KeyIntAnyOri             = "allow_any_origin"
 	KeyIntAllowedOri         = "allowed_origins"
@@ -66,6 +68,7 @@ const (
 	KeyMatterInlineMaxBytes = "inline_max_bytes"
 	KeyMatterMaxUploadBytes = "max_upload_bytes"
 	KeyMatterLeaseTTLms     = "lease_ttl_ms"
+	KeyMatterMaxHandlers    = "max_handlers"
 
 	// execution loop
 	KeyWrappers             = "wrappers"

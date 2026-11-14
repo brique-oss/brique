@@ -53,6 +53,9 @@ type WebSocketListenerConfig struct {
 	ReadLimit    int64
 	WriteTimeout time.Duration
 	PingInterval time.Duration
+	// IngressWait is how long a read loop waits for a place in the ingress channel of the communication family before it closes its
+	// connection. Waiting holds the sender back through its own socket; closing loses everything the connection had in flight.
+	IngressWait time.Duration
 	// AllowAnyOrigin disables the browser origin check entirely.
 	AllowAnyOrigin bool
 	// WrapperAuth is WrapperAuthRequired (the fail-closed default) or the explicit
@@ -155,6 +158,11 @@ type webSocketRouteState struct {
 	conn       *websocket.Conn
 	connection WrapperConnection
 	pingDone   chan struct{}
+
+	// diagnostics only (websocket_connection_diagnostics.go)
+	ingressHigh int64
+	lastFillLog int64
+	lastWaitLog int64
 }
 
 func newWebSocketSharedListener() *webSocketSharedListener {
@@ -176,6 +184,9 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	}
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = 20 * time.Second
+	}
+	if cfg.IngressWait <= 0 {
+		cfg.IngressWait = 5 * time.Second
 	}
 	if cfg.WrapperAuth == "" {
 		cfg.WrapperAuth = WrapperAuthRequired
@@ -392,6 +403,7 @@ func (l *webSocketSharedListener) handleHTTP(rw http.ResponseWriter, r *http.Req
 
 	go state.readLoop(conn)
 	go state.pingLoop(conn, done)
+	connectionLog("open %s remote=%s", state.routeLabel(), r.RemoteAddr) // after the connection is installed and read: a diagnostic never delays the path it watches
 }
 
 func (s *webSocketRouteState) Send(msg circulation.Message) error {
@@ -425,7 +437,7 @@ func (s *webSocketRouteState) Send(msg circulation.Message) error {
 	defer s.writeMu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
-		s.dropConn(conn)
+		s.dropConn(conn, "send_write_error: "+err.Error())
 		return err
 	}
 	return nil
@@ -478,7 +490,7 @@ func (s *webSocketRouteState) write(conn *websocket.Conn, payload []byte) error 
 	defer s.writeMu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-		s.dropConn(conn)
+		s.dropConn(conn, "wrapper_write_error: "+err.Error())
 		return err
 	}
 	return nil
@@ -518,7 +530,7 @@ func (s *webSocketRouteState) readLoop(conn *websocket.Conn) {
 	for {
 		_, b, err := conn.ReadMessage()
 		if err != nil {
-			s.dropConn(conn)
+			s.dropConn(conn, "read_error: "+err.Error())
 			return
 		}
 		var msg circulation.Message
@@ -543,17 +555,23 @@ func (s *webSocketRouteState) readLoop(conn *websocket.Conn) {
 		if !current {
 			return
 		}
-		select {
-		case s.route.Ingress <- InterfaceIngressItem{
+		fill, capacity, high := s.noteIngressFill()
+		item := InterfaceIngressItem{
 			Endpoint:          s.route.Endpoint,
 			IfaceName:         s.route.IfaceName,
 			Msg:               msg,
 			WrapperConnection: connection,
 			WrapperDelegation: delegation,
-		}:
+		}
+		select {
+		case s.route.Ingress <- item:
 		default:
-			s.dropConn(conn)
-			return
+			// The channel is full. Do not close the connection at once: wait for a place, which holds the sender back through its own
+			// socket. Closing loses everything the connection has in flight, and a wrapper does not reconnect by itself.
+			if !s.waitForIngress(item) {
+				s.dropConn(conn, fmt.Sprintf("ingress_full: the ingress channel of the communication family had %d of %d places taken and stayed full for %s (highest seen on this route: %d)", fill, capacity, s.ingressWait(), high))
+				return
+			}
 		}
 	}
 }
@@ -581,20 +599,21 @@ func (s *webSocketRouteState) pingLoop(conn *websocket.Conn, done <-chan struct{
 			err := conn.WriteMessage(websocket.PingMessage, nil)
 			s.writeMu.Unlock()
 			if err != nil {
-				s.dropConn(conn)
+				s.dropConn(conn, "ping_write_error: "+err.Error())
 				return
 			}
 		}
 	}
 }
 
-func (s *webSocketRouteState) dropConn(conn *websocket.Conn) {
+func (s *webSocketRouteState) dropConn(conn *websocket.Conn, reason string) {
 	if s == nil || conn == nil {
 		return
 	}
 	s.connMu.Lock()
 	var connection WrapperConnection
 	if s.conn == conn {
+		connectionLog("close %s reason=%s", s.routeLabel(), reason)
 		connection = s.connection
 		_ = s.conn.Close()
 		s.conn = nil

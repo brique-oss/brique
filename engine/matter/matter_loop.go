@@ -65,7 +65,10 @@ import (
 // -----------------------------
 
 const defaultPendingTimeout = 30 * time.Second
-const defaultMaxHandlers = 64 // bounded concurrency
+
+// defaultMaxHandlers bounds the Matter operations running at once; past it the loop answers "busy" at once. It was 64, which a few dozen
+// active continuities reach (each operation of a pilot is several). Setting: engine_config.matter.max_handlers.
+const defaultMaxHandlers = 512
 const defaultInlineMaxBytes int64 = 256 << 10
 
 const matterDirName = "matter"
@@ -495,6 +498,14 @@ type CatalogRebuildSummary struct {
 // - The HTTP substance getter is constructed eagerly and bound to this loop instance, but not started here.
 //
 
+// maxHandlersOf: the configured number of simultaneous Matter operations, or the default.
+func maxHandlersOf(cfg map[string]any) int {
+	if value := shared.AnyToInt64(cfg[configuration.KeyMatterMaxHandlers]); value > 0 {
+		return int(value)
+	}
+	return defaultMaxHandlers
+}
+
 func NewMatterLoop(frame *junction.ContextRegistry) *MatterLoop {
 	return NewMatterLoopWithConfig(frame, nil)
 }
@@ -510,7 +521,7 @@ func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any
 		caps:           buildCapTable(),
 		accessRegistry: mustBuildMatterAccessRegistry(),
 
-		handlerSlots: make(chan struct{}, defaultMaxHandlers),
+		handlerSlots: make(chan struct{}, maxHandlersOf(cfg)),
 
 		catalogMatter:    make(map[string]CatalogEntry),
 		catalogStructure: make(map[string]CatalogEntry),

@@ -29,10 +29,15 @@
         "websocket_listener": {
           "_comment": "Root context only — the engine never reads this key from a non-root context.json (setting it there is a silent no-op). Optional even on root: only needed if this instance must expose one shared physical WebSocket listener for wrappers and UIs across the whole context tree to connect to. Child contexts never open their own listener; they only declare logical paths on 'ws' interfaces below, which are served by this single root listener.",
           "addr": "127.0.0.1:8080",
+          "ingress_wait_ms": 5000,
+          "_ingress_wait_ms_note": "Optional. How long a connection (wrapper or UI) waits for a place in the ingress channel of the communication family when it is full, before the engine closes that connection. Waiting holds the sender back through its own socket; closing loses everything the connection had in flight. Default: 5000.",
           "wrapper_auth": "required",
           "_wrapper_auth_note": "Optional because the engine defaults to 'required'. Wrapper connections must carry the per-launch secret the engine puts in BRIQUE_WS_URL (/k/<secret>), otherwise 404. 'optional' is reserved for explicit local development.",
           "_addr_note": "Required inside this block if websocket_listener is present at all. host:port the shared listener binds to."
         },
+
+        "ingress_buffer": 4096,
+        "_ingress_buffer_note": "Optional. Number of places of the channel through which every interface of this context (wrappers, UIs) feeds the communication family, which a single goroutine empties. A loaded wrapper sends about 3000 messages per second: 16 places (the former size) held 5 ms of traffic. Default: 4096.",
 
         "interfaces": [
           {
@@ -149,6 +154,8 @@
         "_inline_max_bytes_note": "Optional. Maximum local brique substance size returned inline by matter.read. Larger substances use a one-shot HTTP read lease. Default: 262144 (256 KiB).",
         "max_upload_bytes": 268435456,
         "_max_upload_bytes_note": "Optional. Maximum body accepted by a matter HTTP upload lease. Default: 268435456 (256 MiB).",
+        "max_handlers": 512,
+        "_max_handlers_note": "Optional. Matter operations that may run at once. Past it the Matter loop answers 'busy' at once (reason loop busy). A pilot makes several operations per step: a few dozen active continuities reached the former limit of 64. Default: 512.",
         "lease_ttl_ms": 30000,
         "_lease_ttl_note": "Optional. Time allowed to begin a leased GET or PUT. An upload claimed before expiry may finish after this deadline. Default: 30000."
       },
