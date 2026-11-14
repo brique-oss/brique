@@ -160,6 +160,23 @@ test("WebSocketTransport reconnects after connection drops", async () => {
   await server.close();
 });
 
+test("WebSocketTransport does not reconnect when the engine says the route was taken by another client", async () => {
+  const server = await createFakeWebSocketServer();
+  const states: string[] = [];
+  const transport = new WebSocketTransport(server.url, { baseDelayMs: 10 });
+  transport.subscribeToConnectionState((state) => states.push(state));
+
+  await server.waitForConnection();
+  server.closeWithCode(4001);
+  await delay(150);
+
+  assert.equal(states[states.length - 1], "disconnected");
+  assert.equal(states.filter((state) => state === "connected").length, 1, "no second connection was opened");
+
+  transport.close();
+  await server.close();
+});
+
 test("WebSocketTransport stops reconnecting after close()", async () => {
   const server = await createFakeWebSocketServer();
   const transport = new WebSocketTransport(server.url, { baseDelayMs: 10 });

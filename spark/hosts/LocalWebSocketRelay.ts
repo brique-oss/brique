@@ -22,7 +22,17 @@ import type { TransportConnectionState } from "../../pulse/runtime/transport/Tra
 const OPEN_TIMEOUT_MS = 10_000;
 const BASE_RETRY_DELAY_MS = 200;
 const MAX_RETRY_DELAY_MS = 30_000;
-const MAX_RETRIES = 5;
+// 12 attempts, pauses doubling from 0.2 s up to 30 s: about 2 min 45 s of an engine that is down (a restart of the engine takes well under that).
+const MAX_RETRIES = 12;
+/** Application close code of the engine: a newer connection took this route (see pulse WebSocketTransport). */
+const CLOSE_CODE_REPLACED = 4001;
+
+export type LocalWebSocketRelayOptions = {
+  /** Reconnection attempts after a loss before giving up (default 12, about 2 min 45 s; the count restarts at each successful connection). */
+  maxRetries?: number;
+  baseRetryDelayMs?: number;
+  maxRetryDelayMs?: number;
+};
 
 export interface SparkTransportRelay {
   open(): void;
@@ -34,6 +44,9 @@ export interface SparkTransportRelay {
 
 export class LocalWebSocketRelay implements SparkTransportRelay {
   private readonly url: string;
+  private readonly maxRetries: number;
+  private readonly baseRetryDelayMs: number;
+  private readonly maxRetryDelayMs: number;
   private socket: WebSocket | null = null;
   private closed = false;
   private retries = 0;
@@ -42,7 +55,10 @@ export class LocalWebSocketRelay implements SparkTransportRelay {
   private readonly messageSubscribers = new Set<(serialized: string) => void>();
   private readonly stateSubscribers = new Set<(state: TransportConnectionState) => void>();
 
-  constructor(url: string) {
+  constructor(url: string, options: LocalWebSocketRelayOptions = {}) {
+    this.maxRetries = validCount(options.maxRetries, MAX_RETRIES, 0);
+    this.baseRetryDelayMs = validCount(options.baseRetryDelayMs, BASE_RETRY_DELAY_MS, 0);
+    this.maxRetryDelayMs = validCount(options.maxRetryDelayMs, MAX_RETRY_DELAY_MS, 0);
     const parsed = new URL(url);
     if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
       throw new Error("Spark transport requires a ws:// or wss:// URL");
@@ -116,16 +132,18 @@ export class LocalWebSocketRelay implements SparkTransportRelay {
     socket.on("error", () => {
       // close drives the state transition and bounded reconnect.
     });
-    socket.on("close", () => {
+    socket.on("close", (code: number) => {
       if (this.socket === socket) this.socket = null;
       this.setState("disconnected");
+      // Replaced by another client of the route: reconnecting would displace it in turn.
+      if (code === CLOSE_CODE_REPLACED) return;
       if (!this.closed) this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect(): void {
-    if (this.retryTimer || this.retries >= MAX_RETRIES || this.closed) return;
-    const delay = Math.min(BASE_RETRY_DELAY_MS * 2 ** this.retries, MAX_RETRY_DELAY_MS);
+    if (this.retryTimer || this.retries >= this.maxRetries || this.closed) return;
+    const delay = Math.min(this.baseRetryDelayMs * 2 ** this.retries, this.maxRetryDelayMs);
     this.retries += 1;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
@@ -175,4 +193,9 @@ function assertSerializedSize(serialized: string): void {
   if (Buffer.byteLength(serialized, "utf8") > CONTROL_MESSAGE_LIMIT_BYTES) {
     throw new Error("Spark transport payload exceeds the 4 MiB control-plane limit; use Matter");
   }
+}
+
+/** A finite number not under its minimum, else the default (an invalid setting is ignored, never fatal). */
+function validCount(value: number | undefined, fallback: number, minimum: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum ? value : fallback;
 }

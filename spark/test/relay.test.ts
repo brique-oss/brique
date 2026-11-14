@@ -36,6 +36,42 @@ test("LocalWebSocketRelay carries text messages without a browser Origin", async
   await server.close();
 });
 
+test("LocalWebSocketRelay does not reconnect when the route was taken by another client", async () => {
+  const server = await createFakeWebSocketServer();
+  const relay = new LocalWebSocketRelay(server.url, { baseRetryDelayMs: 10 });
+  const states: string[] = [];
+  relay.subscribeToConnectionState((state) => states.push(state));
+
+  relay.open();
+  await server.waitForConnection();
+  server.closeWithCode(4001);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(states.filter((state) => state === "connected").length, 1);
+  assert.equal(states[states.length - 1], "disconnected");
+  relay.close();
+  await server.close();
+});
+
+test("LocalWebSocketRelay retry settings: an invalid value is ignored, a valid one applies", async () => {
+  const server = await createFakeWebSocketServer();
+  const relay = new LocalWebSocketRelay(server.url, { maxRetries: 0, baseRetryDelayMs: 10 });
+  let connections = 0;
+  relay.subscribeToConnectionState((state) => { if (state === "connected") connections += 1; });
+  relay.open();
+  await server.waitForConnection();
+  server.closeConnection();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(connections, 1, "maxRetries 0 means no reconnection");
+  relay.close();
+  await server.close();
+
+  const invalid = new LocalWebSocketRelay("ws://127.0.0.1:1", { maxRetries: Number.NaN, baseRetryDelayMs: -5 });
+  assert.equal((invalid as unknown as { maxRetries: number }).maxRetries, 12);
+  assert.equal((invalid as unknown as { baseRetryDelayMs: number }).baseRetryDelayMs, 200);
+  invalid.close();
+});
+
 test("LocalWebSocketRelay refuses non-WebSocket URLs", () => {
   assert.throws(() => new LocalWebSocketRelay("https://example.invalid"), /ws:\/\/ or wss:\/\//i);
 });

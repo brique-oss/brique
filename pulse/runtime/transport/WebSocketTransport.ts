@@ -31,6 +31,12 @@ export type WebSocketTransportConfig = {
 const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_BASE_DELAY_MS = 200;
 const DEFAULT_MAX_DELAY_MS = 30_000;
+/**
+ * Application close code of the engine: a newer connection took this route (one
+ * client per route). Reconnecting would only displace the other client in turn
+ * and the two would fight forever, so the transport stays down.
+ */
+export const CLOSE_CODE_REPLACED = 4001;
 
 export class WebSocketTransport implements Transport {
   private socket: WebSocket;
@@ -133,6 +139,10 @@ export class WebSocketTransport implements Transport {
         `[pulse:ws] close url=${this.url} code=${event.code} reason=${event.reason}`
       );
       this.notifyConnectionState("disconnected");
+      if (event.code === CLOSE_CODE_REPLACED) {
+        console.warn("[pulse:ws] replaced by a newer connection on this route: not reconnecting");
+        return;
+      }
       if (!this.closed) {
         this.scheduleReconnect();
       }

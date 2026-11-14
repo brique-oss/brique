@@ -54,6 +54,7 @@ export class ManualTransport implements Transport {
 export type FakeWebSocketServer = {
   close: () => Promise<void>;
   closeConnection: () => void;
+  closeWithCode: (code: number) => void;
   received: string[];
   sendBinary: (bytes: Uint8Array) => void;
   sendText: (text: string) => void;
@@ -134,6 +135,10 @@ export async function createFakeWebSocketServer(): Promise<FakeWebSocketServer> 
     close: () => closeServer(server, connectedSocket),
     closeConnection: () => {
       connectedSocket?.destroy();
+    },
+    closeWithCode: (code: number) => {
+      // An unmasked server close frame: FIN+opcode 8, length 2, the status code.
+      connectedSocket?.end(Buffer.from([0x88, 0x02, (code >> 8) & 0xff, code & 0xff]));
     },
     received,
     sendBinary: (bytes: Uint8Array) => {
@@ -278,7 +283,10 @@ function decodeTextFrame(buffer: Buffer): { bytesRead: number; text: string } | 
   const lengthCode = second & 0x7f;
 
   if (opcode === 0x8) {
-    return { bytesRead: 2, text: "" };
+    // A close frame may carry a status code (and a mask): consume all of it.
+    const total = 2 + (masked ? 4 : 0) + lengthCode;
+    if (buffer.length < total) return null;
+    return { bytesRead: total, text: "" };
   }
 
   if (opcode !== 0x1) {
