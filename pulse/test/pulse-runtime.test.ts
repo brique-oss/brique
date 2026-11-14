@@ -1724,3 +1724,96 @@ test("PulseRuntime teardown closes selected transport and clears subscribers", (
   assert.equal(transport.closed, true);
   assert.equal(calls, 0);
 });
+
+test("MatterRegistry keeps the last complete read while a refresh is loading", () => {
+  const registry = new MatterRegistry();
+  const key = { context: "/root/ctx", matterId: "doc", readMode: null };
+  registry.registerReader(key);
+  registry.setReady(key, { data: { value: 1 }, revision: 3 });
+
+  registry.setLoading(key);
+
+  const snapshot = registry.getSnapshot(key);
+  assert.equal(snapshot.status, "loading");
+  assert.deepEqual(snapshot.data, { value: 1 });
+  assert.equal(snapshot.revision, 3);
+});
+
+test("PulseRuntime routes events of two keys following one matter by sub_id", async () => {
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const tail = { context: "/root/ctx", matterId: "log", readMode: null, dataRange: { unit: "lines" as const, tail: 10 } };
+  const head = { context: "/root/ctx", matterId: "log", readMode: null };
+
+  const a = pulse.matter.subscribe(tail);
+  transport.receive(matterResponse(transport.sent[0].intention.intention_id, { ok: true, matter_id: "log", sub_id: "sub-a" }));
+  await a;
+  const b = pulse.matter.subscribe(head);
+  transport.receive(matterResponse(transport.sent[1].intention.intention_id, { ok: true, matter_id: "log", sub_id: "sub-b" }));
+  await b;
+
+  transport.receive(matterEvent("matter_written", "log", { sub_id: "sub-b", revision: 5 }));
+  assert.equal(pulse.matter.getSnapshot(head).status, "stale");
+  assert.notEqual(pulse.matter.getSnapshot(tail).status, "stale");
+  transport.receive(matterEvent("matter_written", "log", { sub_id: "sub-a", revision: 6 }));
+  assert.equal(pulse.matter.getSnapshot(tail).status, "stale");
+
+  pulse.teardown();
+});
+
+class StatefulTransport extends ManualTransport {
+  private readonly listeners = new Set<(state: "connected" | "disconnected") => void>();
+  subscribeToConnectionState(cb: (state: "connected" | "disconnected") => void) {
+    this.listeners.add(cb);
+    return () => { this.listeners.delete(cb); };
+  }
+  setState(state: "connected" | "disconnected") {
+    for (const cb of this.listeners) cb(state);
+  }
+}
+
+test("PulseRuntime rejects requests in flight when the connection is lost", async () => {
+  const transport = new StatefulTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default", responseTimeoutMs: 60_000 });
+  transport.setState("connected");
+
+  const read = pulse.matter.read({ context: "/root/ctx", matterId: "doc" });
+  const outcome = read.then(() => "answered", (err) => (err as { code?: string }).code);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  transport.setState("disconnected");
+
+  assert.equal(await outcome, "connection_lost");
+  assert.equal(pulse.matter.hasPendingRead({ context: "/root/ctx", matterId: "doc" }), false);
+  pulse.teardown();
+});
+
+test("PulseRuntime resumes subscriptions and reads under the same sub_id after a reconnection", async () => {
+  const transport = new StatefulTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const key = { context: "/root/ctx", matterId: "doc", readMode: null };
+  transport.setState("connected");
+
+  const subscribed = pulse.matter.subscribe(key);
+  transport.receive(matterResponse(transport.sent[0].intention.intention_id, { ok: true, matter_id: "doc", sub_id: "sub-1" }));
+  await subscribed;
+  pulse.matter.registerReader(key);
+  pulse.matter.setReady(key, { data: { v: 1 }, revision: 1 });
+
+  transport.setState("disconnected");
+  const before = transport.sent.length;
+  transport.setState("connected");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const resent = transport.sent.slice(before).map((m) => m.kind === "intention" ? m.intention : null);
+  const subscribe = resent.find((i) => i?.to.cap === "matter.subscribe");
+  assert.equal(subscribe?.params?.sub_id, "sub-1");
+  assert.ok(resent.some((i) => i?.to.cap === "matter.read"), "the held key is read again");
+  assert.deepEqual(pulse.matter.getSnapshot(key).data, { v: 1 }, "previous data stays while reading");
+  pulse.teardown();
+});

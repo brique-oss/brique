@@ -163,10 +163,16 @@ export class MatterRegistry {
 
   setLoading(input: MatterKey): void {
     const entry = this.ensureEntry(input);
+    // A refresh keeps what was last read (a complete read only: a half-received
+    // stream or an error starts empty) until the new read lands: the reader sees "loading" with the
+    // previous data instead of a blank, so a screen does not flash on every
+    // refresh or reconnection.
+    const complete = entry.snapshot.status === "ready" ||
+      entry.snapshot.status === "stale" ||
+      entry.snapshot.status === "loading";
     this.updateEntry(entry, {
       status: "loading",
-      data: null,
-      payload: null,
+      ...(complete ? {} : { data: null, payload: null }),
       error: null,
       streamBytesReceived: 0,
       streamChunksReceived: 0,
@@ -306,6 +312,16 @@ export class MatterRegistry {
 
   getKeyForSubId(subId: string): MatterKey | null {
     return this.subscriptionIndex.get(subId) ?? null;
+  }
+
+  /** Every key currently held, with how many readers and subscribers hold it. */
+  listActive(): Array<{ key: MatterKey; readers: number; subscribers: number; subId: string | null }> {
+    return Array.from(this.entries.values()).map((entry) => ({
+      key: entry.key,
+      readers: entry.readers,
+      subscribers: entry.subscribers,
+      subId: entry.snapshot.subId,
+    }));
   }
 
   findActiveKeysByMatterId(matterId: string): MatterKey[] {

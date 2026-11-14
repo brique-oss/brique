@@ -88,6 +88,7 @@ export class MatterRuntime extends MatterRegistry {
   private readonly pendingSubscribes: Map<string, Promise<MatterSnapshot>> = new Map();
   private readonly keyVersions: Map<string, number> = new Map();
   private readonly readRequestCounts: Map<string, number> = new Map();
+  private readonly subscribeInputs: Map<string, MatterSubscribeInput> = new Map();
   private readonly activeStreams: Map<string, ReadableStreamDefaultReader<Uint8Array>> = new Map();
 
   constructor(config: MatterRuntimeConfig) {
@@ -253,6 +254,7 @@ export class MatterRuntime extends MatterRegistry {
     const current = this.getSnapshot(key);
     if (current.subId) return current;
     const version = this.getKeyVersion(keyString);
+    this.subscribeInputs.set(keyString, input);
 
     let subscribe!: Promise<MatterSnapshot>;
     subscribe = (async () => {
@@ -290,6 +292,43 @@ export class MatterRuntime extends MatterRegistry {
 
     this.pendingSubscribes.set(keyString, subscribe);
     return subscribe;
+  }
+
+  /**
+   * To call when the transport is connected again after a loss. Requests in
+   * flight at the loss were rejected, and events may have been missed:
+   * - every subscription is asked again under its own sub_id (the engine
+   *   replaces a subscription with the same id, so this is idempotent and the
+   *   id the caller holds stays valid);
+   * - every key held is read again, so what is shown catches up (the previous
+   *   data stays visible while the read runs).
+   * Failures are left on the key as an error; the next event or refresh clears them.
+   */
+  resumeAfterReconnect(): void {
+    for (const held of this.listActive()) {
+      const keyString = this.keyToString(held.key);
+      if (held.subscribers > 0 && held.subId) {
+        const previous = this.subscribeInputs.get(keyString);
+        const subId = held.subId;
+        void this.emitAndWait(this.buildMatterIntention({
+          context: held.key.context,
+          cap: "matter.subscribe",
+          params: {
+            matter_id: held.key.matterId,
+            sub_id: subId,
+            ...(previous?.durable === true ? { durable: true } : {}),
+            ...(previous?.target ? { target: previous.target } : {}),
+          },
+        })).then((response) => {
+          this.assertOK(response);
+        }).catch((err) => {
+          if (this.has(held.key)) this.setError(held.key, err);
+        });
+      }
+      if (held.readers > 0 || held.subscribers > 0) {
+        void this.refresh(held.key).catch(noop);
+      }
+    }
   }
 
   async unsubscribe(input: MatterUnsubscribeInput): Promise<MatterSnapshot> {

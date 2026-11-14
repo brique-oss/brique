@@ -78,6 +78,10 @@ export class PulseRuntime {
   private readonly actions: UIActionBuilder;
   readonly ui: UIRuntimeIdentity;
   readonly matter: MatterRuntime;
+  /** Requests written to the transport and not yet answered, by the way to reject them. */
+  private readonly inFlight: Set<(err: Error) => void> = new Set();
+  private connected = false;
+  private hadConnection = false;
 
   constructor(config: PulseRuntimeConfig) {
     this.transports = config.transportManager ?? new TransportManager();
@@ -126,6 +130,34 @@ export class PulseRuntime {
     );
 
     this.subscribeToConfiguredTransport();
+    this.watchConnection();
+  }
+
+  /**
+   * A connection lost takes with it the answers owed to the requests written on
+   * it: they are rejected at once (their outcome is unknown, the error says so)
+   * instead of waiting for the timeout, and when the connection returns the
+   * Matters held are subscribed and read again.
+   */
+  private watchConnection(): void {
+    const transport = this.transports.get(this.transportName);
+    if (!transport.subscribeToConnectionState) return;
+    const unsubscribe = transport.subscribeToConnectionState((state) => {
+      if (state === "connected") {
+        const returning = this.hadConnection && !this.connected;
+        this.connected = true;
+        this.hadConnection = true;
+        if (returning) this.matter.resumeAfterReconnect();
+        return;
+      }
+      this.connected = false;
+      const rejects = Array.from(this.inFlight);
+      this.inFlight.clear();
+      for (const reject of rejects) {
+        reject(connectionLostError());
+      }
+    });
+    this.transportSubscriptions.push(unsubscribe);
   }
 
   async emitIntention(
@@ -247,7 +279,10 @@ export class PulseRuntime {
       let settled = false;
       let timeout: ReturnType<typeof setTimeout> | null = null;
 
+      const onLoss = (err: Error) => settle(() => reject(err));
+
       const cleanup = () => {
+        this.inFlight.delete(onLoss);
         unsubscribe();
         if (timeout) {
           clearTimeout(timeout);
@@ -290,7 +325,9 @@ export class PulseRuntime {
 
       armTimeout();
 
-      this.transports.get(this.transportName).send(message).catch((err) => {
+      this.transports.get(this.transportName).send(message).then(() => {
+        if (!settled) this.inFlight.add(onLoss);
+      }).catch((err) => {
         settle(() => {
           reject(err);
         });
@@ -430,4 +467,11 @@ function normalizeCorrelation(
     root_intention_id: correlation?.root_intention_id ?? intentionId,
     parent_intention_id: correlation?.parent_intention_id ?? null,
   };
+}
+
+/** The error of a request whose connection was lost before its answer: it may have been executed. */
+function connectionLostError(): Error {
+  const err = new Error("Connection lost before the response") as Error & { code?: string };
+  err.code = "connection_lost";
+  return err;
 }
