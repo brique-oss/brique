@@ -76,7 +76,7 @@
         "morphing": "A <subject> becomes a <result>.",
         "_morphing_note": "Required for kind='dsl'. Engine validates this is a non-empty string.",
         "invariants": [
-          "A condition always true regardless of inputs."
+          "A property that must remain true throughout the transformation."
         ],
         "success": [
           "What is guaranteed when this section succeeds."
