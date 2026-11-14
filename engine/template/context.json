@@ -178,7 +178,7 @@
       },
 
       "reflexive": {},
-      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Optional, root only: 'projection_sync_interval_ms' (>0) keeps the meaning projection up to date by itself, applying new/changed/deleted descriptors found on disk (cost follows the change, not the instance size); 'projection_verify_interval_ms' (>0) adds a slower pass that also catches in-place edits; 'projection_sync_on_edit' (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. All default to off; meaning.update {sync:true} does the same pass on demand."
+      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Optional, root only: 'projection_sync_interval_ms' (>0) keeps the meaning projection up to date by itself, applying new/changed/deleted descriptors found on disk (cost follows the change, not the instance size); 'projection_verify_interval_ms' (>0) adds a slower pass that also catches in-place edits; 'projection_sync_on_edit' (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. All default to off; meaning.update {sync:true} does the same pass on demand. Limits (optional, any context that runs the family): 'max_handlers' (default 64) is how many reflexive requests run at once, past it the answer is 'busy'; 'inbox_capacity' (default 16) is the size of the family's input channel. A busy instance serving many users can raise both."
     }
   },
 

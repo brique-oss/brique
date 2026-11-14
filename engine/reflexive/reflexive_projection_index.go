@@ -511,6 +511,18 @@ func indexAllElements(db *sql.DB, elems []ScannedElement) (totalElements, totalK
 	_, _ = tx.Exec(`DELETE FROM elements;`)
 
 	// Deterministic order
+	totalElements, totalKV = indexElementsTx(tx, elems)
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, 0, err
+	}
+	return totalElements, totalKV, totalLinks, nil
+}
+
+// indexElementsTx indexes the given elements into the open transaction: it
+// neither empties the tables nor commits. An element that cannot be read or
+// indexed is skipped.
+func indexElementsTx(tx *sql.Tx, elems []ScannedElement) (totalElements, totalKV int) {
 	sort.Slice(elems, func(i, j int) bool {
 		a, b := elems[i], elems[j]
 		if a.CtxID != b.CtxID {
@@ -567,11 +579,7 @@ func indexAllElements(db *sql.DB, elems []ScannedElement) (totalElements, totalK
 
 		// Links v1: none
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, 0, 0, err
-	}
-	return totalElements, totalKV, totalLinks, nil
+	return totalElements, totalKV
 }
 
 func isBriqueElementDocument(doc map[string]any) bool {

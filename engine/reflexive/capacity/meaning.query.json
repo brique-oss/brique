@@ -33,7 +33,7 @@
           },
           "limit": {
             "type": "integer",
-            "_comment": "Optional maximum number of results to return."
+            "_comment": "Optional maximum number of results to return. Values above 1000 are clamped to 1000."
           },
           "offset": {
             "type": "integer",

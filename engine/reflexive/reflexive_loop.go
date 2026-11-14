@@ -34,6 +34,7 @@ package reflexive
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -207,6 +208,25 @@ func joinUnder(base string, parts ...string) (string, bool) {
 
 const defaultMaxHandlers = 64 // bounded concurrency
 
+// defaultInboxCapacity is the size of the input channel of the family.
+const defaultInboxCapacity = 16
+
+// maxHandlersOf: the configured number of simultaneous requests, or the default.
+func maxHandlersOf(cfg ReflexiveCfg) int {
+	if cfg.MaxHandlers > 0 {
+		return cfg.MaxHandlers
+	}
+	return defaultMaxHandlers
+}
+
+// inboxCapacityOf: the configured size of the input channel, or the default.
+func inboxCapacityOf(cfg ReflexiveCfg) int {
+	if cfg.InboxCapacity > 0 {
+		return cfg.InboxCapacity
+	}
+	return defaultInboxCapacity
+}
+
 // -----------------------------
 // Capability dispatch
 // -----------------------------
@@ -343,6 +363,15 @@ type ReflexiveLoop struct {
 	// same name cannot both pass the existence check.
 	structMu sync.RWMutex
 
+	// pool is the shared connection pool on the current projection file.
+	pool projectionPool
+
+	// vocabCache holds the last decoded vocabulary files, validated against the
+	// file they came from on every read: a changed file is always re-read.
+	vocabCacheMu sync.Mutex
+	vocabJSON    cachedVocabulary
+	vocabLLM     cachedVocabularyText
+
 	editLocksMu sync.Mutex
 	editLocks   map[string]*editLock
 
@@ -424,13 +453,13 @@ func NewReflexiveLoop(frame *junction.ContextRegistry, engineCfg map[string]any)
 
 	return &ReflexiveLoop{
 		frame:      frame,
-		deliveryIn: make(chan junction.Delivery, 16),
+		deliveryIn: make(chan junction.Delivery, inboxCapacityOf(cfg)),
 		cfg:        cfg,
 
 		caps:           buildCapTable(),
 		accessRegistry: mustBuildReflexiveAccessRegistry(),
 
-		handlerSlots: make(chan struct{}, defaultMaxHandlers),
+		handlerSlots: make(chan struct{}, maxHandlersOf(cfg)),
 		editLocks:    make(map[string]*editLock),
 		syncKick:     make(chan struct{}, 1),
 
@@ -627,6 +656,14 @@ func (l *ReflexiveLoop) Start() {
 		return
 	}
 
+	if l.frame != nil && l.frame.CtxId == shared.RootContextID && l.frame.ContextDir != "" {
+		cleanProjectionDir(l.frame.ContextDir) // leftovers of an older generation or a crash
+		// A projection written before the write-ahead log is converted now, before
+		// any request opens it, rather than under concurrent connections.
+		if _, err := os.Stat(dbPath(l.frame.ContextDir)); err == nil {
+			_ = convertProjectionToWAL(dbPath(l.frame.ContextDir))
+		}
+	}
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
@@ -727,6 +764,7 @@ func (l *ReflexiveLoop) Stop() {
 		// safety: avoid deadlock
 	}
 
+	l.closeProjection()
 	l.stateMu.Lock()
 	l.state = shared.FamilyStopped
 	l.stateMu.Unlock()
@@ -938,6 +976,15 @@ func (l *ReflexiveLoop) handleInboxMessageWithCompletion(msg circulation.Message
 				if completion != nil {
 					defer completion()
 				}
+				// Declared after completion so that it runs first: the error answer
+				// must leave while the request is still bound.
+				defer func() {
+					if r := recover(); r != nil {
+						l.traceResponseError(m.Intention.IntentionID, circulation.ValueCodeInternal, fmt.Sprintf("handler panic: %v", r))
+						l.emitResponseError(errorResp(m.Intention, circulation.ValueCodeInternal,
+							map[string]any{circulation.KeyReason: "handler_panic"}, "internal error"))
+					}
+				}()
 				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyEnter)
 				l.runJob(m)
 				l.sendToTrace(circulation.ValueKindIntention, m.Intention.IntentionID, circulation.ValueTraceFamilyExit)

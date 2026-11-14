@@ -21,7 +21,7 @@
           },
           "context": {
             "type": "array",
-            "_comment": "Optional list of context ids (absolute paths from /root) to restrict filesystem scanning. When absent, all contexts are scanned."
+            "_comment": "Optional list of context ids (absolute paths from /root) to restrict filesystem scanning. When absent, all contexts are scanned. When present and a projection already exists (modes full and meaning-only), only the rows of these contexts are replaced in place; the other contexts stay as they were."
           }
         }
       },
@@ -54,7 +54,7 @@
         }
       },
       "effects": {
-        "projection_db": "The root projection database may be rebuilt and atomically swapped.",
+        "projection_db": "The root projection database is rebuilt into a new generation file (projection/meaning.<N>.sqlite) and published by updating projection/meaning.current; the previous generation file is removed.",
         "vocabulary_overlay": "The root vocabulary overlay may be rebuilt and atomically swapped."
       },
       "transformation_contract": {

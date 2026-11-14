@@ -128,7 +128,7 @@ func (l *ReflexiveLoop) capSQLiteVocabularyQuery(msg circulation.Message) {
 		return
 	}
 
-	vocab, err := loadVocabulary(l.frame.ContextDir)
+	vocab, err := l.cachedVocabulary()
 	if err != nil {
 		code := circulation.ValueCodeInternal
 		reason := "vocabulary_read_failed"
@@ -208,7 +208,7 @@ func (l *ReflexiveLoop) capSQLiteVocabularyGet(msg circulation.Message) {
 	}
 
 	if file == "llm" || file == "text" || file == "txt" {
-		content, err := loadVocabularyLLM(l.frame.ContextDir)
+		content, err := l.cachedVocabularyLLM()
 		if err != nil {
 			code := circulation.ValueCodeInternal
 			reason := "vocabulary_llm_read_failed"
@@ -236,7 +236,7 @@ func (l *ReflexiveLoop) capSQLiteVocabularyGet(msg circulation.Message) {
 		return
 	}
 
-	vocab, err := loadVocabulary(l.frame.ContextDir)
+	vocab, err := l.cachedVocabulary()
 	if err != nil {
 		code := circulation.ValueCodeInternal
 		reason := "vocabulary_read_failed"
@@ -321,7 +321,7 @@ func (l *ReflexiveLoop) capSQLiteVocabularyPatch(msg circulation.Message) {
 	}
 
 	// 4) Apply patch to projection (add-only, no full rebuild)
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeUnavailable,
 			map[string]any{circulation.KeyReason: "db_open_failed"},
@@ -329,8 +329,6 @@ func (l *ReflexiveLoop) capSQLiteVocabularyPatch(msg circulation.Message) {
 		))
 		return
 	}
-	defer db.Close()
-	_ = applySQLitePragmas(db)
 
 	if err := createVocabularySchema(db); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeConfiguration,
@@ -395,7 +393,7 @@ func (l *ReflexiveLoop) capSQLiteVocabularyDeletePath(msg circulation.Message) {
 	// 1) Delete from SQLite
 	// ------------------------
 
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		l.emitResponseError(errorResp(in,
 			circulation.ValueCodeUnavailable,
@@ -404,8 +402,6 @@ func (l *ReflexiveLoop) capSQLiteVocabularyDeletePath(msg circulation.Message) {
 		))
 		return
 	}
-	defer db.Close()
-	_ = applySQLitePragmas(db)
 
 	nodeID, err := resolveVocabNodeID(db, pathStr)
 	if err != nil || nodeID == nil {
@@ -511,6 +507,23 @@ func createVocabularySchema(exec sqlExec) error {
 		`CREATE INDEX IF NOT EXISTS idx_vocab_nodes_parent_kind ON vocab_nodes(parent_id, kind);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_val_text ON vocab_nodes(parent_id, v_text) WHERE kind='val' AND vtype='text';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_val_num  ON vocab_nodes(parent_id, v_num)  WHERE kind='val' AND vtype='num';`,
+		// Root segments have a NULL parent, which UNIQUE(parent_id, kind, seg) does not
+		// deduplicate. Fold existing duplicates onto the oldest root, then enforce it.
+		`UPDATE OR IGNORE vocab_nodes
+   SET parent_id = (
+     SELECT MIN(r.node_id) FROM vocab_nodes r
+      WHERE r.parent_id IS NULL AND r.kind='seg'
+        AND r.seg = (SELECT d.seg FROM vocab_nodes d WHERE d.node_id = vocab_nodes.parent_id))
+ WHERE parent_id IN (
+     SELECT d.node_id FROM vocab_nodes d
+      WHERE d.parent_id IS NULL AND d.kind='seg'
+        AND d.node_id NOT IN (
+          SELECT MIN(node_id) FROM vocab_nodes WHERE parent_id IS NULL AND kind='seg' GROUP BY seg));`,
+		`DELETE FROM vocab_nodes
+  WHERE parent_id IS NULL AND kind='seg'
+    AND node_id NOT IN (
+      SELECT MIN(node_id) FROM vocab_nodes WHERE parent_id IS NULL AND kind='seg' GROUP BY seg);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_root_seg ON vocab_nodes(seg) WHERE parent_id IS NULL AND kind='seg';`,
 	}
 	for _, s := range stmts {
 		if _, err := exec.Exec(s); err != nil {
@@ -593,6 +606,64 @@ func loadVocabularyLLM(rootCtxDir string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// cachedVocabulary and cachedVocabularyText keep a decoded vocabulary file with
+// the identity of the file it came from. The writers replace the file by rename,
+// so a new write is a new file; size and mtime are checked too.
+type cachedVocabulary struct {
+	info  os.FileInfo
+	value map[string]any
+}
+
+type cachedVocabularyText struct {
+	info  os.FileInfo
+	value string
+}
+
+func sameVocabularyFile(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+// cachedVocabulary returns the decoded vocabulary, re-reading the file only when
+// it changed. The returned tree is shared: callers must treat it as read-only
+// (the readers only put it in a response). Writers keep calling loadVocabulary,
+// which returns a tree they own.
+func (l *ReflexiveLoop) cachedVocabulary() (map[string]any, error) {
+	fi, err := os.Stat(vocabularyPath(l.frame.ContextDir))
+	if err != nil {
+		return map[string]any{}, err
+	}
+	l.vocabCacheMu.Lock()
+	defer l.vocabCacheMu.Unlock()
+	if sameVocabularyFile(l.vocabJSON.info, fi) && l.vocabJSON.value != nil {
+		return l.vocabJSON.value, nil
+	}
+	v, err := loadVocabulary(l.frame.ContextDir)
+	if err != nil {
+		return v, err
+	}
+	l.vocabJSON = cachedVocabulary{info: fi, value: v}
+	return v, nil
+}
+
+// cachedVocabularyLLM is cachedVocabulary for the LLM-readable text map.
+func (l *ReflexiveLoop) cachedVocabularyLLM() (string, error) {
+	fi, err := os.Stat(vocabularyLLMPath(l.frame.ContextDir))
+	if err != nil {
+		return "", err
+	}
+	l.vocabCacheMu.Lock()
+	defer l.vocabCacheMu.Unlock()
+	if sameVocabularyFile(l.vocabLLM.info, fi) {
+		return l.vocabLLM.value, nil
+	}
+	v, err := loadVocabularyLLM(l.frame.ContextDir)
+	if err != nil {
+		return v, err
+	}
+	l.vocabLLM = cachedVocabularyText{info: fi, value: v}
+	return v, nil
 }
 
 func normalizeVocabularyLeafLists(root map[string]any) map[string]any {
@@ -961,14 +1032,14 @@ func buildObservedVocabularyJSON(db interface {
 	keyFilter, valueFilter := "", ""
 	args := []any{}
 	if len(onlyPaths) > 0 {
-		keyFilter = " AND path_text IN (" + placeholders(len(onlyPaths)) + ")"
+		keyFilter = " AND p.path_text IN (" + placeholders(len(onlyPaths)) + ")"
 		valueFilter = " WHERE p.path_text IN (" + placeholders(len(onlyPaths)) + ")"
 		for _, p := range onlyPaths {
 			args = append(args, p)
 		}
 	}
 	return collectObservedVocabulary(db,
-		`SELECT path_text FROM paths WHERE path_kind='key'`+keyFilter+` ORDER BY path_text ASC`, args,
+		`SELECT DISTINCT p.path_text, e.element_type FROM kv k JOIN paths p ON p.path_id=k.key_path_id JOIN elements e ON e.row_id=k.element_row WHERE p.path_kind='key'`+keyFilter+` ORDER BY p.path_text ASC, e.element_type ASC`, args,
 		valueFilter, args)
 }
 
@@ -992,7 +1063,7 @@ func buildObservedVocabularyForRows(db interface {
 		}
 		in := " (" + placeholders(len(ids)) + ")"
 		part, err := collectObservedVocabulary(db,
-			`SELECT DISTINCT p.path_text FROM kv k JOIN paths p ON p.path_id=k.key_path_id WHERE k.element_row IN`+in+` ORDER BY p.path_text ASC`, args,
+			`SELECT DISTINCT p.path_text, e.element_type FROM kv k JOIN paths p ON p.path_id=k.key_path_id JOIN elements e ON e.row_id=k.element_row WHERE k.element_row IN`+in+` ORDER BY p.path_text ASC, e.element_type ASC`, args,
 			" WHERE k.element_row IN"+in, args)
 		if err != nil {
 			return out, err
@@ -1017,11 +1088,11 @@ func collectObservedVocabulary(db interface {
 	defer rows.Close()
 
 	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
+		var p, elementType string
+		if err := rows.Scan(&p, &elementType); err != nil {
 			continue
 		}
-		p = normalizeObservedVocabPath(strings.TrimSpace(p))
+		p = vocabularyPathForElement(elementType, normalizeObservedVocabPath(strings.TrimSpace(p)))
 		if p == "" || !isVocabularyEligiblePath(p) {
 			continue
 		}
@@ -1029,9 +1100,10 @@ func collectObservedVocabulary(db interface {
 	}
 
 	valueRows, err := db.Query(`
-SELECT p.path_text, k.vtype, k.v_text, k.v_num
+SELECT p.path_text, e.element_type, k.vtype, k.v_text, k.v_num
 FROM kv k
 JOIN paths p ON p.path_id = k.key_path_id
+JOIN elements e ON e.row_id = k.element_row
 `+valueWhere+`
 ORDER BY p.path_text ASC, k.vtype ASC, k.v_text ASC, k.v_num ASC
 `, valueArgs...)
@@ -1042,15 +1114,16 @@ ORDER BY p.path_text ASC, k.vtype ASC, k.v_text ASC, k.v_num ASC
 
 	for valueRows.Next() {
 		var (
-			pathText string
-			vtype    string
-			vtext    sql.NullString
-			vnum     sql.NullFloat64
+			pathText    string
+			elementType string
+			vtype       string
+			vtext       sql.NullString
+			vnum        sql.NullFloat64
 		)
-		if err := valueRows.Scan(&pathText, &vtype, &vtext, &vnum); err != nil {
+		if err := valueRows.Scan(&pathText, &elementType, &vtype, &vtext, &vnum); err != nil {
 			continue
 		}
-		pathText = normalizeObservedVocabPath(strings.TrimSpace(pathText))
+		pathText = vocabularyPathForElement(elementType, normalizeObservedVocabPath(strings.TrimSpace(pathText)))
 		if pathText == "" || !isVocabularyEligiblePath(pathText) {
 			continue
 		}
@@ -1066,6 +1139,29 @@ ORDER BY p.path_text ASC, k.vtype ASC, k.v_text ASC, k.v_num ASC
 		}
 	}
 	return out, nil
+}
+
+// vocabularyPathForElement is the vocabulary path under which an element's key
+// path is observed. A Schema describes the shape of other elements: its
+// gabarit lives in functional.<axis>.X, and X qualifies <axis> of the elements it
+// describes, so the word enters the vocabulary as <axis>.X. Only a path whose
+// second segment is one of the four axes is moved: the gabarit of a schema for
+// arbitrary data (functional.items, functional.cursors...) stays under functional.
+// This only concerns the vocabulary: the complete index keeps the real paths.
+func vocabularyPathForElement(elementType, path string) string {
+	if elementType != circulation.ValueSchema {
+		return path
+	}
+	rest, ok := strings.CutPrefix(path, circulation.KeyFunctional+".")
+	if !ok {
+		return path
+	}
+	axis, _, _ := strings.Cut(rest, ".")
+	switch axis {
+	case circulation.KeyBrique, circulation.KeyObjective, circulation.KeyFunctional, circulation.KeySubjective:
+		return rest
+	}
+	return path
 }
 
 func normalizeObservedVocabPath(p string) string {

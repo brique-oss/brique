@@ -199,11 +199,10 @@ func (l *ReflexiveLoop) syncProjection(verify bool) (syncResult, error) {
 	if err := ensureProjectionDir(l.frame.ContextDir); err != nil {
 		return res, err
 	}
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		return res, err
 	}
-	defer db.Close()
 
 	unlock := l.lockProjection()
 	gen := l.projectionGen.Load()
@@ -230,6 +229,7 @@ func (l *ReflexiveLoop) syncProjection(verify bool) (syncResult, error) {
 	if err := s.applyVocabulary(); err != nil {
 		return s.res, err
 	}
+	checkpointProjection(db)
 	return s.res, nil
 }
 
@@ -583,11 +583,10 @@ func (l *ReflexiveLoop) syncHints(hints []junction.ProjectionHint) (res syncResu
 	if err := ensureProjectionDir(l.frame.ContextDir); err != nil {
 		return res, false, err
 	}
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		return res, false, err
 	}
-	defer db.Close()
 	unlock := l.lockProjection()
 	gen := l.projectionGen.Load()
 	err = createMeaningSchema(db)
@@ -633,6 +632,7 @@ func (l *ReflexiveLoop) syncHints(hints []junction.ProjectionHint) (res syncResu
 	if err := s.applyVocabulary(); err != nil {
 		return s.res, false, err
 	}
+	checkpointProjection(db)
 	return s.res, true, nil
 }
 
@@ -791,6 +791,19 @@ func (l *ReflexiveLoop) projectionSyncLoop() {
 	if l.cfg.ProjectionSyncOnEdit {
 		kickC = l.syncKick
 	}
+	// runPass turns a panic of one pass into an error: the loop must outlive it.
+	runPass := func(kicked, verify bool) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("projection sync panic: %v", r)
+			}
+		}()
+		if kicked {
+			return l.runKickedSync()
+		}
+		_, err = l.syncProjection(verify)
+		return err
+	}
 	for {
 		verify, kicked := false, false
 		select {
@@ -807,12 +820,7 @@ func (l *ReflexiveLoop) projectionSyncLoop() {
 				return
 			}
 		}
-		var err error
-		if kicked {
-			err = l.runKickedSync()
-		} else {
-			_, err = l.syncProjection(verify)
-		}
+		err := runPass(kicked, verify)
 		if err != nil && !errors.Is(err, errSyncStopped) {
 			l.sendToTrace("", "", circulation.ValueTraceFamilyError)
 		}
