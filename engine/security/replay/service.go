@@ -37,7 +37,13 @@ type Service struct {
 	// stopMaintenance ends the background compaction, if one was started.
 	stopMaintenance func()
 	closeErr        error
+	stopFlush       chan struct{}
+	flushDone       chan struct{}
 }
+
+// UnsyncedFlushInterval bounds how long a transition record may wait for a
+// synchronization when no reservation comes to carry it.
+const UnsyncedFlushInterval = 250 * time.Millisecond
 
 func NewService(ledger *Ledger, batching BatchOptions, retentionAfterExpiry time.Duration) (*Service, error) {
 	if ledger == nil || retentionAfterExpiry < MinimumRetentionAfterExpiry || retentionAfterExpiry > 30*24*time.Hour {
@@ -47,7 +53,25 @@ func NewService(ledger *Ledger, batching BatchOptions, retentionAfterExpiry time
 	if err != nil {
 		return nil, err
 	}
-	return &Service{ledger: ledger, batcher: batcher, retention: retentionAfterExpiry}, nil
+	service := &Service{ledger: ledger, batcher: batcher, retention: retentionAfterExpiry,
+		stopFlush: make(chan struct{}), flushDone: make(chan struct{})}
+	go service.flushLoop()
+	return service, nil
+}
+
+func (service *Service) flushLoop() {
+	defer close(service.flushDone)
+	ticker := time.NewTicker(UnsyncedFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-service.stopFlush:
+			return
+		case <-ticker.C:
+			// A failure poisons the ledger, which every later call reports.
+			_ = service.ledger.FlushUnsynced()
+		}
+	}
 }
 
 func (service *Service) Reserve(ctx context.Context, key Key, requestHash string, expiresAt time.Time) (Reservation, error) {
@@ -82,6 +106,8 @@ func (service *Service) Close() error {
 		if service.stopMaintenance != nil {
 			service.stopMaintenance()
 		}
+		close(service.stopFlush)
+		<-service.flushDone
 		if service.batcher != nil {
 			service.closeErr = service.batcher.Close()
 		}

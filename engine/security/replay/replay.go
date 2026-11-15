@@ -178,6 +178,7 @@ func (ledger *Ledger) compact(replacement *os.File, install func() error, drop f
 	oldFile := ledger.file
 	ledger.file = replacement
 	ledger.syncFile = replacement.Sync
+	ledger.unsynced = false
 	ledger.journalSize = compactedSize
 	for _, key := range dropped {
 		ledger.cachedBytes -= cachedSize(ledger.entries[key])
@@ -240,6 +241,11 @@ type Ledger struct {
 	failed       error
 	closed       bool
 	syncFile     func() error
+	// unsynced is true while the journal holds records that were written but not yet
+	// synchronized: the transitions that follow a reservation. A reservation is never
+	// acknowledged before its synchronization, and one synchronization persists every
+	// record written before it, so they cost nothing of their own (see appendTransition).
+	unsynced bool
 }
 
 func Open(file *os.File, limits Limits) (*Ledger, error) {
@@ -270,7 +276,14 @@ func (ledger *Ledger) Close() error {
 		return nil
 	}
 	ledger.closed = true
-	return ledger.file.Close()
+	var syncErr error
+	if ledger.unsynced && ledger.failed == nil {
+		syncErr = ledger.syncFile()
+	}
+	if err := ledger.file.Close(); err != nil {
+		return err
+	}
+	return syncErr
 }
 
 func (ledger *Ledger) Reserve(key Key, requestHash string, expiresAt, retainUntil time.Time) (Reservation, error) {
@@ -383,6 +396,7 @@ func (ledger *Ledger) reserveBatch(requests []reserveRequest) []reserveResult {
 		}
 		return results
 	}
+	ledger.unsynced = false
 	for _, item := range durable {
 		ledger.put(item.entry.Key, item.entry)
 		results[item.index].reservation = Reservation{Kind: ReservationNew, Entry: item.entry.clone()}
@@ -474,11 +488,27 @@ func (ledger *Ledger) transition(key Key, requestHash string, next State, envelo
 	if newCached > ledger.limits.MaxCachedResponseBytes {
 		return ErrSaturated
 	}
-	if err := ledger.appendDurable(recordFromEntry(updated)); err != nil {
+	if err := ledger.appendTransition(recordFromEntry(updated)); err != nil {
 		return err
 	}
 	ledger.put(key, updated)
 	ledger.cachedBytes = newCached
+	return nil
+}
+
+// FlushUnsynced synchronizes the records that transitions wrote since the last
+// synchronization. It does nothing when there are none.
+func (ledger *Ledger) FlushUnsynced() error {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed || ledger.failed != nil || !ledger.unsynced {
+		return nil
+	}
+	if err := ledger.syncFile(); err != nil {
+		ledger.failed = err
+		return fmt.Errorf("sync replay journal: %w", err)
+	}
+	ledger.unsynced = false
 	return nil
 }
 

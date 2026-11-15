@@ -561,6 +561,21 @@ reserved → dispatched → running → completed
   does not count against the ledger for good, and a duplicate is still suppressed;
 * torn tails are truncated on recovery, corruption is refused.
 
+**What is synchronized.** Only the reservation (`reserved`) is synchronized before it is
+acknowledged, in groups. The transitions that follow (`dispatched`, `running`, `completed`,
+`rejected`, `outcome_unknown`) are **written** to the journal but not synchronized at once; the next
+group commit persists them, a flush every 250 ms does when none comes, and so do `Close` and the
+compaction. So a call costs one shared synchronization, not three in series (measured: 60 to 140 calls
+a second in sequence and about 90 to 1 100 a second at 32 in flight between two instances, on APFS).
+A crash of the **process** loses nothing that was written. A failure of the **machine** can lose the
+unsynchronized transitions: the entry then comes back in an earlier unfinished state, which recovery
+turns into `outcome_unknown`; it never comes back before its reservation, so a request is never run a
+second time. The window for a record to be lost is at most 250 ms (before, it was the few
+milliseconds between the write and the synchronization of a batch). A machine failure that leaves a
+hole **inside** that window, with valid records after it, is a corrupted journal and recovery fails
+closed, as it does for any corrupted record: only a record cut at the very end is truncated. This
+was not tested on a real power cut. A write error on a transition poisons the ledger.
+
 **Maintenance.** At startup and every minute the service compacts the journal without the entries
 that are finished and past their retention (default an hour after expiry; an unfinished entry a day
 later). One rewrite and one sync, about 0.2 s at 100 000 entries, only when it is worth it (many
