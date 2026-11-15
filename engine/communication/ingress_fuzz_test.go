@@ -34,7 +34,7 @@ func FuzzSignedIngressHandler(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		queue := make(chan signedExternalIngressItem, 1)
 		runtime := &InterfaceRuntime{Name: "secure", SignedExternalIngress: queue}
-		handler := signedExternalIngressHandler(runtime, make(chan struct{}), limit)
+		handler := signedExternalIngressHandler(runtime, make(chan struct{}), limit, 0)
 		response := httptest.NewRecorder()
 		handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(body)))
 		switch response.Code {

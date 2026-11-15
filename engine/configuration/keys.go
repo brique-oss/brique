@@ -42,6 +42,7 @@ const (
 	KeyIntAddr               = "addr"
 	KeyIntPath               = "path"
 	KeyIntRdLim              = "read_limit"
+	KeyIntAddressRate        = "address_rate"
 	KeyIntRqTO               = "request_timeout_ms"
 	KeyIntWrTO               = "write_timeout_ms"
 	KeyIntRdTO               = "read_timeout_ms"

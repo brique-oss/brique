@@ -630,9 +630,13 @@ at most 4096 waits, each silent at most 30 minutes and at most 24 hours in all.
 Two budgets bound what a caller makes the instance do, each in memory and bounded in size:
 
 - **By address, before the queue.** The signed listener gives each remote address (an IPv6 address
-  counts by its /64) 200 requests per second with a burst of 400, and answers `429` above it. A
-  stranger with no key therefore cannot fill the queue every peer shares. The budget is generous,
-  because several instances can sit behind one gateway.
+  counts by its /64) 2 000 requests per second with a burst of 4 000, and answers `429` above it. A
+  stranger with no key therefore cannot fill the queue every peer shares. The budget is generous
+  because it is not only a flood guard: several instances can sit behind one gateway, and an
+  authenticated peer sends here the **answers** to the calls this instance made, at the rate it
+  made them. A budget below that rate refuses an answer, nothing retries it, and the caller waits
+  for ever (this was 200 and 400, and lost one answer in 600 at about 600 calls a second between
+  two instances). The interface key `address_rate` sets it; the burst is twice the rate.
 - **By principal, after the signature.** A request over the budget of its authenticated principal
   (§3.8) is not run. A caller that waits for an answer gets the one a saturated instance gives
   (`unavailable`, "request rate exceeded"), through the replay ledger like any admitted request; a
