@@ -39,6 +39,13 @@
         "ingress_buffer": 4096,
         "_ingress_buffer_note": "Optional. Number of places of the channel through which every interface of this context (wrappers, UIs) feeds the communication family, which a single goroutine empties. A loaded wrapper sends about 3000 messages per second: 16 places (the former size) held 5 ms of traffic. Default: 4096.",
 
+        "egress_buffer": 16,
+        "egress_wait_ms": 5000,
+        "_egress_note": "Optional. The other way: egress_buffer is the number of places of the queue in front of the writer of each interface (default 16), egress_wait_ms how long a routing loop waits for a place in a full queue (default 5000). Two goroutines route the messages of every interface, so a consumer that no longer reads must not be waited for without an end: past the wait, its connection is closed (the calls awaited on it are answered connection_lost; a wrapper reconnects in a second) and the routing goes on. Every context reads its own communication settings (the queue of a wrapper belongs to the context that holds it); the config of an interface may set its own egress_buffer and egress_wait_ms. A larger queue only moves the moment the sender is held back; raise it only if the counters of the interface (CommLoop.EgressStats: offers, full, timeouts, waited) show waits that a burst explains.",
+
+        "external_call_silence_ms": 120000,
+        "_external_call_silence_note": "Optional. How long a call to a peer instance that awaits an answer may hear nothing (no answer, no running response) before it ends with an error. Any running response renews it. Default 120000, at most 1800000. A capacity called by a peer that works longer than this without answering must call notify_running, or the caller gives up while it still runs.",
+
         "interfaces": [
           {
             "_comment": "This whole array is optional and only needed if a wrapper process or a UI must connect to this context over WebSocket/HTTP. A context with no wrapper and no UI omits 'interfaces' entirely, or leaves it []. One entry = one named route this context can be reached on.",
@@ -98,7 +105,7 @@
         "_comment": "Read by ExecutionLoop. Key presence required (empty {} is enough to start a context that runs no wrapper process — capacities that don't invoke a wrapper still work normally). 'wrappers' below is optional and only needed if this context launches its own process (Python/Node/compiled binary, etc.) to act as an effector.",
 
         "default_invoke_timeout_ms": 0,
-        "_timeout_note": "Optional. Default timeout in ms applied to DSL invoke nodes that don't declare their own timeout. 0 means no default timeout.",
+        "_timeout_note": "Optional. Default timeout in ms applied to DSL invoke nodes that don't declare their own timeout. 0 means the built-in default of 30000 (30 s).",
 
         "wrappers": [
           {

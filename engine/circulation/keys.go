@@ -186,6 +186,7 @@ const (
 	KeyRuntime          = "runtime"
 	KeyWrappers         = "wrappers"
 	KeyFamilies         = "families"
+	KeyInterfaces       = "interfaces"
 	KeyChildren         = "children"
 	KeyInclude          = "include"
 	KeyContextId        = "context_id"

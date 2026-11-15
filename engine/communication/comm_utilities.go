@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // msgType
@@ -1072,7 +1073,7 @@ func (l *CommLoop) sendInvalidMessageTypeAck(req *circulation.Message) {
 //   - none.
 //
 // State/Storage Effects:
-// - may block until the interface egress channel accepts `msg` or `l.done` is closed.
+// - may block, at most the egress wait of the interface, until its egress channel accepts `msg` or `l.done` is closed.
 // - may enqueue the message on an interface egress channel.
 //
 // Inputs:
@@ -1085,7 +1086,9 @@ func (l *CommLoop) sendInvalidMessageTypeAck(req *circulation.Message) {
 //
 //
 // Contract:
-// - A full egress queue applies blocking backpressure; it is not a delivery failure.
+// - A full egress queue holds the sender back for at most the wait of the interface (egress_wait_ms);
+//   past it the interface is given up as too slow: its connection is closed and the message is reported
+//   as a delivery failure.
 // - Unknown interfaces and shutdown return explicit non-accepted results.
 // - Failure reporting is centralized through `reportDeliveryFailure`.
 
@@ -1110,10 +1113,17 @@ func (l *CommLoop) sendToIface(name string, msg circulation.Message) deliveryRes
 		l.reportDeliveryFailure(msg, result)
 		return result
 	}
-	select {
-	case rt.Egress <- msg:
+	outcome, waited := offer(rt.Egress, msg, rt.egressWait, l.done)
+	rt.egress.note(outcome, waited)
+	switch outcome {
+	case offerAccepted:
 		return newDeliveryResult(deliveryAccepted, target, nil)
-	case <-l.done:
+	case offerTimedOut:
+		l.giveUpSlowInterface(name, rt, waited)
+		result := newDeliveryResult(deliveryUnavailable, target, fmt.Errorf("interface %s is too slow: no place in its queue for %s", name, waited.Round(time.Millisecond)))
+		l.reportDeliveryFailure(msg, result)
+		return result
+	default:
 		result := newDeliveryResult(deliveryStopped, target, fmt.Errorf("communication stopped before delivery to iface %s", name))
 		l.reportDeliveryFailure(msg, result)
 		return result

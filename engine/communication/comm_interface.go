@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
@@ -176,6 +178,13 @@ type InterfaceRuntime struct {
 	// machineDirectory is the machine's security directory, "" when there is none; an HTTPS
 	// interface looks there for the files its configuration does not name.
 	machineDirectory string
+
+	// egressWait is how long a routing loop waits for a place in a full queue of this interface; 0 = default.
+	egressWait time.Duration
+	// egress counts what the routing loops met in front of this interface (see comm_offer.go).
+	egress egressCounters
+	// disconnecting is set while the connection of a slow consumer is being closed.
+	disconnecting atomic.Bool
 
 	stateMu   sync.RWMutex
 	status    InterfaceStatus

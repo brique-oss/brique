@@ -120,6 +120,16 @@ func (c *ContextLoop) installRuntimeAPI() {
 			return out
 		},
 
+		ListInterfaceEgress: func() []junction.InterfaceEgress {
+			reporter, ok := c.families[shared.FamilyComm].(interface {
+				InterfaceEgress() []junction.InterfaceEgress
+			})
+			if !ok {
+				return nil
+			}
+			return reporter.InterfaceEgress()
+		},
+
 		// -----------------------------
 		// Hierarchy
 		// -----------------------------

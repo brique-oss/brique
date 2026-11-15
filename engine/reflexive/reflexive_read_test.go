@@ -18,6 +18,7 @@ package reflexive
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -690,5 +691,57 @@ func TestReflexiveRead_N1_RRD_06_CapReadCapacity(t *testing.T) {
 	m = recvReflexiveReadMsg(t, commCh, "read.capacity execution ok")
 	if m.Response.Status != circulation.ValueStatusOK {
 		t.Fatalf("read.capacity wrapper.start should return ok: %#v", m)
+	}
+}
+
+// The egress queues of the interfaces are part of read.state: a slow consumer shows there.
+func TestReflexiveRead_ReadStateReportsTheInterfaceQueues(t *testing.T) {
+	l, commCh, _ := newReflexiveReadHarness(t)
+	l.frame.Runtime = &junction.ContextRuntimeAPI{
+		ListInterfaceEgress: func() []junction.InterfaceEgress {
+			return []junction.InterfaceEgress{
+				{Name: "front_py", Type: "wrapper", Status: "running", Places: 16, Queued: 3, Offers: 120, Full: 40, Timeouts: 1, WaitedNs: 2_500_000, MaxWaitNs: 1_250_000},
+				{Name: "main", Type: "ui", Status: "running", Places: 16},
+			}
+		},
+	}
+	read := func(include []any) map[string]any {
+		params := map[string]any{}
+		if include != nil {
+			params[circulation.KeyInclude] = include
+		}
+		l.capReadState(circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{IntentionID: "i-if", Params: params}})
+		m := recvReflexiveReadMsg(t, commCh, "read.state")
+		if m.Response.Status != circulation.ValueStatusOK {
+			t.Fatalf("read.state: %#v", m)
+		}
+		return payloadAsMap(t, m.Response.Payload)
+	}
+
+	pm := read([]any{circulation.KeyInterfaces})
+	items, ok := pm[circulation.KeyInterfaces].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("interfaces = %#v, want 2 entries", pm[circulation.KeyInterfaces])
+	}
+	front, _ := items[0].(map[string]any)
+	got := func(key string) string { return fmt.Sprint(front[key]) }
+	if got("name") != "front_py" || got("type") != "wrapper" || got("status") != "running" || got("queue_places") != "16" || got("queue_length") != "3" ||
+		got("offers") != "120" || got("found_full") != "40" || got("given_up") != "1" || got("waited_ms") != "2.5" || got("longest_wait_ms") != "1.25" {
+		t.Fatalf("front_py = %#v", front)
+	}
+	if main, _ := items[1].(map[string]any); fmt.Sprint(main["name"]) != "main" || fmt.Sprint(main["offers"]) != "0" {
+		t.Fatalf("items are not sorted as given or main is wrong: %#v", items)
+	}
+	if _, others := pm[circulation.KeyContext]; others {
+		t.Fatalf("an explicit include of interfaces must give only that section: %#v", pm)
+	}
+	// By default every section is returned, interfaces included.
+	if _, ok := read(nil)[circulation.KeyInterfaces]; !ok {
+		t.Fatal("interfaces must be part of the default read.state")
+	}
+	// Without a communication family to ask, the section is an empty list, not an error.
+	l.frame.Runtime = &junction.ContextRuntimeAPI{}
+	if items, ok := read([]any{circulation.KeyInterfaces})[circulation.KeyInterfaces].([]any); !ok || len(items) != 0 {
+		t.Fatalf("no communication family: %#v", items)
 	}
 }

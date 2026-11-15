@@ -1534,12 +1534,13 @@ func (l *ReflexiveLoop) capReadState(msg circulation.Message) {
 	// -----------------------------
 	// 1) Parse include (optional)
 	// -----------------------------
-	// Default: all four sections.
+	// Default: all five sections.
 	include := map[string]bool{
-		circulation.KeyContext:  true,
-		circulation.KeyTrace:    true,
-		circulation.KeyWrappers: true,
-		circulation.KeyFamilies: true,
+		circulation.KeyContext:    true,
+		circulation.KeyTrace:      true,
+		circulation.KeyWrappers:   true,
+		circulation.KeyFamilies:   true,
+		circulation.KeyInterfaces: true,
 	}
 
 	if in.Params != nil {
@@ -1642,6 +1643,13 @@ func (l *ReflexiveLoop) capReadState(msg circulation.Message) {
 		}
 	}
 
+	// -----------------------------
+	// 6) Interfaces (communication egress queues)
+	// -----------------------------
+	if include[circulation.KeyInterfaces] {
+		payload[circulation.KeyInterfaces] = snapshotInterfaces(l.frame)
+	}
+
 	// An external caller gets the reduced state (model §9.3, Z06): no file path,
 	// no process id, no error text that may carry a path.
 	if l.externalReadScope(in) != nil {
@@ -1651,8 +1659,35 @@ func (l *ReflexiveLoop) capReadState(msg circulation.Message) {
 	l.emitResponseOK(in, payload)
 }
 
+// snapshotInterfaces reports, for each interface of the communication family, the queue in front of its writer
+// and what the routing loops met there (see junction.InterfaceEgress). Waits are in milliseconds.
+func snapshotInterfaces(frame *junction.ContextRegistry) []map[string]any {
+	out := []map[string]any{}
+	if frame == nil || frame.Runtime == nil || frame.Runtime.ListInterfaceEgress == nil {
+		return out
+	}
+	toMs := func(ns int64) float64 { return float64(ns/1000) / 1000 }
+	for _, item := range frame.Runtime.ListInterfaceEgress() {
+		out = append(out, map[string]any{
+			circulation.KeyName: item.Name,
+			"type":              item.Type,
+			"status":            item.Status,
+			"queue_places":      item.Places,
+			"queue_length":      item.Queued,
+			"offers":            item.Offers,
+			"found_full":        item.Full,
+			"given_up":          item.Timeouts,
+			"waited_ms":         toMs(item.WaitedNs),
+			"longest_wait_ms":   toMs(item.MaxWaitNs),
+		})
+	}
+	return out
+}
+
 // reduceStateForExternal removes host details from a read.state payload.
 func reduceStateForExternal(payload map[string]any) {
+	// The queues of the interfaces describe the host, not what an external caller may know.
+	delete(payload, circulation.KeyInterfaces)
 	if ctx, ok := payload[circulation.KeyContext].(map[string]any); ok {
 		delete(ctx, circulation.KeyContextDir)
 	}

@@ -58,7 +58,7 @@
     "await_response": true,
     "_await_response_note": "Optional boolean. Default true. When false: fire-and-forget — response not awaited, 'as' and 'retry' are forbidden.",
     "timeout": { "ms": 5000 },
-    "_timeout_note": "Optional. Milliseconds to wait for response. ms must be >= 0. When absent, uses default_invoke_timeout_ms from context.json execution config, or no timeout if that is also absent.",
+    "_timeout_note": "Optional. Milliseconds to wait for response. ms must be >= 0. When absent, uses default_invoke_timeout_ms from context.json execution config, or 30 seconds if that is also absent or 0.",
     "retry": { "max": 2, "delay_ms": 200 },
     "_retry_note": "Optional. Retry on error. max=number of additional attempts (>= 0). delay_ms=wait between attempts (>= 0). on_timeout (boolean, default false)=also retry when the answer never came (timeout, or this context stopped): the call may have completed, so repeating it can repeat its effects with the caller's rights; leave it off unless the invoked capacity is idempotent. Forbidden when await_response=false.",
     "on_error": "fail",

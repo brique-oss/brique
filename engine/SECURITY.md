@@ -597,6 +597,14 @@ Wrong principal, wrong hash, duplicate, regressing, unsolicited and post-final r
 Shutdown or restart of the waiting instance reports `response_state_lost` and never an automatic
 replacement intention.
 
+**How long a call waits.** A call to a peer that awaits an answer ends with an error after
+`external_call_silence_ms` (default 2 minutes, at most 30) with nothing heard; any `running` response
+renews the wait, and the absolute limit stays 24 hours. It was 30 minutes, which kept a caller waiting that
+long for an answer lost on the way. A capacity that a peer calls and that works longer than the silence
+without answering must call `notify_running`. A signed message the peer refuses as overloaded (429, 503) is
+sent again three times; the peer refuses before it queues anything and a second answer is rejected by the
+registry above, so a retry never runs a request twice.
+
 ### 6.6 Admission sequence
 
 1. strict size and shape checks on the raw bytes (before any crypto), one signature, no trailing data;
@@ -1141,6 +1149,28 @@ the template runs locally only.
 What she cannot do is refused identically to what does not exist; every refusal is in the journal
 (`brique-sec --root $ROOT denials --principal alice`).
 
+**Give a peer its own outbound interface (when a peer may stop answering).** All the peers named
+`--interface outerCtx` share that one interface, which sends one message after the other with a 5 s
+timeout: a peer that accepts the connection and never answers holds back the sends to every other
+peer. (Measured, one healthy peer and one stopped: the calls to the healthy one waited up to 20 s, and
+with an answer silence of 6 s 3 of 8 failed.) Give each peer that matters an outbound-only HTTPS
+interface in the root `context.json`, and name it in `peer add`:
+
+```json
+{ "name": "to_alice", "type": "outerCtx", "driver": "https",
+  "config": { "ingress_enabled": false, "egress_enabled": true, "path": "/brique" } }
+```
+
+```bash
+brique-sec --root $ROOT peer add alice --audience <alice's instance name> --interface to_alice --target https://alice.example:8443/brique
+```
+
+Each peer then has its own queue, its own sending goroutine and its own timeout (measured: the healthy
+peer at 9 ms with the other one stopped). **Inbound there is still one door:** every peer's signed
+requests and answers arrive through the one `outerCtx` listener, share its queue of 64 places and its
+verification workers (at most 16), and are told apart only by the budget of the remote address (§6.8.1)
+and, after the signature, the budget of the principal. A per-peer inbound interface does not exist.
+
 **Renew or regenerate the certificate.** `brique-sec --root $ROOT tls init --host … --force` makes a new
 pair; the engine serves it within a couple of seconds, with no restart. Peers who trust certificates
 with `tls trust` add the new one the same way, and their engine picks it up as it changes. (A
@@ -1260,7 +1290,7 @@ Apple M4, APFS, single runs.
 |---|---|---|
 | W1 | High for portability | Run the whole suite on windows; the port is written, not run |
 | V2 | Medium | Power loss is not modelled (the campaigns kill the process; they do not drop unsynced writes); the egress commit of a cached answer is not killed mid-way |
-| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst, with the request budget lifted: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A does not retry a 503 automatically; a client that bursts must retry `unavailable` itself |
+| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst, with the request budget lifted: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A sender now retries a signed message the peer refused with 429 or 503 three times (25, 100 and 250 ms) before it reports it; a client that bursts beyond that must still retry `unavailable` itself |
 | V4 | Low | Replay recovery allocates about 280 times per entry (1 GiB at the maximum) |
 | V5 | Low | Fuzz follow-ups: UUID and `@` address parsing, extractor normalization, WebSocket framing; continuous fuzzing in CI |
 | V6 | Low | A published corpus of signed-envelope vectors (only the wrapper frame has one) |

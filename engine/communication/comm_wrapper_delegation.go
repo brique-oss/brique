@@ -91,10 +91,16 @@ func (l *CommLoop) enqueueExternalWrapperDispatch(delivery junction.Delivery, wr
 		Connection: connection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: handle},
 	}
-	select {
-	case runtime.WrapperEgress <- item:
+	outcome, waited := offer(runtime.WrapperEgress, item, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	switch outcome {
+	case offerAccepted:
 		return
-	case <-l.done:
+	case offerTimedOut:
+		store.Revoke(handle)
+		l.giveUpSlowInterface(wrapperName, runtime, waited)
+		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper %s is too slow: no place in its queue for %s", wrapperName, waited.Round(time.Millisecond))))
+	default:
 		store.Revoke(handle)
 		l.reportDeliveryFailure(message, newDeliveryResult(deliveryStopped, wrapperName, fmt.Errorf("communication stopped before wrapper dispatch")))
 	}
@@ -156,10 +162,16 @@ func (l *CommLoop) enqueueExternalWrapperReturn(delivery junction.Delivery, wrap
 		Connection: connection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: handle},
 	}
-	select {
-	case runtime.WrapperEgress <- item:
+	outcome, waited := offer(runtime.WrapperEgress, item, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	switch outcome {
+	case offerAccepted:
 		return
-	case <-l.done:
+	case offerTimedOut:
+		l.revokeWrapperDelegation(handle)
+		l.giveUpSlowInterface(wrapperName, runtime, waited)
+		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper %s is too slow: no place in its queue for %s", wrapperName, waited.Round(time.Millisecond))))
+	default:
 		l.revokeWrapperDelegation(handle)
 		l.reportDeliveryFailure(message, newDeliveryResult(deliveryStopped, wrapperName, fmt.Errorf("communication stopped before delegated wrapper response")))
 	}
@@ -344,11 +356,12 @@ func (l *CommLoop) refuseDelegatedWrapperCall(item IngressItem, problem *circula
 	if !ok || runtime == nil || runtime.Type != EndpointWrapper || runtime.WrapperEgress == nil || runtime.State().Status != InterfaceRunning {
 		return
 	}
-	select {
-	case runtime.WrapperEgress <- wrapperInterfaceEgressItem{
+	outcome, waited := offer(runtime.WrapperEgress, wrapperInterfaceEgressItem{
 		Connection: item.WrapperConnection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: item.WrapperDelegation},
-	}:
-	case <-l.done:
+	}, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	if outcome == offerTimedOut {
+		l.giveUpSlowInterface(item.IfaceName, runtime, waited)
 	}
 }
