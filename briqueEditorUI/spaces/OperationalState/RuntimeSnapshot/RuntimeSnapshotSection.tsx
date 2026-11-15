@@ -17,7 +17,8 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useBriqueSubstrate } from "../../../React_Substrate_Adapter/context.js";
 import { createCapabilityClient } from "../../../Brique_Substrate/capability/index.js";
-import type { ReadStatePayload } from "../../../Brique_Substrate/capability/typed.js";
+import type { InterfaceQueueSnapshot, ReadStatePayload } from "../../../Brique_Substrate/capability/typed.js";
+import { formatMs, interfaceQueueTone } from "./interfaceQueue.js";
 import type { RuntimeSnapshot } from "../OperationalStateSpace.js";
 
 // ReadStatePayload used by SnapshotData below
@@ -47,7 +48,7 @@ export function RuntimeSnapshotSection({ selectedContext, snapshot, onSnapshotCh
     onSnapshotChange({ kind: "loading" });
     try {
       const result = await capabilityClient.read.state(selectedContext, {
-        include: ["context", "trace", "wrappers", "families"],
+        include: ["context", "trace", "wrappers", "families", "interfaces"],
       });
       if (seq !== seqRef.current) return;
       if (!result.ok || !result.payload) {
@@ -129,6 +130,45 @@ function SnapshotData({ payload }: { payload: ReadStatePayload }) {
         </DataSection>
       )}
 
+      {payload.interfaces && payload.interfaces.length > 0 && (
+        <DataSection label="Interfaces">
+          {payload.interfaces.map((item) => (
+            <InterfaceRow key={item.name} item={item} />
+          ))}
+        </DataSection>
+      )}
+
+    </div>
+  );
+}
+
+function InterfaceRow({ item }: { item: InterfaceQueueSnapshot }) {
+  const tone = interfaceQueueTone(item);
+  const color =
+    tone === "error" ? "var(--syn-feedback-error)" : tone === "warning" ? "var(--syn-feedback-warning)" : undefined;
+  const fullShare = item.offers > 0 ? Math.round((100 * item.found_full) / item.offers) : 0;
+  return (
+    <div style={styles.interfaceRow} title={`${item.name} (${item.type}, ${item.status})`}>
+      <div style={styles.interfaceHead}>
+        <span style={{ ...styles.interfaceName, ...(color ? { color } : undefined) }}>{item.name}</span>
+        <span style={styles.interfaceKind}>
+          {item.type}
+          {item.status !== "running" ? ` · ${item.status}` : ""}
+        </span>
+      </div>
+      <div style={styles.interfaceFacts}>
+        <span>queue {item.queue_length}/{item.queue_places}</span>
+        <span style={color ? { color } : undefined}>
+          full {item.found_full}/{item.offers}
+          {item.offers > 0 ? ` (${fullShare}%)` : ""}
+        </span>
+        {item.given_up > 0 && <span style={{ color: "var(--syn-feedback-error)" }}>given up {item.given_up}</span>}
+        {item.found_full > 0 && (
+          <span>
+            waited {formatMs(item.waited_ms)} · longest {formatMs(item.longest_wait_ms)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -245,6 +285,33 @@ const styles: Record<string, React.CSSProperties> = {
   dataValue: {
     fontFamily: "monospace",
     wordBreak: "break-all",
+  },
+  interfaceRow: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 1,
+    marginBottom: 3,
+  },
+  interfaceHead: {
+    display: "flex",
+    gap: 6,
+    alignItems: "baseline",
+    fontSize: 11,
+  },
+  interfaceName: {
+    fontWeight: 700,
+  },
+  interfaceKind: {
+    opacity: 0.5,
+    fontSize: 10,
+  },
+  interfaceFacts: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    fontFamily: "monospace",
+    fontSize: 10,
+    opacity: 0.85,
   },
   wrapper: {
     display: "flex",
