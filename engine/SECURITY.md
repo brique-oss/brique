@@ -597,6 +597,17 @@ Wrong principal, wrong hash, duplicate, regressing, unsolicited and post-final r
 Shutdown or restart of the waiting instance reports `response_state_lost` and never an automatic
 replacement intention.
 
+**A request that fails inside the instance after it was admitted.** The caller is on another instance, so
+it is answered through its own request, with `unavailable` ("external destination is unavailable"), and
+never with the reason: this holds when the wrapper it was meant for has no connection, is too slow to take
+it, or loses its connection before it answers. An ordinary failure acknowledgement is addressed to the
+caller's `@ext_` name, and the root drops every response to such a name that did not go through the signed
+boundary, so before this the caller heard nothing and waited for its silence timeout (measured: 120 calls
+to a context whose wrapper was stopped, none answered in 25 s; now all 120 answered in a few seconds).
+The same holds when the context it is for is unknown or cannot take it (the hop between contexts); a local
+message that fails there keeps the ordinary acknowledgement, and nothing is signed to a peer for it. When the
+instance is stopping, the ordinary acknowledgement is used and the caller's own silence timeout ends the wait.
+
 **How long a call waits.** A call to a peer that awaits an answer ends with an error after
 `external_call_silence_ms` (default 2 minutes, at most 30) with nothing heard; any `running` response
 renews the wait, and the absolute limit stays 24 hours. It was 30 minutes, which kept a caller waiting that

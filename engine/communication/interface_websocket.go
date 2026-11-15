@@ -176,11 +176,12 @@ func (w *wsInterface) onWrapperDisconnect(connection junction.WrapperConnection)
 	if w == nil || w.rt == nil || w.rt.ReportEgressOutcome == nil {
 		return
 	}
-	for _, request := range w.inflight.lose(connection) {
-		w.rt.ReportEgressOutcome(request, InterfaceEgressOutcome{
+	for _, lost := range w.inflight.lose(connection) {
+		w.rt.ReportEgressOutcome(lost.request, InterfaceEgressOutcome{
 			Definitive: true,
 			Err:        errors.New("wrapper connection lost before the response"),
 			Reason:     circulation.ValueReasonConnectionLost,
+			Request:    lost.external,
 		})
 	}
 }
@@ -290,7 +291,7 @@ func (w *wsInterface) WriteLoop() error {
 				}
 			}
 			if err != nil {
-				w.reportUnsentToWrapper(msg, err)
+				w.reportUnsentToWrapper(msg, err, nil)
 			}
 		case item, ok := <-wrapperEgress:
 			if !ok {
@@ -299,9 +300,9 @@ func (w *wsInterface) WriteLoop() error {
 			}
 			if err := w.sendWrapperFrame(item.Connection, item.Frame); err != nil {
 				w.revokeWrapperHandle(item.Frame.Delegation)
-				w.reportUnsentToWrapper(item.Frame.Message, err)
+				w.reportUnsentToWrapper(item.Frame.Message, err, item.Request)
 			} else {
-				w.inflight.add(item.Connection, item.Frame.Message)
+				w.inflight.add(item.Connection, item.Frame.Message, item.Request)
 			}
 		}
 	}
@@ -313,7 +314,7 @@ func (w *wsInterface) WriteLoop() error {
 // so the wrapper certainly did not receive it: the awaited call is answered `connection_lost`
 // instead of waiting for an answer that cannot come. A message nobody awaits is only traced. An
 // interface that is not a wrapper (a UI) keeps its rule: it reconnects and subscribes again.
-func (w *wsInterface) reportUnsentToWrapper(msg circulation.Message, err error) {
+func (w *wsInterface) reportUnsentToWrapper(msg circulation.Message, err error, request *junction.Delivery) {
 	if w == nil || w.rt == nil || w.rt.Type != EndpointWrapper || w.rt.ReportEgressOutcome == nil {
 		return
 	}
@@ -321,6 +322,7 @@ func (w *wsInterface) reportUnsentToWrapper(msg circulation.Message, err error) 
 		Definitive: true,
 		Err:        fmt.Errorf("message not written to the wrapper: %w", err),
 		Reason:     circulation.ValueReasonConnectionLost,
+		Request:    request,
 	})
 }
 

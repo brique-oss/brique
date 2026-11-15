@@ -868,20 +868,20 @@ func (l *CommLoop) forwardToContext(addr shared.ContextAddr, msg circulation.Mes
 	target := string(addr)
 	if l.frame == nil || l.frame.CtxCommReg == nil {
 		result := newDeliveryResult(deliveryInvalid, target, fmt.Errorf("context registry unavailable"))
-		l.reportDeliveryFailure(msg, result)
+		l.failDelivery(msg, result, source...)
 		return result
 	}
 
 	ch, ok := l.frame.CtxCommReg.ResolveCh(addr)
 	if !ok || ch == nil {
 		result := newDeliveryResult(deliveryUnavailable, target, fmt.Errorf("unknown context addr: %s", addr))
-		l.reportDeliveryFailure(msg, result)
+		l.failDelivery(msg, result, source...)
 		return result
 	}
 	delivery, err := l.deliveryForMessage(msg, source...)
 	if err != nil {
 		result := newDeliveryResult(deliveryInvalid, target, err)
-		l.reportDeliveryFailure(msg, result)
+		l.failDelivery(msg, result, source...)
 		return result
 	}
 	select {
@@ -889,7 +889,7 @@ func (l *CommLoop) forwardToContext(addr shared.ContextAddr, msg circulation.Mes
 		return newDeliveryResult(deliveryAccepted, target, nil)
 	case <-l.done:
 		result := newDeliveryResult(deliveryStopped, target, fmt.Errorf("communication stopped before delivery to %s", addr))
-		l.reportDeliveryFailure(msg, result)
+		l.failDelivery(msg, result, source...)
 		return result
 	}
 }
@@ -926,6 +926,15 @@ func (l *CommLoop) reportInterfaceEgressOutcome(msg circulation.Message, outcome
 	}
 	if !outcome.Definitive {
 		l.sendToTrace(msg, circulation.ValueTraceCommDrop, "delivery_outcome_unknown", outcome.Err.Error())
+		return
+	}
+	if outcome.Request != nil && msg.Kind == circulation.ValueKindIntention && msg.Intention.AwaitResponse {
+		reason := outcome.Reason
+		if reason == "" {
+			reason = circulation.ValueReasonContextUnreachable
+		}
+		l.sendToTrace(msg, circulation.ValueTraceCommReject, reason, outcome.Err.Error())
+		l.rejectAdmittedExternal(*outcome.Request, msg, externalDestinationUnavailable)
 		return
 	}
 	if outcome.Reason != "" {

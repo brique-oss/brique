@@ -251,6 +251,16 @@ func (l *CommLoop) rejectAdmittedExternal(request junction.Delivery, message cir
 	if err != nil {
 		return false
 	}
+	// Only the root holds the signed interface: from another context the answer crosses the inner hop to it,
+	// as the answer of a capacity of that context does.
+	if l.frame != nil && !shared.IsRootContext(l.frame.CtxId) {
+		sealed, valid := delivery.Message()
+		if !valid {
+			return false
+		}
+		l.forwardToRoot(sealed, delivery)
+		return true
+	}
 	return l.routeSignedExternalResponse(delivery)
 }
 

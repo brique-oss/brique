@@ -210,3 +210,67 @@ func TestSignedExternalResponseRetainsAmbiguousOutcomeWithoutRewindingOnRejectio
 // signedExternalTestLimits are the replay limits of the signed-external test fixture;
 // a test narrows them for its own duration.
 var signedExternalTestLimits = replay.DefaultLimits
+
+// An admitted external request that cannot be handed to the context it is for is answered to its caller, who is
+// on another instance, through the request itself. An ordinary failure acknowledgement is addressed to the caller's
+// @ext_ name, which the root refuses to send to outside the signed boundary: the caller would wait for its silence.
+func TestAnExternalRequestThatCannotBeForwardedIsAnsweredToItsCaller(t *testing.T) {
+	fixture, loop, request := newSignedExternalTestLoop(t)
+	markFixtureRequestDispatched(t, loop, request, fixture.now)
+	message, valid := request.Message()
+	if !valid {
+		t.Fatal("fixture request has no message")
+	}
+
+	result := loop.forwardToContext("/ctx/does-not-exist", message, request)
+	if result.accepted() {
+		t.Fatalf("a context that does not exist accepted the request: %+v", result)
+	}
+
+	select {
+	case item := <-loop.ifaces["secure-peer"].SignedExternalEgress:
+		var outer wire.Envelope
+		if err := json.Unmarshal(item.Envelope, &outer); err != nil {
+			t.Fatal(err)
+		}
+		var protected wire.Protected
+		if err := json.Unmarshal(outer.Protected, &protected); err != nil {
+			t.Fatal(err)
+		}
+		if protected.Purpose != wire.PurposeResponse || protected.ResponsePhase != wire.ResponsePhaseFinal {
+			t.Fatalf("unexpected answer: %+v", protected)
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(outer.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answered circulation.Message
+		if err := json.Unmarshal(payload, &answered); err != nil {
+			t.Fatal(err)
+		}
+		if answered.Response.Status != circulation.ValueStatusError || answered.Response.Error == nil ||
+			answered.Response.Error.Code != circulation.ValueCodeUnavailable || answered.Response.Error.Message != externalDestinationUnavailable {
+			t.Fatalf("the caller must be told unavailable and not why: %+v", answered.Response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the caller of an external request that could not be forwarded was never answered")
+	}
+	key := replay.Key{AudienceInstanceID: "comm-wrapper-instance", PrincipalID: "partner-a", IntentionID: commWrapperRootID}
+	if entry, found := loop.securityRuntime().Replay().Lookup(key); !found || entry.State != replay.StateRejected {
+		t.Fatalf("the ledger must hold the exact rejection so that a duplicate gets it again: %+v", entry)
+	}
+}
+
+// A local message that cannot be forwarded keeps the ordinary failure acknowledgement: nothing goes to the peer.
+func TestALocalMessageThatCannotBeForwardedSendsNothingToThePeers(t *testing.T) {
+	_, loop, request := newSignedExternalTestLoop(t)
+	message, _ := request.Message()
+	if result := loop.forwardToContext("/ctx/does-not-exist", message); result.accepted() {
+		t.Fatalf("a context that does not exist accepted the message: %+v", result)
+	}
+	select {
+	case item := <-loop.ifaces["secure-peer"].SignedExternalEgress:
+		t.Fatalf("a local failure must not be signed to a peer: %+v", item)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

@@ -70,8 +70,8 @@ func newUIMux(n *realNode) *uiMux {
 	return m
 }
 
-// relay asks the wrapper of ctx to call target, and returns a channel for what the wrapper reports.
-func (m *uiMux) relay(ctx, toContext, toCap string, params map[string]any) chan map[string]any {
+// send sends one intention the way a user interface does and returns a channel for its final response.
+func (m *uiMux) send(toContext, capability, kind string, params map[string]any) chan map[string]any {
 	id := realUUID()
 	ch := make(chan map[string]any, 1)
 	m.mu.Lock()
@@ -79,11 +79,11 @@ func (m *uiMux) relay(ctx, toContext, toCap string, params map[string]any) chan 
 	m.mu.Unlock()
 	message := map[string]any{"kind": "intention", "ts": time.Now().UTC().Format(time.RFC3339Nano), "intention": map[string]any{
 		"intention_id": id, "await_response": true,
-		"to":          map[string]any{"context": ctx, "cap": "e2e.relay", "type": "user"},
+		"to":          map[string]any{"context": toContext, "cap": capability, "type": kind},
 		"from":        map[string]any{"context": "@ui_main:/", "cap": "ui", "type": "user"},
 		"identity":    map[string]any{"id": "e2e-ui", "kind": "ui"},
 		"correlation": map[string]any{"root_intention_id": id},
-		"params":      map[string]any{"to_context": toContext, "to_cap": toCap, "to_type": "user", "params": params},
+		"params":      params,
 	}}
 	m.writeMu.Lock()
 	err := m.node.ui.WriteJSON(message)
@@ -92,6 +92,11 @@ func (m *uiMux) relay(ctx, toContext, toCap string, params map[string]any) chan 
 		ch <- map[string]any{"status": "error"}
 	}
 	return ch
+}
+
+// relay asks the wrapper of ctx to call target, and returns a channel for what the wrapper reports.
+func (m *uiMux) relay(ctx, toContext, toCap string, params map[string]any) chan map[string]any {
+	return m.send(ctx, "e2e.relay", "user", map[string]any{"to_context": toContext, "to_cap": toCap, "to_type": "user", "params": params})
 }
 
 type mutePeerResult struct {
