@@ -39,6 +39,14 @@
             "type": "integer",
             "_comment": "Number of elements refreshed in the projection."
           },
+          "failed_count": {
+            "type": "integer",
+            "_comment": "Number of requested elements that could not be indexed (descriptor missing or unreadable, or an indexing error). An element that fails after its old rows were deleted keeps its previous index. The status stays ok: read this field."
+          },
+          "failed_elements": {
+            "type": "array",
+            "_comment": "The elements counted by failed_count, as objects with ctx_id, element_kind and name; at most 200 entries."
+          },
           "affected_vocab_paths": {
             "type": "array",
             "_comment": "Vocabulary paths touched by the update."
@@ -68,7 +76,7 @@
           "A file whose size or mtime moved but whose SHA-256 is unchanged is not reindexed (only its recorded stamp is refreshed)."
         ],
         "success": [
-          "On success, meaning.update returns updated_elements_count, affected_vocab_paths, and duration_ms.",
+          "On success, meaning.update returns updated_elements_count, failed_count, failed_elements, affected_vocab_paths, and duration_ms.",
           "Successful updates refresh projection rows for the targeted set and apply add-only vocabulary enrichment for observed affected paths."
         ],
         "failure": [

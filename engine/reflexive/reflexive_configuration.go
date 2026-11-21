@@ -41,6 +41,15 @@ import (
 //	    }
 //	  }
 //	}
+//
+// Settings of engine_config.reflexive. Declared here, not in the shared keys
+// file, to stay clear of concurrent work on that file.
+const (
+	keyReflexiveMaxHandlers     = "max_handlers"
+	keyReflexiveInboxCapacity   = "inbox_capacity"
+	keyReflexiveProjectionConns = "projection_max_conns"
+)
+
 type ReflexiveCfg struct {
 	RootRepo bool
 	RepoName string
@@ -57,6 +66,12 @@ type ReflexiveCfg struct {
 	// ProjectionSyncOnEdit makes the root refresh the projection right after
 	// any context's reflexive edit.* capacity changed a descriptor.
 	ProjectionSyncOnEdit bool
+
+	// MaxHandlers is how many requests run at once (0: defaultMaxHandlers).
+	MaxHandlers int
+	// InboxCapacity is the size of the family's input channel (0: defaultInboxCapacity).
+	InboxCapacity   int
+	ProjectionConns int
 }
 
 // ParseReflexiveCfg
@@ -138,6 +153,15 @@ func ParseReflexiveCfg(engineCfg map[string]any) ReflexiveCfg {
 	}
 	if v, ok := engineCfg[configuration.KeyProjectionVerifyIntervalMs].(float64); ok && v > 0 {
 		cfg.ProjectionVerifyInterval = time.Duration(v) * time.Millisecond
+	}
+	if v, ok := engineCfg[keyReflexiveMaxHandlers].(float64); ok && v > 0 {
+		cfg.MaxHandlers = int(v)
+	}
+	if v, ok := engineCfg[keyReflexiveInboxCapacity].(float64); ok && v > 0 {
+		cfg.InboxCapacity = int(v)
+	}
+	if v, ok := engineCfg[keyReflexiveProjectionConns].(float64); ok && v > 0 {
+		cfg.ProjectionConns = int(v)
 	}
 	return cfg
 }

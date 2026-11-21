@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,9 +92,13 @@ func TestEngine_N6_REF_01_MeaningRebuildThenMeaningQuery(t *testing.T) {
 		t.Fatalf("rebuild payload missing total_elements_indexed: %#v", rebuildPayload)
 	}
 
-	dbPath := filepath.Join(h.rootDir, "projection", "meaning.sqlite")
-	if _, err := os.Stat(dbPath); err != nil {
-		t.Fatalf("projection db should exist after rebuild at %s: %v", dbPath, err)
+	// The rebuild publishes a generation file named by projection/meaning.current.
+	currentDB := filepath.Join(h.rootDir, "projection", "meaning.sqlite")
+	if pointer, err := os.ReadFile(filepath.Join(h.rootDir, "projection", "meaning.current")); err == nil {
+		currentDB = filepath.Join(h.rootDir, "projection", strings.TrimSpace(string(pointer)))
+	}
+	if _, err := os.Stat(currentDB); err != nil {
+		t.Fatalf("projection db should exist after rebuild at %s: %v", currentDB, err)
 	}
 
 	sendToN6Context(t, h, shared.RootContextID, mkEngineN6Intention(

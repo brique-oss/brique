@@ -55,7 +55,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,7 +137,85 @@ const (
 // - Pure path builder for `projection/meaning.sqlite`.
 
 func dbPath(rootCtxDir string) string {
-	return filepath.Join(rootCtxDir, projectionDirName, meaningDBFilename)
+	dir := filepath.Join(rootCtxDir, projectionDirName)
+	if b, err := os.ReadFile(filepath.Join(dir, meaningCurrentPointer)); err == nil {
+		if name := strings.TrimSpace(string(b)); name != "" {
+			if _, ok := meaningGeneration(name); ok {
+				return filepath.Join(dir, name)
+			}
+		}
+	}
+	return filepath.Join(dir, meaningDBFilename)
+}
+
+// The projection database is published as one file per generation: the
+// historical projection/meaning.sqlite is generation 0, and every rebuild writes
+// projection/meaning.<N>.sqlite, a name never used before, then points
+// projection/meaning.current at it. A path is never replaced by rename: with the
+// write-ahead log a database has companion files named after its path, and old
+// connections must never share those names with the new database.
+const meaningCurrentPointer = "meaning.current"
+
+var meaningFileRE = regexp.MustCompile(`^meaning(\.([0-9]{1,9}))?\.sqlite$`)
+
+// meaningGeneration returns the generation of a projection file name (0 for the
+// historical name) and false when the name is not a projection file.
+func meaningGeneration(name string) (int, bool) {
+	m := meaningFileRE.FindStringSubmatch(name)
+	if m == nil {
+		return 0, false
+	}
+	if m[2] == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(m[2])
+	return n, err == nil
+}
+
+// nextDBPath is the path the next rebuild writes: current generation + 1.
+func nextDBPath(rootCtxDir string) string {
+	cur := dbPath(rootCtxDir)
+	gen, _ := meaningGeneration(filepath.Base(cur))
+	return filepath.Join(filepath.Dir(cur), fmt.Sprintf("meaning.%d.sqlite", gen+1))
+}
+
+// removeProjectionFile removes a projection file and its companions, ignoring
+// errors (a file still open elsewhere, notably on Windows, is removed at the
+// next startup).
+func removeProjectionFile(path string) {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		_ = os.Remove(path + suffix)
+	}
+}
+
+// oldGenerationGrace is how long a replaced generation file stays: a request that
+// resolved its path just before the new generation was published may still open it,
+// and opening a removed path would silently create an empty database there.
+// Tests shorten it.
+var oldGenerationGrace = 30 * time.Second
+
+func removeProjectionFileLater(path string) {
+	time.AfterFunc(oldGenerationGrace, func() { removeProjectionFile(path) })
+}
+
+var projectionLeftoverRE = regexp.MustCompile(`^meaning(\.[0-9]+)?\.sqlite(-wal|-shm|-journal|\.tmp)?$`)
+
+// cleanProjectionDir removes the projection files that are not the current
+// generation: leftovers of a crash, or of a rebuild whose old file was still open.
+func cleanProjectionDir(rootCtxDir string) {
+	dir := filepath.Join(rootCtxDir, projectionDirName)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	current := filepath.Base(dbPath(rootCtxDir))
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() || !projectionLeftoverRE.MatchString(name) || strings.HasPrefix(name, current) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // ensureProjectionDir
@@ -320,11 +400,31 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 		return
 	}
 
-	finalPath := dbPath(l.frame.ContextDir)
-	tmpPath := finalPath + tmpSuffix
+	// A vocabulary-only rebuild works on the projection in place: building a new
+	// database for it would swap in one without any meaning index. (Without an
+	// existing projection there is nothing to keep, and the staged path below applies.)
+	if mode == circulation.ValueVocabOnly {
+		if _, statErr := os.Stat(dbPath(l.frame.ContextDir)); statErr == nil {
+			l.rebuildVocabularyInPlace(in, start)
+			return
+		}
+	}
+
+	// A rebuild restricted to some contexts refreshes those contexts of the existing
+	// projection: building a new database for it would swap in one that only holds them.
+	if len(contexts) > 0 {
+		if _, statErr := os.Stat(dbPath(l.frame.ContextDir)); statErr == nil {
+			l.rebuildContextsInPlace(in, start, mode, contexts)
+			return
+		}
+	}
+
+	finalPath := dbPath(l.frame.ContextDir) // the current generation
+	nextPath := nextDBPath(l.frame.ContextDir)
+	tmpPath := nextPath + tmpSuffix
 
 	_ = os.Remove(tmpPath) // best-effort clean
-	db, err := openSQLite(tmpPath)
+	db, err := openSQLiteForBuild(tmpPath)
 	if err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: "db_open_failed"},
@@ -334,7 +434,7 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 	}
 	defer db.Close()
 
-	if err := applySQLitePragmas(db); err != nil {
+	if err := applyBuildPragmas(db); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: "db_pragmas_failed"},
 			err.Error(),
@@ -454,16 +554,37 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 	}
 
 	_ = db.Close()
+	// Published already in WAL mode: see convertProjectionToWAL.
+	if err := convertProjectionToWAL(tmpPath); err != nil {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: "wal_convert_failed"},
+			err.Error(),
+		))
+		return
+	}
 
-	// Atomic swap
-	if err := shared.AtomicReplace(tmpPath, finalPath); err != nil {
+	// Publish the new generation: a new name, then the pointer. The old file is
+	// never replaced.
+	if err := shared.AtomicReplace(tmpPath, nextPath); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: "atomic_swap_failed"},
 			err.Error(),
 		))
 		return
 	}
+	pointer := filepath.Join(filepath.Dir(nextPath), meaningCurrentPointer)
+	if err := atomicWriteText(pointer, filepath.Base(nextPath)+"\n", 0o644); err != nil {
+		removeProjectionFile(nextPath)
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
+			map[string]any{circulation.KeyReason: "pointer_write_failed"},
+			err.Error(),
+		))
+		return
+	}
 	l.projectionGen.Add(1)
+	if finalPath != nextPath {
+		l.retireOldGeneration(finalPath)
+	}
 
 	// If we staged vocabulary.json during rebuild, finalize it now (best-effort but should be consistent).
 	if mode == circulation.ValueFull || mode == circulation.ValueVocabOnly {
@@ -484,7 +605,7 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 			}
 		}
 	}
-	shared.SyncDir(filepath.Dir(finalPath))
+	shared.SyncDir(filepath.Dir(nextPath))
 
 	l.emitResponseOK(in, map[string]any{
 		"total_elements_indexed": totalElements,
@@ -567,7 +688,7 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 	}
 
 	start := time.Now()
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeUnavailable,
 			map[string]any{circulation.KeyReason: "db_open_failed"},
@@ -575,8 +696,6 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 		))
 		return
 	}
-	defer db.Close()
-	_ = applySQLitePragmas(db)
 
 	// Expand contexts filter into concrete element list (scan)
 	if len(elements) == 0 && len(contexts) > 0 {
@@ -611,52 +730,82 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Elements that could not be (re)indexed. Each element is indexed under its
+	// own savepoint: a failure after the old rows were deleted rolls that element
+	// back to its previous index instead of leaving it empty.
+	const maxFailedReported = 200
+	failedCount := 0
+	failed := make([]map[string]any, 0, 8)
+	fail := func(er ElemRef) {
+		failedCount++
+		if len(failed) < maxFailedReported {
+			failed = append(failed, map[string]any{
+				circulation.KeyCtxId:       er.CtxID,
+				circulation.KeyElementKind: er.Type,
+				circulation.KeyName:        er.Name,
+			})
+		}
+	}
+	var observedPatch map[string]any
+
 	for _, er := range elements {
 		// Resolve descriptor path from ctxDir + ctx_id + type/name (disk authoritative)
 		descAbs, derr := resolveDescriptorAbsFromRoot(l.frame.ContextDir, er.CtxID, er.Type, er.Name)
 		if derr != nil {
-			// element missing / invalid => not_found
+			fail(er) // element missing / invalid
 			continue
 		}
 		b, rerr := os.ReadFile(descAbs)
 		if rerr != nil {
+			fail(er)
 			continue
 		}
 		var doc map[string]any
 		if json.Unmarshal(b, &doc) != nil || doc == nil {
+			fail(er)
 			continue
 		}
 
-		// Upsert element row (preserve row_id if ctx/type/name unchanged).
-		elRow, upErr := upsertElement(tx, ElementRow{
-			ElementID:   stableElementID(er.CtxID, er.Type, er.Name),
-			ElementType: er.Type,
-			Name:        er.Name,
-			CtxID:       er.CtxID,
-		})
-		if upErr != nil {
+		indexOne := func() ([]PathRow, error) {
+			// Upsert element row (preserve row_id if ctx/type/name unchanged).
+			elRow, err := upsertElement(tx, ElementRow{
+				ElementID:   stableElementID(er.CtxID, er.Type, er.Name),
+				ElementType: er.Type,
+				Name:        er.Name,
+				CtxID:       er.CtxID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			// Delete KV + outgoing links for that element
+			if _, err := tx.Exec(`DELETE FROM kv WHERE element_row=?`, elRow); err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(`DELETE FROM links WHERE src_row=?`, elRow); err != nil {
+				return nil, err
+			}
+			// Reinsert KV rows
+			kvRows, paths, err := flattenKV(elRow, doc)
+			if err != nil {
+				return nil, err
+			}
+			if err := ensurePaths(tx, paths); err != nil {
+				return nil, err
+			}
+			return paths, insertKV(tx, kvRows)
+		}
+		if _, err := tx.Exec(`SAVEPOINT el`); err != nil {
+			fail(er)
 			continue
 		}
-
-		// Delete KV + outgoing links for that element
-		if _, err := tx.Exec(`DELETE FROM kv WHERE element_row=?`, elRow); err != nil {
-			continue
-		}
-		if _, err := tx.Exec(`DELETE FROM links WHERE src_row=?`, elRow); err != nil {
-			continue
-		}
-
-		// Reinsert KV rows
-		kvRows, paths, err := flattenKV(elRow, doc)
+		paths, err := indexOne()
 		if err != nil {
+			_, _ = tx.Exec(`ROLLBACK TO el`)
+			_, _ = tx.Exec(`RELEASE el`)
+			fail(er)
 			continue
 		}
-		if err := ensurePaths(tx, paths); err != nil {
-			continue
-		}
-		if err := insertKV(tx, kvRows); err != nil {
-			continue
-		}
+		_, _ = tx.Exec(`RELEASE el`)
 
 		// Derived links (v1: none)
 		// TODO: derive outgoing links from descriptor fields
@@ -687,16 +836,9 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 			addPaths = append(addPaths, p)
 		}
 		sort.Strings(addPaths)
-		observedPatch, err := buildObservedVocabularyJSON(tx, addPaths)
-		if err == nil {
-			_, _ = vocabularyApplyAddOnly(tx, observedPatch)
-
-			// 3) Merge add-only observed into vocabulary.json
-			// (this keeps the file a complete merged view over time; removals are handled elsewhere)
-			cur, _ := loadVocabulary(l.frame.ContextDir)
-			next := normalizeVocabularyLeafLists(deepMergeJSON(cur, observedPatch))
-			// write outside tx (filesystem) but still within request; best-effort
-			_ = writeVocabularyFiles(l.frame.ContextDir, next, 0o644)
+		if patch, err := buildObservedVocabularyJSON(tx, addPaths); err == nil {
+			_, _ = vocabularyApplyAddOnly(tx, patch)
+			observedPatch = patch
 		}
 	}
 
@@ -713,6 +855,15 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 		return
 	}
 
+	// 3) Merge add-only observed into vocabulary.json, only once the transaction
+	// is committed: the files must never describe rows that were rolled back.
+	// (this keeps the file a complete merged view over time; removals are handled elsewhere)
+	if observedPatch != nil {
+		cur, _ := loadVocabulary(l.frame.ContextDir)
+		next := normalizeVocabularyLeafLists(deepMergeJSON(cur, observedPatch))
+		_ = writeVocabularyFiles(l.frame.ContextDir, next, 0o644)
+	}
+
 	// affected vocab paths (bounded)
 	paths := make([]string, 0, len(affectedVocab))
 	for p := range affectedVocab {
@@ -725,8 +876,163 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 
 	l.emitResponseOK(in, map[string]any{
 		"updated_elements_count": updated,
+		"failed_count":           failedCount,
+		"failed_elements":        failed,
 		"affected_vocab_paths":   paths,
 		"duration_ms":            time.Since(start).Milliseconds(),
+	})
+}
+
+// rebuildVocabularyTx rebuilds vocab_nodes in the transaction from what the
+// projection observed merged over the current vocabulary, and returns that
+// vocabulary for the caller to write once the transaction is committed.
+func (l *ReflexiveLoop) rebuildVocabularyTx(tx *sql.Tx) (next map[string]any, total int, reason string, err error) {
+	if err := createVocabularySchema(tx); err != nil {
+		return nil, 0, "vocab_schema_failed", err
+	}
+	observed, err := buildObservedVocabularyJSON(tx, nil)
+	if err != nil {
+		return nil, 0, "vocab_observed_failed", err
+	}
+	current, _ := loadVocabulary(l.frame.ContextDir) // ok if missing
+	next = normalizeVocabularyLeafLists(deepMergeJSON(current, observed))
+	total, err = rebuildVocabularyFromJSON(tx, next)
+	if err != nil {
+		return nil, 0, "vocab_rebuild_failed", err
+	}
+	return next, total, "", nil
+}
+
+// rebuildContextsInPlace re-indexes only the listed contexts of the existing
+// projection (full and meaning-only modes with params.context): the rows of those
+// contexts are replaced, whatever else the projection holds stays. The caller
+// holds the projection lock.
+func (l *ReflexiveLoop) rebuildContextsInPlace(in circulation.Intention, start time.Time, mode string, contexts []string) {
+	fail := func(code, reason string, err error) {
+		l.emitResponseError(errorResp(in, code, map[string]any{circulation.KeyReason: reason}, err.Error()))
+	}
+	db, err := l.projection()
+	if err != nil {
+		fail(circulation.ValueCodeUnavailable, "db_open_failed", err)
+		return
+	}
+	if err := ensureSyncColumns(db); err != nil {
+		fail(circulation.ValueCodeConfiguration, "schema_create_failed", err)
+		return
+	}
+	elems, err := scanAllContextsForElements(l.frame.ContextDir, contexts)
+	if err != nil {
+		fail(circulation.ValueCodeInternal, "scan_failed", err)
+		return
+	}
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{})
+	if err != nil {
+		fail(circulation.ValueCodeUnavailable, "tx_begin_failed", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := createMeaningSchema(tx); err != nil {
+		fail(circulation.ValueCodeConfiguration, "schema_create_failed", err)
+		return
+	}
+	for _, c := range contexts {
+		// kv and links follow by cascade
+		if _, err := tx.Exec(`DELETE FROM elements WHERE ctx_id=?`, c); err != nil {
+			fail(circulation.ValueCodeInternal, "index_failed", err)
+			return
+		}
+	}
+	totalElements, totalKV := indexElementsTx(tx, elems)
+	var next map[string]any
+	totalVocab := 0
+	if mode == circulation.ValueFull {
+		var reason string
+		if next, totalVocab, reason, err = l.rebuildVocabularyTx(tx); err != nil {
+			fail(circulation.ValueCodeInternal, reason, err)
+			return
+		}
+	}
+	if err := setIndexMeta(tx, map[string]string{
+		"last_update_ms": fmt.Sprintf("%d", time.Now().UTC().UnixMilli()),
+	}); err != nil {
+		fail(circulation.ValueCodeInternal, "meta_failed", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail(circulation.ValueCodeUnavailable, "tx_commit_failed", err)
+		return
+	}
+	if next != nil {
+		if err := writeVocabularyFiles(l.frame.ContextDir, next, 0o644); err != nil {
+			fail(circulation.ValueCodeInternal, "vocab_finalize_failed", err)
+			return
+		}
+	}
+	l.emitResponseOK(in, map[string]any{
+		"total_elements_indexed": totalElements,
+		"total_kv_rows":          totalKV,
+		"total_links":            0,
+		"total_vocab_nodes":      totalVocab,
+		"duration_ms":            time.Since(start).Milliseconds(),
+		"mode":                   mode,
+	})
+}
+
+// rebuildVocabularyInPlace rebuilds the vocabulary (files and vocab_nodes) from
+// what the existing projection observed, leaving the meaning index untouched.
+// The caller holds the projection lock.
+func (l *ReflexiveLoop) rebuildVocabularyInPlace(in circulation.Intention, start time.Time) {
+	fail := func(code, reason string, err error) {
+		l.emitResponseError(errorResp(in, code, map[string]any{circulation.KeyReason: reason}, err.Error()))
+	}
+	db, err := l.projection()
+	if err != nil {
+		fail(circulation.ValueCodeUnavailable, "db_open_failed", err)
+		return
+	}
+
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{})
+	if err != nil {
+		fail(circulation.ValueCodeUnavailable, "tx_begin_failed", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := createMeaningSchema(tx); err != nil {
+		fail(circulation.ValueCodeConfiguration, "schema_create_failed", err)
+		return
+	}
+	if err := createVocabularySchema(tx); err != nil {
+		fail(circulation.ValueCodeConfiguration, "vocab_schema_failed", err)
+		return
+	}
+	next, totalVocab, reason, err := l.rebuildVocabularyTx(tx)
+	if err != nil {
+		fail(circulation.ValueCodeInternal, reason, err)
+		return
+	}
+	if err := setIndexMeta(tx, map[string]string{
+		"last_update_ms": fmt.Sprintf("%d", time.Now().UTC().UnixMilli()),
+	}); err != nil {
+		fail(circulation.ValueCodeInternal, "meta_failed", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail(circulation.ValueCodeUnavailable, "tx_commit_failed", err)
+		return
+	}
+	// Files last: they must never describe rows that were rolled back.
+	if err := writeVocabularyFiles(l.frame.ContextDir, next, 0o644); err != nil {
+		fail(circulation.ValueCodeInternal, "vocab_finalize_failed", err)
+		return
+	}
+	l.emitResponseOK(in, map[string]any{
+		"total_elements_indexed": 0,
+		"total_kv_rows":          0,
+		"total_links":            0,
+		"total_vocab_nodes":      totalVocab,
+		"duration_ms":            time.Since(start).Milliseconds(),
+		"mode":                   circulation.ValueVocabOnly,
 	})
 }
 
@@ -787,22 +1093,49 @@ func (l *ReflexiveLoop) capSQLiteUpdate(msg circulation.Message) {
 // rename on rebuild, and WAL's -wal/-shm companions are bound to a file name,
 // so a stale or deleted companion could attach to the wrong generation.
 func sqliteConnDSN(absPath string) string {
+	return sqliteDSN(absPath, "WAL", []string{fmt.Sprintf("journal_size_limit(%d)", walSizeLimitBytes)})
+}
+
+// sqliteBuildDSN opens a database that is being built (a rebuild's temporary
+// file): single writer, plain journal, so that no -wal/-shm companion exists
+// when the file is published under its final name.
+func sqliteBuildDSN(absPath string) string {
+	return sqliteDSN(absPath, "DELETE", nil)
+}
+
+// walSizeLimitBytes bounds the write-ahead log file left after a checkpoint.
+const walSizeLimitBytes = 64 << 20
+
+func sqliteDSN(absPath, journal string, extra []string) string {
 	q := url.Values{}
-	for _, p := range []string{
+	// busy_timeout comes first: switching a new file to the write-ahead log needs a
+	// lock that concurrent connections may hold, and without a timeout the open fails
+	// at once with SQLITE_BUSY.
+	pragmas := []string{
+		fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeoutM),
 		"foreign_keys(ON)",
-		"journal_mode(DELETE)",
+		"journal_mode(" + journal + ")",
 		"synchronous(NORMAL)",
 		"temp_store(MEMORY)",
-		fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeoutM),
 		"cache_size(-20000)",
-	} {
+	}
+	for _, p := range append(pragmas, extra...) {
 		q.Add("_pragma", p)
 	}
 	return absPath + "?" + q.Encode()
 }
 
 func openSQLite(absPath string) (*sql.DB, error) {
-	db, err := sql.Open(sqliteDriverName, sqliteConnDSN(absPath))
+	return openSQLiteDSN(sqliteConnDSN(absPath))
+}
+
+// openSQLiteForBuild opens a database file that is being built (see sqliteBuildDSN).
+func openSQLiteForBuild(absPath string) (*sql.DB, error) {
+	return openSQLiteDSN(sqliteBuildDSN(absPath))
+}
+
+func openSQLiteDSN(dsn string) (*sql.DB, error) {
+	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -869,19 +1202,48 @@ func openSQLite(absPath string) (*sql.DB, error) {
 // - Reports failure via returned `error`; callers convert it to the appropriate circulation response semantics.
 
 func applySQLitePragmas(exec sqlExec) error {
+	return applyPragmas(exec, "WAL", []string{fmt.Sprintf(`PRAGMA journal_size_limit = %d;`, walSizeLimitBytes)})
+}
+
+// applyBuildPragmas is applySQLitePragmas for a database being built: plain journal.
+func applyBuildPragmas(exec sqlExec) error {
+	return applyPragmas(exec, "DELETE", nil)
+}
+
+func applyPragmas(exec sqlExec, journal string, extra []string) error {
 	// Best-effort; ignore errors if driver doesn’t support some pragmas.
-	stmts := []string{
+	stmts := append([]string{
+		fmt.Sprintf(`PRAGMA busy_timeout = %d;`, defaultBusyTimeoutM),
 		`PRAGMA foreign_keys = ON;`,
-		`PRAGMA journal_mode = DELETE;`,
+		`PRAGMA journal_mode = ` + journal + `;`,
 		`PRAGMA synchronous = NORMAL;`,
 		`PRAGMA temp_store = MEMORY;`,
-		fmt.Sprintf(`PRAGMA busy_timeout = %d;`, defaultBusyTimeoutM),
 		`PRAGMA cache_size = -20000;`,
-	}
+	}, extra...)
 	for _, s := range stmts {
 		_, _ = exec.Exec(s)
 	}
 	return nil
+}
+
+// convertProjectionToWAL switches a projection file to the write-ahead log while
+// nobody else has it open. The mode is stored in the file: connections opened
+// later find it already set and need no lock to set it, where converting under
+// concurrent connections fails at once with SQLITE_BUSY whatever the timeout.
+// When the last connection closes, the log is folded in and its files removed.
+func convertProjectionToWAL(path string) error {
+	db, err := openSQLite(path)
+	if err != nil {
+		return err
+	}
+	_, _ = db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+	return db.Close()
+}
+
+// checkpointProjection folds the write-ahead log into the database file. Best
+// effort: readers may hold it back, and nothing depends on it succeeding.
+func checkpointProjection(exec sqlExec) {
+	_, _ = exec.Exec(`PRAGMA wal_checkpoint(PASSIVE);`)
 }
 
 // sqlExec is implemented by *sql.DB and *sql.Tx (and can be adapted).
@@ -968,6 +1330,7 @@ func createMeaningSchema(exec sqlExec) error {
 		`CREATE INDEX IF NOT EXISTS idx_elements_ctx_type ON elements(ctx_id, element_type);`,
 		`CREATE INDEX IF NOT EXISTS idx_elements_type ON elements(element_type);`,
 		`CREATE INDEX IF NOT EXISTS idx_elements_name ON elements(name);`,
+		`CREATE INDEX IF NOT EXISTS idx_elements_type_name ON elements(element_type, name);`,
 
 		`CREATE TABLE IF NOT EXISTS paths (
 			path_id INTEGER PRIMARY KEY,

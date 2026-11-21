@@ -27,6 +27,9 @@ import (
 	"strings"
 )
 
+// maxMeaningQueryLimit caps params.limit: one request cannot ask for the whole index.
+const maxMeaningQueryLimit = 1000
+
 // capSQLiteMeaningQuery
 //
 // External interaction contract source of truth:
@@ -40,7 +43,7 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 		return
 	}
 
-	db, err := openSQLite(dbPath(l.frame.ContextDir))
+	db, err := l.projection()
 	if err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeUnavailable,
 			map[string]any{circulation.KeyReason: "db_open_failed"},
@@ -48,8 +51,6 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 		))
 		return
 	}
-	defer db.Close()
-	_ = applySQLitePragmas(db)
 
 	// Params (v1 minimal):
 	//  - type (optional)
@@ -87,6 +88,9 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 		}
 		if v, ok := anyToInt(in.Params[circulation.KeyLimit]); ok && v > 0 {
 			limit = v
+		}
+		if limit > maxMeaningQueryLimit {
+			limit = maxMeaningQueryLimit
 		}
 		if v, ok := anyToInt(in.Params[circulation.KeyOffset]); ok && v >= 0 {
 			offset = v
@@ -220,12 +224,11 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 			return
 		}
 		fmt.Fprintf(&sb, `
- AND EXISTS (
-   SELECT 1
+ AND e.row_id IN (
+   SELECT k.element_row
    FROM kv k
    JOIN paths p ON p.path_id = k.key_path_id
-   WHERE k.element_row = e.row_id
-     AND p.path_kind = 'key'
+   WHERE p.path_kind = 'key'
      AND p.path_text IN (`)
 		for i := range variants {
 			if i > 0 {
@@ -254,12 +257,11 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 			return
 		}
 		fmt.Fprintf(&sb, `
- AND EXISTS (
-   SELECT 1
+ AND e.row_id IN (
+   SELECT k.element_row
    FROM kv k
    JOIN paths p ON p.path_id = k.key_path_id
-   WHERE k.element_row = e.row_id
-     AND p.path_kind = 'key'
+   WHERE p.path_kind = 'key'
      AND p.path_text IN (`)
 		for i := range variants {
 			if i > 0 {
@@ -288,12 +290,11 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 			return
 		}
 		fmt.Fprintf(&sb, `
- AND EXISTS (
-   SELECT 1
+ AND e.row_id IN (
+   SELECT k.element_row
    FROM kv k
    JOIN paths p ON p.path_id = k.key_path_id
-   WHERE k.element_row = e.row_id
-     AND p.path_kind = 'key'
+   WHERE p.path_kind = 'key'
      AND p.path_text IN (`)
 		for i := range variants {
 			if i > 0 {
@@ -315,12 +316,11 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 			return
 		}
 		fmt.Fprintf(&sb, `
- AND EXISTS (
-   SELECT 1
+ AND e.row_id IN (
+   SELECT k.element_row
    FROM kv k
    JOIN paths p ON p.path_id = k.key_path_id
-   WHERE k.element_row = e.row_id
-     AND p.path_kind = 'key'
+   WHERE p.path_kind = 'key'
      AND p.path_text IN (`)
 		for i := range variants {
 			if i > 0 {
@@ -342,12 +342,11 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 			return
 		}
 		fmt.Fprintf(&sb, `
- AND EXISTS (
-   SELECT 1
+ AND e.row_id IN (
+   SELECT k.element_row
    FROM kv k
    JOIN paths p ON p.path_id = k.key_path_id
-   WHERE k.element_row = e.row_id
-     AND p.path_kind = 'key'
+   WHERE p.path_kind = 'key'
      AND p.path_text IN (`)
 		for i := range variants {
 			if i > 0 {
@@ -416,8 +415,9 @@ func (l *ReflexiveLoop) capSQLiteMeaningQuery(msg circulation.Message) {
 	}
 	if ctxID != "" {
 		if ctxMode == circulation.ValueCtxModeSubtree {
-			sb.WriteString(" AND (e.ctx_id = ? OR e.ctx_id LIKE ? || '/%')")
-			args = append(args, ctxID, ctxID)
+			// A range, not LIKE: it can use the index and has no wildcard characters.
+			sb.WriteString(" AND (e.ctx_id = ? OR (e.ctx_id >= ? AND e.ctx_id < ?))")
+			args = append(args, ctxID, ctxID+"/", ctxID+"0")
 		} else {
 			sb.WriteString(" AND e.ctx_id = ?")
 			args = append(args, ctxID)
