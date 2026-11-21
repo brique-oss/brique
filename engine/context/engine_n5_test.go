@@ -1007,6 +1007,24 @@ func recvNoN5Msg(t *testing.T, ch <-chan circulation.Message, d time.Duration, l
 	}
 }
 
+// recvNoSuccessN5Msg waits d and fails only if the call SUCCEEDS. A remote instance that stops while a
+// call is in flight may answer it with a refusal before it goes away: an instance answers the caller of
+// a request that fails inside it (it used to stay silent until the caller gave up). "Fails closed" means
+// the call never completes with a result, not that no message of any kind arrives.
+func recvNoSuccessN5Msg(t *testing.T, ch <-chan circulation.Message, d time.Duration, label string) {
+	t.Helper()
+	select {
+	case msg := <-ch:
+		if msg.Kind != circulation.ValueKindResponse || msg.Response.Status == circulation.ValueStatusOK {
+			t.Fatalf("%s: the call did not fail closed: %#v", label, msg)
+		}
+		if msg.Response.Error == nil {
+			t.Fatalf("%s: a refusal without an error: %#v", label, msg)
+		}
+	case <-time.After(d):
+	}
+}
+
 func mustN5PayloadMap(t *testing.T, raw any) map[string]any {
 	t.Helper()
 	got, ok := raw.(map[string]any)
@@ -1340,7 +1358,7 @@ func TestEngine_N5_ENG_11_RemoteStopDuringInFlightRouteFailsClosed(t *testing.T)
 			"delay_ms": 1200,
 		},
 	))
-	recvNoN5Msg(t, h.sinkA, 1500*time.Millisecond, "n5 remote stop during in-flight route")
+	recvNoSuccessN5Msg(t, h.sinkA, 1500*time.Millisecond, "n5 remote stop during in-flight route")
 }
 
 func TestEngine_N5_ENG_12_PublicContextRoundTripHasNoEmbeddedIdentity(t *testing.T) {
