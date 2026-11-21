@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AuthoritySwitchTransport } from "../browser/AuthoritySwitchTransport.js";
+import { AuthoritySwitchTransport } from "../hosts/browser/AuthoritySwitchTransport.js";
 import type {
 	CirculationMessage,
 	Transport,

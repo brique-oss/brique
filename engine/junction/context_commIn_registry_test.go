@@ -19,8 +19,8 @@ package junction_test
 import (
 	"testing"
 
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 // Covers: N1-CCR-01, N1-CCR-10

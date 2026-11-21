@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestMatterReadByteAndLineRanges(t *testing.T) {

@@ -28,10 +28,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/shared"
 )
 
 // maxMeaningQueryExamined bounds the rows a filtered meaning.query may examine;

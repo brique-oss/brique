@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/access"
-	"brique_engine/security/admission"
-	"brique_engine/security/audit"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/trust"
 )
 
 type countingRecorder struct{ records []audit.Record }

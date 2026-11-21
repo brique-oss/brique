@@ -36,10 +36,10 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/security/browserhello"
-	"brique_engine/security/instancedescriptor"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/security/browserhello"
+	"brique_engine/engine/security/instancedescriptor"
 )
 
 func writeTestTLSCertificate(t *testing.T) (string, string) {

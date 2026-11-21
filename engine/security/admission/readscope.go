@@ -16,7 +16,7 @@
 
 package admission
 
-import "brique_engine/security/trust"
+import "brique_engine/engine/security/trust"
 
 // ReadScope answers "may this external caller read X?" for handlers that must
 // filter their own result (meaning.query, read.structure, read.state, trace). It

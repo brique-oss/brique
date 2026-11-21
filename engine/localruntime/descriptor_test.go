@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/locking"
 )
 
 func testDescriptor(t *testing.T, root string, state string) EngineRuntimeDescriptor {
 	t.Helper()
-	id, err := shared.DirectoryObjectIdentity(root)
+	id, err := locking.DirectoryObjectIdentity(root)
 	if err != nil {
 		t.Fatal(err)
 	}

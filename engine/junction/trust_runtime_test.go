@@ -25,11 +25,11 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/pending"
-	"brique_engine/security/replay"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/replay"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 type registryTestSigner struct{ descriptor signer.Descriptor }

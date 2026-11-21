@@ -61,10 +61,11 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	_ "modernc.org/sqlite"
 )
 
 // --- Choose ONE driver blank import ---
@@ -565,7 +566,7 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 
 	// Publish the new generation: a new name, then the pointer. The old file is
 	// never replaced.
-	if err := shared.AtomicReplace(tmpPath, nextPath); err != nil {
+	if err := filesystem.AtomicReplace(tmpPath, nextPath); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: "atomic_swap_failed"},
 			err.Error(),
@@ -589,14 +590,14 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 	// If we staged vocabulary.json during rebuild, finalize it now (best-effort but should be consistent).
 	if mode == circulation.ValueFull || mode == circulation.ValueVocabOnly {
 		if stagedVocabTmp != "" {
-			if err := shared.AtomicReplace(stagedVocabTmp, vocabularyPath(l.frame.ContextDir)); err != nil {
+			if err := filesystem.AtomicReplace(stagedVocabTmp, vocabularyPath(l.frame.ContextDir)); err != nil {
 				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 					map[string]any{circulation.KeyReason: "vocab_finalize_failed"},
 					err.Error(),
 				))
 				return
 			}
-			if err := shared.AtomicReplace(stagedVocabLLMTmp, vocabularyLLMPath(l.frame.ContextDir)); err != nil {
+			if err := filesystem.AtomicReplace(stagedVocabLLMTmp, vocabularyLLMPath(l.frame.ContextDir)); err != nil {
 				l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 					map[string]any{circulation.KeyReason: "vocab_llm_finalize_failed"},
 					err.Error(),
@@ -605,7 +606,7 @@ func (l *ReflexiveLoop) capSQLiteRebuild(msg circulation.Message) {
 			}
 		}
 	}
-	shared.SyncDir(filepath.Dir(nextPath))
+	filesystem.SyncDir(filepath.Dir(nextPath))
 
 	l.emitResponseOK(in, map[string]any{
 		"total_elements_indexed": totalElements,
@@ -1566,15 +1567,15 @@ func writeJSONFile(absPath string, v any, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return shared.WriteFileSynced(absPath, b, perm)
+	return filesystem.WriteFileSynced(absPath, b, perm)
 }
 
 func writeTextFile(absPath string, text string, perm os.FileMode) error {
-	return shared.WriteFileSynced(absPath, []byte(text), perm)
+	return filesystem.WriteFileSynced(absPath, []byte(text), perm)
 }
 
 func atomicWriteText(absPath string, text string, perm os.FileMode) error {
-	return shared.WriteFileAtomic(absPath, []byte(text), perm)
+	return filesystem.WriteFileAtomic(absPath, []byte(text), perm)
 }
 
 // newUUIDLike
@@ -1689,5 +1690,5 @@ func atomicWriteJSON(absPath string, v any, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return shared.WriteFileAtomic(absPath, b, perm)
+	return filesystem.WriteFileAtomic(absPath, b, perm)
 }

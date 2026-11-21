@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func writeFileT(t *testing.T, path, content string) {

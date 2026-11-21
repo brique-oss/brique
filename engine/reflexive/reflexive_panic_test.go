@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func panicTestIntention(id, capName string) circulation.Message {

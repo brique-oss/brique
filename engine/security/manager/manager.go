@@ -21,16 +21,17 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/security/activation"
-	"brique_engine/security/audit"
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/pending"
-	"brique_engine/security/replay"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/activation"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/replay"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 const (
@@ -119,7 +120,7 @@ func Start(options Options, catalog trust.Catalog, registry *junction.ContextCom
 			return nil, fmt.Errorf("configured generation conflicts with durable activation")
 		}
 	}
-	if generation == "" || !shared.ValidProtectedRelativePath(generation) || strings.Contains(generation, "/") {
+	if generation == "" || !protectedfile.ValidProtectedRelativePath(generation) || strings.Contains(generation, "/") {
 		return nil, fmt.Errorf("initial security generation is required")
 	}
 
@@ -378,7 +379,7 @@ func (manager *Manager) findSuccessor(catalog trust.Catalog) (string, *trust.Dec
 	matches := make([]match, 0, 1)
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == manager.generation || !entry.IsDir() || !shared.ValidProtectedRelativePath(name) || strings.Contains(name, "/") {
+		if name == manager.generation || !entry.IsDir() || !protectedfile.ValidProtectedRelativePath(name) || strings.Contains(name, "/") {
 			continue
 		}
 		content, err := readPolicyEnvelope(manager.options, name)
@@ -386,7 +387,7 @@ func (manager *Manager) findSuccessor(catalog trust.Catalog) (string, *trust.Dec
 			continue
 		}
 		decoded, verifyErr := trust.VerifyAndDecode(content, manager.authority)
-		shared.ZeroBytes(content)
+		protectedfile.ZeroBytes(content)
 		if verifyErr != nil {
 			continue
 		}
@@ -418,7 +419,7 @@ func loadGeneration(options Options, generation string) (*bootstrap.Candidate, *
 		_ = candidate.Close()
 		return nil, nil, err
 	}
-	defer shared.ZeroBytes(content)
+	defer protectedfile.ZeroBytes(content)
 	decoded, err := trust.VerifyAndDecode(content, candidate.PolicyAuthority())
 	if err != nil {
 		_ = candidate.Close()
@@ -440,10 +441,10 @@ func peerDirectory(candidate *bootstrap.Candidate, decoded *trust.DecodeResult) 
 }
 
 func openReplay(options Options) (*replay.Service, error) {
-	if err := shared.ValidateProtectedDirectory(options.SecurityDirectory, options.AllowedOwnerUIDs); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(options.SecurityDirectory, options.AllowedOwnerUIDs); err != nil {
 		return nil, err
 	}
-	file, err := shared.OpenProtectedFile(filepath.Join(options.SecurityDirectory, defaultReplayFile), true, options.AllowedOwnerUIDs, nil)
+	file, err := protectedfile.OpenProtectedFile(filepath.Join(options.SecurityDirectory, defaultReplayFile), true, options.AllowedOwnerUIDs, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open protected replay journal")
 	}
@@ -513,7 +514,7 @@ func readPolicyEnvelope(options Options, generation string) ([]byte, error) {
 	if options.PolicyDirectory != "" {
 		return shared.ReadInstanceFile(options.PolicyDirectory, generationFile(generation, defaultPolicyFile), trust.MaxEnvelopeBytes)
 	}
-	return shared.ReadProtectedFile(options.SecurityDirectory, generationFile(generation, defaultPolicyFile), shared.ProtectedFileOptions{
+	return protectedfile.ReadProtectedFile(options.SecurityDirectory, generationFile(generation, defaultPolicyFile), protectedfile.ProtectedFileOptions{
 		MaxBytes: trust.MaxEnvelopeBytes, AllowedOwnerUIDs: options.AllowedOwnerUIDs,
 	})
 }

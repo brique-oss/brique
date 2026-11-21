@@ -19,10 +19,10 @@ package comm
 import (
 	"fmt"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/audit"
-	"brique_engine/security/refusal"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/refusal"
 )
 
 // deliveryStatus describes acceptance by the next local communication queue.

@@ -27,11 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/security/manager"
-	"brique_engine/security/policysrc"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/manager"
+	"brique_engine/engine/security/policysrc"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
 )
 
 func newDir(t *testing.T) *Dir {

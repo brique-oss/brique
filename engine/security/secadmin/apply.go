@@ -25,10 +25,11 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"brique_engine/security/catalog"
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/catalog"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // Compiled is the access source compiled against the head generation.
@@ -182,7 +183,7 @@ func (d *Dir) sign(policy trust.Policy, authority trust.Authority) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	defer shared.ZeroBytes(private)
+	defer protectedfile.ZeroBytes(private)
 	return SignPolicy(policy, authority.KeyID, private)
 }
 

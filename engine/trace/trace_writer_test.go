@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
 )
 
 func writerEvent(i int) circulation.TraceWire {

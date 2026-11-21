@@ -21,7 +21,7 @@ package secadmin
 import (
 	"os"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // accessProblem reports an entry of the security directory whose owner or access
@@ -31,7 +31,7 @@ func accessProblem(absolute, rel string, info os.FileInfo) string {
 	if !info.IsDir() && !info.Mode().IsRegular() {
 		return ""
 	}
-	if err := shared.InspectProtectedPath(absolute, info.IsDir()); err != nil {
+	if err := protectedfile.InspectProtectedPath(absolute, info.IsDir()); err != nil {
 		return fmtProblem("%s: %v; expected an owner and an access list limited to the current user, the administrators and the system", rel, err)
 	}
 	return ""

@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 // Matter and structure identifiers become file names of the context. An identifier that is a

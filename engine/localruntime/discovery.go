@@ -14,7 +14,7 @@ import (
 	"errors"
 	"strings"
 
-	"brique_engine/shared"
+	"brique_engine/contracts/directoryobject"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 
 var rawBase64 = base64.RawURLEncoding
 
-func DiscoveryKey(id shared.DirectoryObjectID) (string, error) {
+func DiscoveryKey(id directoryobject.ID) (string, error) {
 	key := id.Key()
 	if key == "" {
 		return "", errors.New("invalid root directory identity")

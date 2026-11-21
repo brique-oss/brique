@@ -3,7 +3,7 @@ package reflexive
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestVocabularyPathForElement(t *testing.T) {

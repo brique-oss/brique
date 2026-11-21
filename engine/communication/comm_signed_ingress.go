@@ -14,16 +14,16 @@ import (
 	"strconv"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/audit"
-	"brique_engine/security/limits"
-	"brique_engine/security/refusal"
-	"brique_engine/security/replay"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/limits"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/security/replay"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/shared"
 )
 
 func (l *CommLoop) loopSignedExternalIngress() {

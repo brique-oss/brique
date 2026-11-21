@@ -10,24 +10,38 @@ about who may do what, the signed protocol, keys and policy generations, running
 
 ## Layout
 
+One Go module (`brique_engine`) at the repository root. Paths are relative to the repository root. The
+dependency rule is enforced by `engine/architecture_test.go`: `contracts` import only the standard library;
+`platform` imports `contracts` and `golang.org/x/sys` only; no component imports another component's internals.
+
 | Directory | What it holds |
 |---|---|
-| `main.go` | process entry: flags, security start-up, signals, shutdown |
-| `context/` | the context tree and its loops |
-| `communication/` | routing, interfaces (ws, http, https), signed ingress and egress |
-| `junction/` | `Delivery` and the authority it carries, wrapper secrets and delegation, trace emission |
-| `execution/`, `matter/`, `reflexive/`, `trace/` | the families, each with its own door |
-| `security/` | the security subsystem (package map in SECURITY.md, appendix B) |
+| `cmd/brique/` | the engine's process entry: flags, security start-up, signals, shutdown |
 | `cmd/brique-sec/` | offline administration of the instance's security |
-| `shared/` | files, atomic replace, protected files (unix and windows) |
-| `template/` | the canonical `context.json` and capacity templates |
-| `sandbox/` | fixtures used by the integration tests |
+| `cmd/brique-launcher/`, `cmd/brique-web/`, `cmd/brique-browser-host/` | the launcher, the public web host and the browser native host (composition only) |
+| `contracts/` | formats shared by several components, standard library only: `directoryobject`, `buildinfo`, `publication`, `webprofile`, `instanceselection` |
+| `platform/` | operating-system primitives: `filesystem` (atomic files), `protectedfile`, `locking`, `storage` (free disk), `listener` (accept back-off) |
+| `engine/context/` | the context tree and its loops |
+| `engine/communication/` | routing, interfaces (ws, http, https), signed ingress and egress |
+| `engine/junction/` | `Delivery` and the authority it carries, wrapper secrets and delegation, trace emission |
+| `engine/execution/`, `engine/matter/`, `engine/reflexive/`, `engine/trace/` | the families, each with its own door |
+| `engine/security/` | the security subsystem (package map in SECURITY.md, appendix B) |
+| `engine/transport/` | `networkpolicy`, `signedtransport`, `browsertransport`, `browserclient`: the signed engine-to-engine transport |
+| `engine/circulation/`, `engine/configuration/` | the message and trace wire types and the configuration keys and values used by the families |
+| `engine/shared/` | instance files, element names, control plane and the engine's own concepts |
+| `engine/enginebuild/` | the engine's build provenance |
+| `engine/localruntime/`, `engine/browserbridge/` | local engine descriptor, discovery and `brique.local-control`; the browser bridge protocol and its IPC |
+| `engine/template/`, `engine/sandbox/` | the canonical `context.json` and capacity templates; fixtures used by the integration tests |
+| `launcher/` | instance registry, supervisor, runtime package, launcher control, the `InstanceResolver` |
+| `spark/hosts/web/` | the web host: static server and WebSocket proxy (Go) next to the TypeScript publisher |
+| `spark/hosts/browser/` | the browser host: native-messaging host (`host/`, Go), the extension (`extension/`) and the page bridge (TypeScript) |
+| `integration/` | tests that cross components or executables |
 
 ## Build and run
 
 ```sh
 go build ./...                      # engine, brique-sec, launcher, web host and browser host
-go build -o brique-engine .
+go build -o brique-engine ./cmd/brique       # from the repository root
 go build -o brique-sec ./cmd/brique-sec
 
 ./brique-engine -root_path <instance>/root     # an instance runs locally with no further setup
@@ -315,25 +329,25 @@ GOOS=windows go vet ./...           # type-checks the windows code and its tests
 Some tests need `python3` and a C++ compiler (`c++`, with libcurl) and skip if they are absent. The
 end-to-end tests under `context/engine_real_*` build the engine and `brique-sec`, start separate engines
 as processes and drive them for real; the second one uses Spark and Pulse as the user interface and needs
-`node` and the repository's `npm install` (`go test ./context -run TestRealProcesses`).
+`node` and the repository's `npm install` (`go test ./engine/context -run TestRealProcesses`).
 
 * **Fuzz targets** (run each for a while, not only the seed corpus):
-  `go test ./security/wire -run xxx -fuzz FuzzVerifyClear`, and likewise `FuzzBootstrapDocument`,
+  `go test ./engine/security/wire -run xxx -fuzz FuzzVerifyClear`, and likewise `FuzzBootstrapDocument`,
   `FuzzActivationStateLoad`, `FuzzJournalRecovery`, `FuzzIdentifiers`, `FuzzProtectedRelativePath`,
   `FuzzSignedIngressHandler`, `FuzzParseTarget`, `FuzzStrictJSONAndCanonicalization`.
 * **Crash campaigns** kill a child process at random instants and check what is left:
-  `go test ./security/activation ./security/replay ./security/secadmin -run CrashCampaign`.
-* **Benchmarks**: `go test ./security/... ./junction -run xxx -bench .`
+  `go test ./engine/security/activation ./engine/security/replay ./engine/security/secadmin -run CrashCampaign`.
+* **Benchmarks**: `go test ./engine/security/... ./engine/junction -run xxx -bench .`
 * **Wrapper protocol vectors** are shared with the wrapper libraries:
   `templates/instance/wrapper/vectors/`.
 
 ## Keeping SECURITY.md true
 
 The capacity matrix in SECURITY.md is generated from the code. If a class or an extractor
-changes, `go test .` fails; regenerate with
+changes, `go test ./engine` fails; regenerate with
 
 ```sh
-go test . -run SecurityDocCapacityMatrix -update-security-doc
+go test ./engine -run SecurityDocCapacityMatrix -update-security-doc
 ```
 
 and read the diff: it is the change in what the engine allows.

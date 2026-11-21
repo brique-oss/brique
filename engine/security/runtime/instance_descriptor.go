@@ -10,8 +10,8 @@ import (
 	"errors"
 	"time"
 
-	"brique_engine/security/instancedescriptor"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/instancedescriptor"
+	"brique_engine/engine/security/trust"
 )
 
 var ErrInstanceDescriptorAuthentication = errors.New("instance descriptor authentication failed")

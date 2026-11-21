@@ -11,7 +11,7 @@ import {
   type SerializedTransportBridge,
 } from "../../pulse/runtime/index.js";
 import type { SparkRendererPayload } from "./rendererPayload.js";
-import { AuthoritySwitchTransport, type BrowserAuthority } from "../browser/AuthoritySwitchTransport.js";
+import { AuthoritySwitchTransport, type BrowserAuthority } from "./browser/AuthoritySwitchTransport.js";
 
 export function createRendererPulse(payload: SparkRendererPayload): PulseRuntime {
   const bridge = (globalThis as { __SPARK_TRANSPORT_BRIDGE__?: SerializedTransportBridge })

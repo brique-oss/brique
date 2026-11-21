@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
 )
 
 func pendingTestResponse(id, status string, seq int) circulation.Message {

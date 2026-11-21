@@ -27,10 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 const secretTestValue = "sk-test-0123456789-not-a-real-key"
@@ -135,7 +136,7 @@ func grantW1(secrets ...string) []trust.WrapperSecret {
 
 func storeSecret(t *testing.T, machine, name, value string) {
 	t.Helper()
-	if err := shared.WriteProtectedFile(machine, shared.SecretsDir+"/"+name, []byte(value), 0o600); err != nil {
+	if err := protectedfile.WriteProtectedFile(machine, shared.SecretsDir+"/"+name, []byte(value), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

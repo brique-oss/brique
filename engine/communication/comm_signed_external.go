@@ -23,10 +23,10 @@ import (
 	"fmt"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/replay"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/replay"
+	"brique_engine/engine/security/wire"
 )
 
 const (

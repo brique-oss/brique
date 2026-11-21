@@ -32,7 +32,7 @@ import (
 	"strings"
 	"sync"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 const (

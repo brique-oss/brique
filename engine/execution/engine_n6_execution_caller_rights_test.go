@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/security/catalog"
-	"brique_engine/security/manager"
-	"brique_engine/security/refusal"
-	"brique_engine/security/secadmin"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/catalog"
+	"brique_engine/engine/security/manager"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/security/secadmin"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 )
 
 const (

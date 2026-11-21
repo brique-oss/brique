@@ -1564,6 +1564,8 @@ Other browsers, Windows-native ACLs and non-loopback network deployments remain 
 
 ## Appendix B. Package map
 
+Package names are relative to `engine/`, except `contracts/`, `platform/`, `launcher/` and `cmd/` (repository root) and the two Spark hosts (`spark/hosts/web`, `spark/hosts/browser/host`).
+
 | Package | Role |
 |---|---|
 | `security/wire` | signed envelope: build, strict verify, classified failures |
@@ -1577,10 +1579,10 @@ Other browsers, Windows-native ACLs and non-loopback network deployments remain 
 | `security/runtime` | one atomically published complete runtime (signers, trust, replay, peers) |
 | `security/instancedescriptor` | strict short-lived public descriptor, signature/freshness/origin checks and `bid1_` binding hash |
 | `security/browserhello` | bounded mutual WSS hello state machines, fresh challenges and transcript-derived `bwg1_` connection generation |
-| `networkpolicy` | bounded DNS resolution, public/LAN address policy and IP-pinned dial function for browser WSS |
-| `browsertransport` | real WebSocket hello, bounded ordered `security/wire` framing and transcript-derived registration into `signedtransport`; no Comm policy |
-| `browserclient` | initiating composition of current Brique Sec, network policy, pinned WSS dial and pre-published hub route; no browser message authority |
-| `signedtransport` | bounded in-memory rendez-vous from authenticated pair/key/`bwg1_` routes to Comm; no WebSocket, Intention or policy semantics |
+| `transport/networkpolicy` | bounded DNS resolution, public/LAN address policy and IP-pinned dial function for browser WSS |
+| `transport/browsertransport` | real WebSocket hello, bounded ordered `security/wire` framing and transcript-derived registration into `signedtransport`; no Comm policy |
+| `transport/browserclient` | initiating composition of current Brique Sec, network policy, pinned WSS dial and pre-published hub route; no browser message authority |
+| `transport/signedtransport` | bounded in-memory rendez-vous from authenticated pair/key/`bwg1_` routes to Comm; no WebSocket, Intention or policy semantics |
 | `security/signer`, `signer/file` | signer boundary and the file provider |
 | `security/bootstrap` | protected bootstrap loader |
 | `security/hostdir` | where the instance's security folder and the machine's directory are, found from the instance alone |
@@ -1593,7 +1595,12 @@ Other browsers, Windows-native ACLs and non-loopback network deployments remain 
 | `junction` | `Delivery`, derivation, response permits, wrapper secrets and delegation, provenance |
 | `communication` | signed ingress and egress, routing, restricted wrappers, and the browser Sink whose distant and local branches bind one bridge channel to authenticated or explicitly admitted authority |
 | `browserbridge` | bounded native-messaging/session state plus owner-only generation-bound engine IPC client/listener; no identity or admission |
-| `browserhost` | keyless native-host orchestration from protected launcher choice and engine discovery to one K2 Session |
+| `spark/hosts/browser/host` (`browserhost`) | keyless native-host orchestration from protected launcher choice and engine discovery to one K2 Session |
 | `launcher` | protected instance registry, supervision and browser gateway choice |
 | `execution`, `matter`, `reflexive`, `context`, `trace` | the families and their doors |
-| `shared` | protected files (unix and windows), instance files, element names, atomic replace |
+| `shared` | what remains of the former shared package: instance files, element names, control plane and the engine's own concepts (being moved into the engine) |
+| `contracts/directoryobject`, `contracts/buildinfo` | the identity of a directory object and the build-information contract (standard library only) |
+| `contracts/publication`, `contracts/webprofile` | reading and verifying a Spark publication snapshot; the exact checks of a web server profile (standard library only) |
+| `platform/filesystem`, `platform/protectedfile` | atomic write and replace; protected files and directories (unix and windows) |
+| `platform/locking`, `platform/storage`, `platform/listener` | kernel directory locks, free disk space, accept-loop back-off |
+| `enginebuild` | the engine's build provenance (`CurrentBuildInfo`) |

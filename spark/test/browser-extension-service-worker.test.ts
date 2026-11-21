@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
-import { attachPagePort } from "../../browser-extension/service-worker.js";
+import { attachPagePort } from "../hosts/browser/extension/service-worker.js";
 
 class MockEvent<T extends (...args: any[]) => void> {
   listeners: T[] = [];
@@ -120,7 +120,7 @@ test("content relay releases open only on trusted active user input", () => {
       listeners.set(name, entries);
     },
   };
-  vm.runInNewContext(readFileSync(new URL("../../browser-extension/content-relay.js", import.meta.url), "utf8"), sandbox);
+  vm.runInNewContext(readFileSync(new URL("../hosts/browser/extension/content-relay.js", import.meta.url), "utf8"), sandbox);
   const emit = (name: string, event: any) => { for (const listener of listeners.get(name) ?? []) listener(event); };
   emit("message", { source: pageWindow, origin: sandbox.location.origin, data: {
     marker: "brique.browser.page/1", direction: "page", message: { kind: "open", uiName: "root" },
@@ -148,7 +148,7 @@ function loadRelay(now: () => number) {
       listeners.set(name, entries);
     },
   };
-  vm.runInNewContext(readFileSync(new URL("../../browser-extension/content-relay.js", import.meta.url), "utf8"), sandbox);
+  vm.runInNewContext(readFileSync(new URL("../hosts/browser/extension/content-relay.js", import.meta.url), "utf8"), sandbox);
   const emit = (name: string, event: any) => { for (const listener of listeners.get(name) ?? []) listener(event); };
   const fromPage = (message: any) => emit("message", { source: pageWindow, origin: sandbox.location.origin,
     data: { marker: "brique.browser.page/1", direction: "page", message } });
@@ -209,7 +209,7 @@ test("page bridge fetches a linked descriptor only when the relay asks for it", 
     URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, Error, Promise, Map, Set, String, Number, Math, JSON,
   };
   sandbox.globalThis = sandbox;
-  vm.runInNewContext(readFileSync(new URL("../../browser-extension/page-bridge.js", import.meta.url), "utf8"), sandbox);
+  vm.runInNewContext(readFileSync(new URL("../hosts/browser/extension/page-bridge.js", import.meta.url), "utf8"), sandbox);
   const deliver = (message: any) => { for (const listener of listeners) listener({ source: pageWindow, origin: "https://brique.example",
     data: { marker: "brique.browser.page/1", direction: "extension", message } }); };
   sandbox.__SPARK_TRANSPORT_BRIDGE__.open();

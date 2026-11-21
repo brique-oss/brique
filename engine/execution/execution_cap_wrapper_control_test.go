@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
 )
 
 // newWrapperControlHarness creates an ExecutionLoop with a named wrapper

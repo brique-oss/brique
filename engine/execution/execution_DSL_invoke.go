@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/security/refusal"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/shared"
 )
 
 func (l *ExecutionLoop) invokeAndAwait(in circulation.Intention) (circulation.Response, error) {

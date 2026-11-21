@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func mustVocabularyAxis(t *testing.T, resp circulation.Response, wantAxis string) map[string]any {

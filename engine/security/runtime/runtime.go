@@ -27,10 +27,10 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/security/pending"
-	"brique_engine/security/replay"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/replay"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 var (

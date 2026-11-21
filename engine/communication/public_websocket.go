@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/trust"
 
 	"github.com/gorilla/websocket"
 )

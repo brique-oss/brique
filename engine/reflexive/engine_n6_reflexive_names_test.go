@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 // The name of a capacity, a schema or a document is one file name. Without that rule a

@@ -19,9 +19,9 @@ package execution_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/security/audit"
-	"brique_engine/security/secadmin"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/secadmin"
 )
 
 // The whole path of a restricted wrapper, with nothing injected: the policy names the

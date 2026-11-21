@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func TestMatterWrite_N1_MWR_01_Helpers(t *testing.T) {

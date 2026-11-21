@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // The TLS material of the HTTPS interface lives with the keys, on the machine, in
@@ -121,9 +121,9 @@ func (d *Dir) TLSInit(options TLSOptions) (*TLSInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer shared.ZeroBytes(keyDER)
+	defer protectedfile.ZeroBytes(keyDER)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	defer shared.ZeroBytes(keyPEM)
+	defer protectedfile.ZeroBytes(keyPEM)
 	// Key first: a reader that sees the new certificate always finds a key at least as new.
 	if err := d.writeFile(TLSKeyFile, keyPEM, 0o600); err != nil {
 		return nil, err

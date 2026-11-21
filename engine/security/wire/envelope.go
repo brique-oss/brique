@@ -30,9 +30,9 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/security/audit"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 const (

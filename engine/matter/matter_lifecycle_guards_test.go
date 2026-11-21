@@ -5,7 +5,7 @@ package matter
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestMatterLifecycleRevisionAndSizeGuards(t *testing.T) {

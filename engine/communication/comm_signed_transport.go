@@ -10,8 +10,8 @@ import (
 	"errors"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 const signedTransportDeliveryTimeout = 10 * time.Second

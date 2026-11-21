@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 func poolPath(t *testing.T, l *ReflexiveLoop) string {

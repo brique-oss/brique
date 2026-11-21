@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
 )
 
 type nullSegment struct{}

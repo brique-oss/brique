@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/networkpolicy"
-	"brique_engine/security/instancedescriptor"
+	"brique_engine/engine/security/instancedescriptor"
+	"brique_engine/engine/transport/networkpolicy"
 )
 
 var ErrBrowserEndpoint = errors.New("browser endpoint refused")

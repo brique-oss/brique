@@ -32,12 +32,12 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/shared"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 // leaseWorld is a Matter loop with an HTTP getter and a policy that can be

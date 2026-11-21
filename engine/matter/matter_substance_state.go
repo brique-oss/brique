@@ -12,8 +12,8 @@ import (
 	"io"
 	"os"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 // substanceState is the engine-owned committed projection of a local payload.

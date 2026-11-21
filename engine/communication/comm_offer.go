@@ -22,9 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 // Two goroutines route every message of the communication family, for every interface. An

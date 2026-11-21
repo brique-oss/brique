@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/refusal"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/refusal"
 )
 
 const maxExternalExecutionBindings = defaultMaxConcurrentJobs

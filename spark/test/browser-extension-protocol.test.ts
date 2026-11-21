@@ -14,7 +14,7 @@ import {
   encodeUTF8,
   parseHostMessage,
   parsePageRequest,
-} from "../../browser-extension/protocol.js";
+} from "../hosts/browser/extension/protocol.js";
 
 test("browser extension derives immutable coordinates from Chrome sender facts", () => {
   assert.deepEqual(canonicalSender({ origin: "https://ui.example", documentId: "01234567-89ab-cdef-0123-456789abcdef", frameId: 7 }), {
@@ -45,8 +45,8 @@ test("browser extension UTF-8 payload codec is canonical and bounded", () => {
 });
 
 test("Firefox package keeps the bridge contract with an explicit Gecko identity", () => {
-  const chromium = JSON.parse(readFileSync(new URL("../../browser-extension/manifest.json", import.meta.url), "utf8"));
-  const firefox = JSON.parse(readFileSync(new URL("../../browser-extension/manifest.firefox.json", import.meta.url), "utf8"));
+  const chromium = JSON.parse(readFileSync(new URL("../hosts/browser/extension/manifest.json", import.meta.url), "utf8"));
+  const firefox = JSON.parse(readFileSync(new URL("../hosts/browser/extension/manifest.firefox.json", import.meta.url), "utf8"));
   assert.equal(firefox.manifest_version, 3);
   assert.equal(firefox.browser_specific_settings.gecko.id, "brique-browser-bridge@brique.dev");
   assert.deepEqual(firefox.browser_specific_settings.gecko.data_collection_permissions, { required: ["none"] });

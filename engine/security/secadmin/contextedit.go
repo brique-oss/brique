@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"brique_engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 // DefaultHTTPSAddress is where the HTTPS interface listens when none is given.
@@ -86,7 +86,7 @@ func EnsureOuterInterface(rootPath, address string) (bool, error) {
 	if bytes.HasSuffix(raw, []byte("\n")) {
 		out.WriteString("\n")
 	}
-	return true, shared.WriteFileAtomic(file, out.Bytes(), 0o644)
+	return true, filesystem.WriteFileAtomic(file, out.Bytes(), 0o644)
 }
 
 // descend returns the object at a path of keys, creating nothing.

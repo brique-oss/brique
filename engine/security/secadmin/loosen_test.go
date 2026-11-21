@@ -19,7 +19,7 @@ package secadmin
 import (
 	"testing"
 
-	"brique_engine/shared/accesstest"
+	"brique_engine/engine/shared/accesstest"
 )
 
 func loosen(t *testing.T, path string) { t.Helper(); accesstest.Loosen(t, path) }

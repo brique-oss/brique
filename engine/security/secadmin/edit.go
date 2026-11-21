@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
 )
 
 // PrincipalAdd adds an enabled principal with one signing key.

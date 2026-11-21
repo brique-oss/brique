@@ -26,7 +26,7 @@ import (
 	"fmt"
 	"sort"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // SecretGrant says which wrappers may be given one secret.

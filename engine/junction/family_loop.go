@@ -16,7 +16,7 @@
 
 package junction
 
-import "brique_engine/shared"
+import "brique_engine/engine/shared"
 
 // -----------------------------
 // Family loop contract (substrate)

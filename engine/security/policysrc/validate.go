@@ -31,7 +31,7 @@ import (
 	"sort"
 	"strings"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 const (

@@ -19,7 +19,7 @@ package reflexive
 import (
 	"testing"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 func TestParseReflexiveCfg_N0_RCFG_01_NilConfig(t *testing.T) {

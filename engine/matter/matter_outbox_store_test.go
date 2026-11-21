@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // The durable outbox is one file per event (format /3). These tests state its invariants:

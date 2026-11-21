@@ -24,11 +24,11 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/admission"
-	"brique_engine/security/audit"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
 )
 
 // LocalAuthority is an opaque authority issued by the runtime to a trusted

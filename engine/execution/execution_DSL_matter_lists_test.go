@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func matterIntention(refs ...circulation.MatterRef) circulation.Intention {

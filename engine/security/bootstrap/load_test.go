@@ -17,7 +17,7 @@
 package bootstrap
 
 import (
-	"brique_engine/shared/accesstest"
+	"brique_engine/engine/shared/accesstest"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -31,10 +31,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/signer"
-	filesigner "brique_engine/security/signer/file"
-	"brique_engine/security/trust"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/signer"
+	filesigner "brique_engine/engine/security/signer/file"
+	"brique_engine/engine/security/trust"
 )
 
 func TestLoadBuildsCompleteRotationSet(t *testing.T) {

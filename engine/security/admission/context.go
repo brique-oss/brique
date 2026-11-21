@@ -27,11 +27,11 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/access"
-	"brique_engine/security/inner"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/inner"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
 )
 
 var ErrInvalidAdmission = errors.New("invalid external admission")

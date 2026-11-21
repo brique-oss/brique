@@ -19,8 +19,8 @@ package execution_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func TestEngine_N6_EXEC_16_PythonWrapperOutboundReflexiveAndMatterCalls(t *testing.T) {

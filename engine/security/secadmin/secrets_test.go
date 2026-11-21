@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 const testSecret = "sk-test-0123456789-not-a-real-key"
@@ -42,7 +42,7 @@ func TestSecretAddRoundTripsThroughTheProtectedReader(t *testing.T) {
 	if err != nil || size != len(testSecret) {
 		t.Fatalf("SecretAdd = %d, %v", size, err)
 	}
-	got, err := shared.ReadProtectedFile(d.Root, SecretsDir+"/anthropic", shared.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
+	got, err := protectedfile.ReadProtectedFile(d.Root, SecretsDir+"/anthropic", protectedfile.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
 	if err != nil {
 		t.Fatalf("the engine's reader refuses a stored secret: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestSecretAddReplacesTheValue(t *testing.T) {
 	if _, err := d.SecretAdd("anthropic", []byte("second\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := shared.ReadProtectedFile(d.Root, SecretsDir+"/anthropic", shared.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
+	got, err := protectedfile.ReadProtectedFile(d.Root, SecretsDir+"/anthropic", protectedfile.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
 	if err != nil || string(got) != "second" {
 		t.Fatalf("rotation: got %q, %v", got, err)
 	}
@@ -85,7 +85,7 @@ func TestSecretAddKeepsAMultilineValue(t *testing.T) {
 	if _, err := d.SecretAdd("pem", []byte(value+"\n")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := shared.ReadProtectedFile(d.Root, SecretsDir+"/pem", shared.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
+	got, err := protectedfile.ReadProtectedFile(d.Root, SecretsDir+"/pem", protectedfile.ProtectedFileOptions{MaxBytes: MaxSecretBytes})
 	if err != nil || string(got) != value {
 		t.Fatalf("multiline value: got %q, %v", got, err)
 	}

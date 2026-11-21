@@ -3,7 +3,7 @@ package junction
 import (
 	"testing"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 // SetFamily on a registry whose table was never created must not panic while

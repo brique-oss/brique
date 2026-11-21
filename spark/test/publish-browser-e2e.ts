@@ -8,7 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { SparkProjectionPlan } from "../core/types.js";
-import { publishSparkWeb } from "../web/WebPublisher.js";
+import { publishSparkWeb } from "../hosts/web/WebPublisher.js";
 
 const [sourceValue, contextValue, outputValue, repositoryValue] = process.argv.slice(2);
 if (!sourceValue || !contextValue || !outputValue || !repositoryValue) {

@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // Options carries the chain fields that belong to activation, not to the source.

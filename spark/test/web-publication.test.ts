@@ -16,7 +16,7 @@ import {
   SparkBootstrapFormat,
   SparkPublicationFormat,
   SparkUICatalogFormat,
-} from "../web/WebPublisher.js";
+} from "../hosts/web/WebPublisher.js";
 
 const repository = path.resolve(import.meta.dirname, "..", "..");
 

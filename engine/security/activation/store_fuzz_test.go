@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // FuzzActivationStateLoad loads an arbitrary activation-state file. Anything that

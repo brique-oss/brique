@@ -35,7 +35,7 @@ import (
 	"regexp"
 	"runtime"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 const (

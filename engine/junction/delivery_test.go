@@ -20,8 +20,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 func TestDeliveryZeroValueFailsClosed(t *testing.T) {

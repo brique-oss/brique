@@ -17,13 +17,13 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/browserbridge"
-	"brique_engine/browserclient"
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/inner"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/browserbridge"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/inner"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/browserclient"
 )
 
 var ErrBrowserSink = errors.New("browser UI channel refused")

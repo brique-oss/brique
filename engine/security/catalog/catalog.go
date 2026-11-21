@@ -10,7 +10,7 @@
 package catalog
 
 import (
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // Build returns the vocabulary a trust policy is compiled against: the resource

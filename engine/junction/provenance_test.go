@@ -19,9 +19,9 @@ package junction_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
 )
 
 // The engine stamps the principal of a chain's root on its trace events; a value a

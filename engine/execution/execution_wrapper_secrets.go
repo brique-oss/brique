@@ -29,9 +29,10 @@ import (
 	"regexp"
 	"strings"
 
-	"brique_engine/junction"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // errWrapperSecret marks the launch failures that come from a secret: a declaration that
@@ -112,12 +113,12 @@ func (l *ExecutionLoop) wrapperSecretEnv(cfg WrapperRuntimeCfg) (map[string]stri
 		if machine == "" {
 			return nil, refuse(need.Name, "this instance has no machine security directory")
 		}
-		value, err := shared.ReadProtectedFile(machine, shared.SecretsDir+"/"+need.Name, shared.ProtectedFileOptions{MaxBytes: shared.MaxSecretBytes})
+		value, err := protectedfile.ReadProtectedFile(machine, shared.SecretsDir+"/"+need.Name, protectedfile.ProtectedFileOptions{MaxBytes: shared.MaxSecretBytes})
 		if err != nil {
 			return nil, refuse(need.Name, "no usable value on this machine (brique-sec secret add %s): %v", need.Name, err)
 		}
 		out[need.Env] = string(value)
-		shared.ZeroBytes(value)
+		protectedfile.ZeroBytes(value)
 	}
 	return out, nil
 }

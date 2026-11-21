@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // bindExternalRequest retains the exact admitted root only for the synchronous

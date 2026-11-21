@@ -20,7 +20,7 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // What the operator hands to a peer is the public half of the key the engine signs with,

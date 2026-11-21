@@ -23,7 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/filesystem"
+	"brique_engine/platform/protectedfile"
 )
 
 // A ledger only grows: every transition appends a record and nothing leaves the index
@@ -69,15 +70,15 @@ func (service *Service) Maintain(path string, now time.Time, last *int64) (compa
 	}
 	temporary := path + ".compact"
 	_ = os.Remove(temporary) // a leftover of an interrupted pass
-	replacement, err := shared.OpenProtectedFile(temporary, true, nil, nil)
+	replacement, err := protectedfile.OpenProtectedFile(temporary, true, nil, nil)
 	if err != nil {
 		return false, 0, fmt.Errorf("open replacement replay journal: %w", err)
 	}
 	dropped, err = service.ledger.CompactDropping(replacement, func() error {
-		if err := shared.AtomicReplace(temporary, path); err != nil {
+		if err := filesystem.AtomicReplace(temporary, path); err != nil {
 			return err
 		}
-		shared.SyncDir(filepath.Dir(path))
+		filesystem.SyncDir(filepath.Dir(path))
 		return nil
 	}, now)
 	if err != nil {

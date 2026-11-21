@@ -22,7 +22,7 @@ import (
 	"os"
 	"strings"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 // warningWriter receives the configuration warnings; tests replace it.

@@ -17,17 +17,17 @@
 package secadmin
 
 import (
-	"brique_engine/security/hostdir"
+	"brique_engine/engine/security/hostdir"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/policysrc"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/policysrc"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
 )
 
 var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)

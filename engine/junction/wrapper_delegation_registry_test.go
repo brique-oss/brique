@@ -19,7 +19,7 @@ package junction_test
 import (
 	"testing"
 
-	"brique_engine/junction"
+	"brique_engine/engine/junction"
 )
 
 func TestContextCommRegistryOwnsOneStableWrapperDelegationStore(t *testing.T) {

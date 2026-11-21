@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"brique_engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 const matterTransactionSuffix = ".matter-txn.json"
@@ -92,11 +92,11 @@ func commitMatterTransaction(root, matterID, op string, steps []matterTransactio
 	if err := os.WriteFile(journalTmp, encoded, 0o600); err != nil {
 		return err
 	}
-	if err := shared.AtomicReplace(journalTmp, journal); err != nil {
+	if err := filesystem.AtomicReplace(journalTmp, journal); err != nil {
 		return err
 	}
 	for _, step := range steps {
-		if err := shared.AtomicReplace(filepath.Join(root, step.Temporary), filepath.Join(root, step.Final)); err != nil {
+		if err := filesystem.AtomicReplace(filepath.Join(root, step.Temporary), filepath.Join(root, step.Final)); err != nil {
 			return err
 		}
 	}
@@ -145,7 +145,7 @@ func recoverMatterTransactions(root string) error {
 			temporary := filepath.Join(root, step.Temporary)
 			final := filepath.Join(root, step.Final)
 			if _, err := os.Stat(temporary); err == nil {
-				if err := shared.AtomicReplace(temporary, final); err != nil {
+				if err := filesystem.AtomicReplace(temporary, final); err != nil {
 					return err
 				}
 				continue
@@ -210,7 +210,7 @@ func writeMatterTransactionRecord(root string, record matterTransaction) error {
 	if err := os.WriteFile(journalTmp, encoded, 0o600); err != nil {
 		return err
 	}
-	return shared.AtomicReplace(journalTmp, journal)
+	return filesystem.AtomicReplace(journalTmp, journal)
 }
 
 func applyAppendTransaction(root string, appendStep *matterAppendStep) error {
@@ -285,7 +285,7 @@ func commitMatterAppendTransaction(root, matterID string, appendStep matterAppen
 	if err := applyAppendTransaction(root, &appendStep); err != nil {
 		return err
 	}
-	if err := shared.AtomicReplace(filepath.Join(root, descriptorStep.Temporary), filepath.Join(root, descriptorStep.Final)); err != nil {
+	if err := filesystem.AtomicReplace(filepath.Join(root, descriptorStep.Temporary), filepath.Join(root, descriptorStep.Final)); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Join(root, appendStep.Block))

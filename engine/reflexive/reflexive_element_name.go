@@ -16,7 +16,7 @@
 
 package reflexive
 
-import "brique_engine/shared"
+import "brique_engine/engine/shared"
 
 // validElementName: the name of a capacity, a schema or a document is one file name, never
 // a path (see shared.ValidElementName).

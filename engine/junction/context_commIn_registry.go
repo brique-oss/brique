@@ -23,11 +23,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"brique_engine/security/audit"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/security/audit"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 // ContextCommEntry is what the engine knows about a context for routing.

@@ -17,10 +17,10 @@
 package comm
 
 import (
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 // communication/interface_factories.go

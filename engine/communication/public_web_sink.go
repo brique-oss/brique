@@ -17,13 +17,13 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/audit"
-	"brique_engine/security/inner"
-	"brique_engine/security/limits"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/inner"
+	"brique_engine/engine/security/limits"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 )
 
 var ErrPublicWebSink = errors.New("public web UI channel refused")

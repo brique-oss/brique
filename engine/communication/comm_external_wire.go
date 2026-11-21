@@ -16,7 +16,7 @@
 
 package comm
 
-import "brique_engine/circulation"
+import "brique_engine/engine/circulation"
 
 func rewriteExternalWireDestination(msg circulation.Message) circulation.Message {
 	toStr := string(msgToContext(&msg))

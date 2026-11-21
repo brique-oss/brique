@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package main
+package engine
 
 import (
 	"flag"
@@ -24,11 +24,11 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/matter"
-	"brique_engine/reflexive"
-	"brique_engine/security/access"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/matter"
+	"brique_engine/engine/reflexive"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/shared"
 )
 
 // The capacity matrix of SECURITY.md is generated from the code, not written: the

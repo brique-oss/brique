@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/browserbridge"
-	"brique_engine/shared"
+	"brique_engine/engine/browserbridge"
+	"brique_engine/platform/locking"
+	"brique_engine/platform/protectedfile"
 )
 
 func startTestControl(t *testing.T) (*ControlServer, EngineRuntimeDescriptor) {
@@ -19,7 +20,7 @@ func startTestControl(t *testing.T) (*ControlServer, EngineRuntimeDescriptor) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDirectory) })
-	id, err := shared.DirectoryObjectIdentity(root)
+	id, err := locking.DirectoryObjectIdentity(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestDiscoveryDirectoryRequiresAnAbsoluteProtectedPath(t *testing.T) {
 	if err := PrepareDiscoveryDirectory(directory); err != nil {
 		t.Fatal(err)
 	}
-	if err := shared.ValidateProtectedDirectory(directory, nil); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(directory, nil); err != nil {
 		t.Fatal(err)
 	}
 }

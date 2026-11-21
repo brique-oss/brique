@@ -17,8 +17,9 @@ import (
 	"strconv"
 	"strings"
 
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/filesystem"
+	"brique_engine/platform/protectedfile"
 )
 
 const (
@@ -57,10 +58,10 @@ func NewStore(directory, file string, allowedOwnerUIDs []uint32) (*Store, error)
 	if file == "" {
 		file = DefaultFile
 	}
-	if directory == "" || !shared.ValidProtectedRelativePath(file) || strings.Contains(file, "/") {
+	if directory == "" || !protectedfile.ValidProtectedRelativePath(file) || strings.Contains(file, "/") {
 		return nil, errors.New("invalid activation store configuration")
 	}
-	if err := shared.ValidateProtectedDirectory(directory, allowedOwnerUIDs); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(directory, allowedOwnerUIDs); err != nil {
 		return nil, err
 	}
 	return &Store{directory: directory, file: file, owners: append([]uint32(nil), allowedOwnerUIDs...)}, nil
@@ -78,13 +79,13 @@ func (store *Store) Load() (State, bool, error) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 {
 		return State{}, false, errors.New("activation state unavailable")
 	}
-	content, err := shared.ReadProtectedFile(store.directory, store.file, shared.ProtectedFileOptions{
+	content, err := protectedfile.ReadProtectedFile(store.directory, store.file, protectedfile.ProtectedFileOptions{
 		MaxBytes: MaxStateBytes, AllowedOwnerUIDs: store.owners,
 	})
 	if err != nil {
 		return State{}, false, err
 	}
-	defer shared.ZeroBytes(content)
+	defer protectedfile.ZeroBytes(content)
 	var state State
 	if err := trust.StrictDecodeJSON(content, &state); err != nil || validate(state) != nil {
 		return State{}, false, errors.New("invalid activation state")
@@ -96,14 +97,14 @@ func (store *Store) Persist(state State) error {
 	if store == nil || validate(state) != nil {
 		return errors.New("invalid activation state")
 	}
-	if err := shared.ValidateProtectedDirectory(store.directory, store.owners); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(store.directory, store.owners); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(state)
 	if err != nil || len(encoded) > MaxStateBytes {
 		return errors.New("encode activation state")
 	}
-	if err := shared.WriteFileAtomic(filepath.Join(store.directory, store.file), encoded, 0o600); err != nil {
+	if err := filesystem.WriteFileAtomic(filepath.Join(store.directory, store.file), encoded, 0o600); err != nil {
 		return errors.New("persist activation state")
 	}
 	loaded, found, err := store.Load()

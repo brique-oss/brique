@@ -3,7 +3,7 @@ package matter
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestWithSubscriptionIDAddsIDWithoutModifyingSharedParams(t *testing.T) {

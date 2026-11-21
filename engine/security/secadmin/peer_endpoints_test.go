@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
 )
 
 type machineKey struct {

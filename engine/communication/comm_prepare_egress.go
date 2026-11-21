@@ -16,7 +16,7 @@
 
 package comm
 
-import "brique_engine/circulation"
+import "brique_engine/engine/circulation"
 
 func (l *CommLoop) prepareInterfaceEgress(msg circulation.Message) (circulation.Message, error) {
 	return rewriteExternalWireDestination(msg), nil

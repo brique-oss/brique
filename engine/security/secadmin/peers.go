@@ -21,9 +21,9 @@ import (
 	"reflect"
 	"sort"
 
-	"brique_engine/security/policysrc"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/policysrc"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
 )
 
 // Peers say where the instance reaches the principals it sends to (SECURITY.md §7.4). They

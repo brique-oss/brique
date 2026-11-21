@@ -25,7 +25,7 @@ import (
 	"sync"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestEngine_N6_MAT_00_FixtureStartupAndMatterWorkspaceReady(t *testing.T) {

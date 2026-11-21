@@ -25,7 +25,7 @@ func TestHandleMessageRejectsBulkPayload(t *testing.T) {
 type longOutbound struct{ plainCalls int }
 
 func (o *longOutbound) Initialize() (map[string]any, error) { return nil, nil }
-func (o *longOutbound) CognitiveFramework() (string, error) { return "", nil }
+func (o *longOutbound) Framework() (string, error) { return "", nil }
 func (o *longOutbound) FrameworkPath() (string, error)      { return "", nil }
 func (o *longOutbound) ForwardIntention(map[string]any) (map[string]any, error) {
 	o.plainCalls++

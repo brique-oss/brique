@@ -20,7 +20,7 @@ import (
 	"reflect"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 func TestPeersCompileIntoThePolicyAndKeepTheFormat(t *testing.T) {

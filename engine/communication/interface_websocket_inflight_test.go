@@ -3,8 +3,8 @@ package comm
 import (
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 func awaited(id string) circulation.Message {

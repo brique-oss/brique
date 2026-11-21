@@ -9,15 +9,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 func listenEngineIPC(directory, discoveryKey string) (net.Listener, EngineIPCEndpoint, func() error, error) {
 	socketDirectory := filepath.Join(directory, "browser")
-	if err := shared.CreateProtectedDirectory(socketDirectory); err != nil {
+	if err := protectedfile.CreateProtectedDirectory(socketDirectory); err != nil {
 		return nil, EngineIPCEndpoint{}, nil, err
 	}
-	if err := shared.ValidateProtectedDirectory(socketDirectory, nil); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(socketDirectory, nil); err != nil {
 		return nil, EngineIPCEndpoint{}, nil, err
 	}
 	address := filepath.Join(socketDirectory, discoveryKey+".sock")

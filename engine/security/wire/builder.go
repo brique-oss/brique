@@ -24,9 +24,9 @@ import (
 	"strconv"
 	"time"
 
-	"brique_engine/security/seal"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/seal"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 var ErrConstruction = errors.New("external message construction failed")

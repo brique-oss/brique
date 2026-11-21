@@ -47,8 +47,9 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 // defaultSubstanceExt is used when a matter document does not declare `functional.format`.
@@ -269,7 +270,7 @@ func writeEmptyFileAtomic(dst string) error {
 	}
 	_ = f.Sync()
 	_ = f.Close()
-	return shared.AtomicReplace(tmp, dst)
+	return filesystem.AtomicReplace(tmp, dst)
 }
 
 // capMatterCreate

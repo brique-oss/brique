@@ -20,7 +20,7 @@ import (
 	"errors"
 	"os"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 const adminLockFile = ".admin.lock"
@@ -28,7 +28,7 @@ const adminLockFile = ".admin.lock"
 func ensureProtectedRoot(root string) error {
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
-		if err := shared.CreateProtectedDirectory(root); err != nil {
+		if err := protectedfile.CreateProtectedDirectory(root); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -36,7 +36,7 @@ func ensureProtectedRoot(root string) error {
 	} else if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 		return errors.New("security directory must not be a symbolic link")
 	}
-	return shared.ValidateProtectedDirectory(root, nil)
+	return protectedfile.ValidateProtectedDirectory(root, nil)
 }
 
 // Lock serializes every administrative read-modify-write command across

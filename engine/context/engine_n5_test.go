@@ -41,15 +41,15 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/activation"
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/manager"
-	"brique_engine/security/policysrc"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/activation"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/manager"
+	"brique_engine/engine/security/policysrc"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 )
 
 const (

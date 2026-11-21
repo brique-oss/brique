@@ -28,9 +28,9 @@ import (
 	"net/netip"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/limits"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/limits"
+	"brique_engine/engine/security/wire"
 )
 
 func controlIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, readLimit int64) http.HandlerFunc {

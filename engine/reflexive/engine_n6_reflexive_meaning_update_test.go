@@ -22,8 +22,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 // callN6MeaningUpdate is a thin helper that routes meaning.update to the root context.

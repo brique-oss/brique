@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // stopping a child that was never started (a zero ContextLoop) panics.

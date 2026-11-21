@@ -15,7 +15,7 @@ const instanceRoot = await realpath(path.dirname(contextPath));
 const [{ resolveUI }, { buildContextUI }, { publishSparkWeb }] = await Promise.all([
   import(pathToModule("dist/spark/ui/UIResolver.js")),
   import(pathToModule("dist/spark/ui/build/ContextUIBuilder.js")),
-  import(pathToModule("dist/spark/web/WebPublisher.js")),
+  import(pathToModule("dist/spark/hosts/web/WebPublisher.js")),
 ]);
 const plans = await discoverWebPlans(contextPath, "/root");
 if (plans.length === 0 || plans[0].ui.rootView.name === "BriqueEditorRoot") {

@@ -40,11 +40,11 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/shared"
 )
 
 // forwardQueueSize bounds the ordered queue of wrapper-bound responses.

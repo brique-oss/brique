@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 type SigningPurpose string

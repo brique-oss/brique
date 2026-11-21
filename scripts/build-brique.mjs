@@ -37,7 +37,7 @@ if (spawnSync("go", ["version"], { stdio: "ignore" }).error) {
   process.exit(1);
 }
 
-if (!existsSync(path.join(engineDir, "go.mod"))) {
+if (!existsSync(path.join(rootDir, "go.mod"))) {
   console.error(`Brique Engine not found at ${engineDir}`);
   process.exit(1);
 }
@@ -48,7 +48,7 @@ console.log("Building Brique Engine...");
 console.log(`  source: ${engineDir}`);
 console.log(`  output: ${outputBin}`);
 
-const build = spawnSync("go", ["build", "-C", engineDir, "-o", outputBin, "."], {
+const build = spawnSync("go", ["build", "-C", rootDir, "-o", outputBin, "./cmd/brique"], {
   stdio: "inherit",
 });
 
@@ -57,7 +57,7 @@ if (build.status !== 0) {
 }
 
 console.log("Building brique-sec...");
-const buildSecurity = spawnSync("go", ["build", "-C", engineDir, "-o", securityBin, "./cmd/brique-sec"], {
+const buildSecurity = spawnSync("go", ["build", "-C", rootDir, "-o", securityBin, "./cmd/brique-sec"], {
   stdio: "inherit",
 });
 
@@ -66,7 +66,7 @@ if (buildSecurity.status !== 0) {
 }
 
 console.log("Building brique-launcher...");
-const buildLauncher = spawnSync("go", ["build", "-C", engineDir, "-o", launcherBin, "./cmd/brique-launcher"], {
+const buildLauncher = spawnSync("go", ["build", "-C", rootDir, "-o", launcherBin, "./cmd/brique-launcher"], {
   stdio: "inherit",
 });
 
@@ -75,7 +75,7 @@ if (buildLauncher.status !== 0) {
 }
 
 console.log("Building brique-web...");
-const buildWebHost = spawnSync("go", ["build", "-C", engineDir, "-o", webHostBin, "./cmd/brique-web"], {
+const buildWebHost = spawnSync("go", ["build", "-C", rootDir, "-o", webHostBin, "./cmd/brique-web"], {
   stdio: "inherit",
 });
 
@@ -84,7 +84,7 @@ if (buildWebHost.status !== 0) {
 }
 
 console.log("Building brique-browser-host...");
-const buildBrowserHost = spawnSync("go", ["build", "-C", engineDir, "-o", browserHostBin, "./cmd/brique-browser-host"], {
+const buildBrowserHost = spawnSync("go", ["build", "-C", rootDir, "-o", browserHostBin, "./cmd/brique-browser-host"], {
   stdio: "inherit",
 });
 

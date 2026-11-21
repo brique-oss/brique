@@ -21,7 +21,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 func limitsOf(t *testing.T, d *Dir, id string) *trust.Limits {

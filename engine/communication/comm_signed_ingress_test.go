@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/security/audit"
-	"brique_engine/security/replay"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/replay"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
 )
 
 func signedHTTPSConfig() map[string]any {

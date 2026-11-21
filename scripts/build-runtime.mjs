@@ -45,9 +45,9 @@ try {
   await cp(path.join(repository, "dist", "briqueEditorUI"), path.join(staging, "lib", "briqueEditorUI"), { recursive: true });
   const chromiumExtension = path.join(staging, "lib", "browser-extension");
   const firefoxExtension = path.join(staging, "lib", "browser-extension-firefox");
-  await cp(path.join(repository, "browser-extension"), chromiumExtension, { recursive: true });
+  await cp(path.join(repository, "spark", "hosts", "browser", "extension"), chromiumExtension, { recursive: true });
   await rm(path.join(chromiumExtension, "manifest.firefox.json"));
-  await cp(path.join(repository, "browser-extension"), firefoxExtension, { recursive: true });
+  await cp(path.join(repository, "spark", "hosts", "browser", "extension"), firefoxExtension, { recursive: true });
   await rm(path.join(firefoxExtension, "manifest.json"));
   await rename(path.join(firefoxExtension, "manifest.firefox.json"), path.join(firefoxExtension, "manifest.json"));
   for (const name of ["LICENSE", "NOTICE", "README.md"]) {

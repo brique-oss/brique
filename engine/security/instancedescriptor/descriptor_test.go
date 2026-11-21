@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 type backend struct{ private ed25519.PrivateKey }

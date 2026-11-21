@@ -52,14 +52,14 @@ func (c *BriqueCapacityClient) Initialize() (map[string]any, error) {
 	}, nil
 }
 
-func (c *BriqueCapacityClient) CognitiveFramework() (string, error) {
-	// #read_framework — retrieve the cognitive framework matter via engine_external intention.
+func (c *BriqueCapacityClient) Framework() (string, error) {
+	// #read_framework — retrieve the Brique framework matter via engine_external intention.
 	frameworkResp, err := c.rt.Outbound().EmitAndWait(wrapper.OutboundParams{
 		ToContext:     "",
 		ToCap:         "matter.read",
 		ToType:        "matter",
 		FromCap:       "mcp.response",
-		Params:        map[string]any{"matter_id": "brique_cognitive_framework", "read_mode": "data"},
+		Params:        map[string]any{"matter_id": "brique_framework", "read_mode": "data"},
 		AwaitResponse: true,
 	})
 	if err != nil {
@@ -69,7 +69,7 @@ func (c *BriqueCapacityClient) CognitiveFramework() (string, error) {
 	return extractText(frameworkResp), nil
 }
 
-// FrameworkPath returns the absolute path of the cognitive framework file, resolved
+// FrameworkPath returns the absolute path of the Brique framework file, resolved
 // from the context_dir reported by the engine (read.state).
 func (c *BriqueCapacityClient) FrameworkPath() (string, error) {
 	resp, err := c.rt.Outbound().EmitAndWait(wrapper.OutboundParams{
@@ -95,7 +95,7 @@ func frameworkPathFromState(resp map[string]any) (string, error) {
 	if dir == "" {
 		return "", fmt.Errorf("mcp.bootstrap #framework_path: context_dir missing from read.state")
 	}
-	return filepath.Join(dir, "matter", "brique_cognitive_framework.md"), nil
+	return filepath.Join(dir, "matter", "brique_framework.md"), nil
 }
 
 // ForwardIntention extracts the Brique intention from an MCP tools/call message,

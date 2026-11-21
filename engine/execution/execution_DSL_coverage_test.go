@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // =============================================================================

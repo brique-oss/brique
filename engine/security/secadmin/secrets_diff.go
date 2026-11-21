@@ -25,7 +25,7 @@ package secadmin
 import (
 	"sort"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // secretsDiff lists the wrappers that gain or lose a secret, "+" and "-", by secret.

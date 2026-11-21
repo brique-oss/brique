@@ -17,8 +17,8 @@
 package execution
 
 import (
-	"brique_engine/configuration"
-	"brique_engine/shared"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/shared"
 )
 
 // -----------------------------

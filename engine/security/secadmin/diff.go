@@ -21,8 +21,8 @@ import (
 	"sort"
 	"strings"
 
-	"brique_engine/security/audit"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/trust"
 )
 
 // accessLines flattens a policy into normalized, order-independent statements

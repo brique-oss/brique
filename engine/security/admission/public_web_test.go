@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
 )
 
 func TestPublicWebAdmissionManufacturesSourceAndSurvivesDerivation(t *testing.T) {

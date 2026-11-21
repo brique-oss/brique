@@ -20,7 +20,7 @@ import (
 	"reflect"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestCanonicalProblemsAreFixedAndIndependentOfTheFamilyDetail(t *testing.T) {

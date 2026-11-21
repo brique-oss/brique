@@ -22,7 +22,7 @@ package reflexive
 // Split out of reflexive_sqlite.go; same package, no behavior of its own.
 
 import (
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 	"fmt"
 	"strings"
 )

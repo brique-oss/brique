@@ -29,11 +29,11 @@ package context
 import (
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/access"
-	"brique_engine/security/refusal"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/shared"
 )
 
 // controlScope carries what the door decided about a restricted request: the

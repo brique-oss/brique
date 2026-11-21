@@ -19,7 +19,7 @@ package comm
 import (
 	"testing"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 func TestParseCommCfg_N0_CMCFG_01_DefaultsOnNil(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"errors"
 	"time"
 
-	"brique_engine/security/browserhello"
-	"brique_engine/security/instancedescriptor"
+	"brique_engine/engine/security/browserhello"
+	"brique_engine/engine/security/instancedescriptor"
 )
 
 var ErrBrowserInitiatorAuthentication = errors.New("browser initiator authentication failed")

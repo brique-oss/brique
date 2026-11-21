@@ -21,9 +21,9 @@ import (
 	"strconv"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
 )
 
 func admittedParent(t *testing.T) (junction.Delivery, admissionFixture) {

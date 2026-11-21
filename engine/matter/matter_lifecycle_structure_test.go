@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestMatterLifecycleStructure_N1_MLS_01_HelperFunctions(t *testing.T) {

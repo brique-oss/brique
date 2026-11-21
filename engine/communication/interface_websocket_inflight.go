@@ -25,8 +25,8 @@ package comm
 import (
 	"sync"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 type inflightEntry struct {

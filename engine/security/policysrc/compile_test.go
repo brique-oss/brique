@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")

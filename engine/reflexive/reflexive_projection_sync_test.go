@@ -24,8 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 type syncTree struct {
@@ -51,7 +52,7 @@ func (s *syncTree) abs(rel string) string { return filepath.Join(s.root, filepat
 
 func (s *syncTree) write(rel, content string) {
 	s.t.Helper()
-	if err := shared.WriteFileAtomic(s.abs(rel), []byte(content), 0o644); err != nil {
+	if err := filesystem.WriteFileAtomic(s.abs(rel), []byte(content), 0o644); err != nil {
 		s.t.Fatal(err)
 	}
 }
@@ -541,7 +542,7 @@ func TestProjectionSync_EditInChildContextRefreshesRootProjection(t *testing.T) 
 	reg := junction.NewContextCommRegistry()
 	write := func(rel, content string) {
 		p := filepath.Join(root, filepath.FromSlash(rel))
-		if err := shared.WriteFileAtomic(p, []byte(content), 0o644); err != nil {
+		if err := filesystem.WriteFileAtomic(p, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -681,7 +682,7 @@ func TestProjectionSync_NamedHintFromAnotherFamily(t *testing.T) {
 	root := t.TempDir()
 	reg := junction.NewContextCommRegistry()
 	put := func(rel, content string) {
-		if err := shared.WriteFileAtomic(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
+		if err := filesystem.WriteFileAtomic(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -26,14 +26,14 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/security/audit"
-	"brique_engine/security/refusal"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/shared"
 )
 
 const executionExternalTestID = "423e4567-e89b-42d3-a456-426614174000"

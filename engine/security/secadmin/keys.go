@@ -25,8 +25,8 @@ import (
 	"fmt"
 	"strings"
 
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/protectedfile"
 )
 
 var rawBase64 = base64.RawURLEncoding
@@ -49,12 +49,12 @@ func NewKeyPEM() (pemBytes []byte, public ed25519.PublicKey, keyID string, err e
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer shared.ZeroBytes(private)
+	defer protectedfile.ZeroBytes(private)
 	der, err := x509.MarshalPKCS8PrivateKey(private)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer shared.ZeroBytes(der)
+	defer protectedfile.ZeroBytes(der)
 	keyID, err = trust.SigningKeyID(public)
 	if err != nil {
 		return nil, nil, "", err
@@ -84,7 +84,7 @@ func (d *Dir) loadAuthorityPrivate(expectedKeyID string) (ed25519.PrivateKey, er
 	if err != nil {
 		return nil, fmt.Errorf("authority key unavailable (strict mode signs offline): %w", err)
 	}
-	defer shared.ZeroBytes(content)
+	defer protectedfile.ZeroBytes(content)
 	private, err := ParsePrivateKeyPEM(content)
 	if err != nil {
 		return nil, err
@@ -108,6 +108,6 @@ func PKCS8PEM(private ed25519.PrivateKey) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer shared.ZeroBytes(der)
+	defer protectedfile.ZeroBytes(der)
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }

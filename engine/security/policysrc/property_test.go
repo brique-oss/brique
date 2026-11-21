@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"testing"
 
-	"brique_engine/security/access"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/trust"
 )
 
 // The property test: for random sources, the decision of the COMPILED SNAPSHOT

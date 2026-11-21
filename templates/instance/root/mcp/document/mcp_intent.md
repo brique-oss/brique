@@ -18,13 +18,13 @@ limitations under the License.
 
 # Vision
 
-**Brique is a cognitive framework for representing, structuring, formalizing, implementing, and executing intentions.**
+**Brique is a framework for representing, structuring, formalizing, implementing, and executing intentions.**
 
-It is not a programming framework, nor simply an execution engine. It provides an explicit representation of the cognitive process that transforms a human intention into an operational system.
+It is not a programming framework, nor simply an execution engine. It provides an explicit representation of the process that transforms a human intention into an operational system.
 
-The purpose of the MCP is to make this cognitive framework accessible to a Large Language Model.
+The purpose of the MCP is to make the Brique framework accessible to a Large Language Model.
 
-Its primary objective is not to expose an API, but to install the cognitive frame that enables the LLM to reason, navigate, and operate naturally within Brique.
+Its primary objective is not to expose an API, but to install the Brique frame that enables the LLM to reason, navigate, and operate naturally within Brique.
 
 ---
 
@@ -38,17 +38,17 @@ It is intentionally simple. Its responsibility is to transport requests and resp
 
 The intelligence of the system does not reside inside the wrapper.
 
-It resides in the cognitive framework transmitted to the LLM and in the Brique engine itself.
+It resides in the Brique framework transmitted to the LLM and in the Brique engine itself.
 
 ---
 
-# Purpose of the Cognitive Framework
+# Purpose of the Brique Framework
 
-The purpose of the cognitive framework is to maximize the LLM's ability to transform an initially vague user intention into an operational implementation using the Brique model.
+The purpose of the Brique framework is to maximize the LLM's ability to transform an initially vague user intention into an operational implementation using the Brique model.
 
 The LLM does not explain Brique to the user.
 
-Instead, it internally adopts the Brique cognitive framework as its own reasoning model while interacting naturally with the user.
+Instead, it internally adopts the Brique framework as its own reasoning model while interacting naturally with the user.
 
 The user may know nothing about Brique.
 
@@ -102,9 +102,9 @@ The transformation is constrained by the expected output of each stage, not by t
 
 ---
 
-# Cognitive Context
+# Brique Context
 
-When an LLM connects through the MCP, it receives a cognitive context rather than a traditional API description.
+When an LLM connects through the MCP, it receives a Brique reasoning context rather than a traditional API description.
 
 This context includes:
 
@@ -116,7 +116,7 @@ This context includes:
 * the engine decision tree;
 * engine capability families.
 
-This context establishes the cognitive environment in which the LLM will reason throughout the entire interaction.
+This context establishes the reasoning environment in which the LLM will operate throughout the entire interaction.
 
 The initial goal is not token optimization.
 
@@ -244,9 +244,9 @@ It only transports communication between the LLM and the Brique engine.
 
 # Design Philosophy
 
-The first implementation prioritizes cognitive effectiveness over optimization.
+The first implementation prioritizes reasoning effectiveness over optimization.
 
-The objective is to discover the cognitive framing that enables an LLM to collaborate most effectively with a human and with Brique.
+The objective is to discover the reasoning framework that enables an LLM to collaborate most effectively with a human and with Brique.
 
 Token optimization, compression, and context minimization are secondary concerns.
 
@@ -258,6 +258,6 @@ They will emerge from observing real interactions and identifying which knowledg
 
 The MCP is not primarily a communication protocol.
 
-It is the entry point into the Brique cognitive framework.
+It is the entry point into the Brique framework.
 
 Its purpose is to enable a Large Language Model to naturally transform human intentions into structured knowledge, formal Brique artifacts, and executable implementations while reasoning entirely within the conceptual universe of Brique.

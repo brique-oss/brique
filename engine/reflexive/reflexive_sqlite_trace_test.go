@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func writeTraceSegment(t *testing.T, traceDir string, start time.Time, lines []map[string]any) string {

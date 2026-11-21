@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/browserbridge"
-	"brique_engine/shared"
+	"brique_engine/contracts/buildinfo"
+	"brique_engine/contracts/directoryobject"
+	"brique_engine/engine/browserbridge"
+	"brique_engine/platform/listener"
 )
 
 const (
@@ -33,21 +35,21 @@ type ControlRequest struct {
 }
 
 type ControlResponse struct {
-	Format     string                    `json:"format"`
-	Generation string                    `json:"generation"`
-	OK         bool                      `json:"ok"`
-	ErrorCode  string                    `json:"error_code,omitempty"`
-	State      string                    `json:"state,omitempty"`
-	PID        int                       `json:"pid,omitempty"`
-	RootPath   string                    `json:"root_path,omitempty"`
-	RootObject *shared.DirectoryObjectID `json:"root_object,omitempty"`
-	Build      *shared.BuildInfo         `json:"build,omitempty"`
+	Format     string              `json:"format"`
+	Generation string              `json:"generation"`
+	OK         bool                `json:"ok"`
+	ErrorCode  string              `json:"error_code,omitempty"`
+	State      string              `json:"state,omitempty"`
+	PID        int                 `json:"pid,omitempty"`
+	RootPath   string              `json:"root_path,omitempty"`
+	RootObject *directoryobject.ID `json:"root_object,omitempty"`
+	Build      *buildinfo.Info     `json:"build,omitempty"`
 }
 
 type ControlOptions struct {
 	DiscoveryDirectory string
 	RootPath           string
-	RootObject         shared.DirectoryObjectID
+	RootObject         directoryobject.ID
 	Generation         string
 	Now                func() time.Time
 }
@@ -188,7 +190,7 @@ func (server *ControlServer) SetBrowserBridgeEndpoint(endpoint browserbridge.Eng
 
 func (server *ControlServer) acceptLoop() {
 	defer server.wg.Done()
-	backoff := shared.AcceptBackoff{Name: "engine local control"}
+	backoff := listener.AcceptBackoff{Name: "engine local control"}
 	for {
 		connection, err := server.listener.Accept()
 		if err != nil {

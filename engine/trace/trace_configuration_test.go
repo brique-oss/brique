@@ -19,7 +19,7 @@ package trace
 import (
 	"testing"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 func TestParseTraceCfg_N0_TCFG_01_02_Defaults(t *testing.T) {

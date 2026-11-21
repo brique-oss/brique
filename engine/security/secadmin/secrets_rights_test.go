@@ -22,9 +22,9 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/junction"
-	"brique_engine/security/manager"
-	"brique_engine/security/policysrc"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/manager"
+	"brique_engine/engine/security/policysrc"
 )
 
 func setSecretRights(t *testing.T, d *Dir, secrets map[string]*policysrc.SecretGrant) {

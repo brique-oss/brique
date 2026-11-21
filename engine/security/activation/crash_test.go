@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 const crashChildEnv = "BRIQUE_CRASH_CHILD_DIR"

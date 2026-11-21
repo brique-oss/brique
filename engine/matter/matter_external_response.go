@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/refusal"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/refusal"
+	"brique_engine/engine/shared"
 )
 
 // bindExternalRequest installs the exact authenticated root Delivery only for

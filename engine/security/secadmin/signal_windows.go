@@ -25,7 +25,7 @@ import (
 	"strconv"
 	"strings"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // ReloadRequestFile is the file the engine watches on windows, where there is no
@@ -46,13 +46,13 @@ func (d *Dir) signalEngine() (bool, string) {
 	if err != nil || pid <= 0 {
 		return false, "engine.pid is unreadable: the generation is installed"
 	}
-	file, err := shared.OpenProtectedFile(d.abs(PIDFile), false, nil, nil)
+	file, err := protectedfile.OpenProtectedFile(d.abs(PIDFile), false, nil, nil)
 	if err != nil {
 		return false, "engine.pid cannot be verified: the generation is installed"
 	}
-	acquired, lockErr := shared.LockFile(file, false)
+	acquired, lockErr := protectedfile.LockFile(file, false)
 	if lockErr == nil && acquired {
-		_ = shared.UnlockFile(file)
+		_ = protectedfile.UnlockFile(file)
 		_ = file.Close()
 		return false, fmt.Sprintf("process %d does not own engine.pid (stale file): the generation is installed", pid)
 	}
@@ -64,7 +64,7 @@ func (d *Dir) signalEngine() (bool, string) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return false, "could not build a reload request: the generation is installed"
 	}
-	if err := shared.WriteProtectedFile(d.Root, ReloadRequestFile, []byte(hex.EncodeToString(nonce[:])+"\n"), 0o600); err != nil {
+	if err := protectedfile.WriteProtectedFile(d.Root, ReloadRequestFile, []byte(hex.EncodeToString(nonce[:])+"\n"), 0o600); err != nil {
 		return false, fmt.Sprintf("could not write the reload request: %v", err)
 	}
 	return true, fmt.Sprintf("reload requested from process %d (it polls %s)", pid, ReloadRequestFile)

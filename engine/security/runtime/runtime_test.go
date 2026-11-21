@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/networkpolicy"
-	"brique_engine/security/instancedescriptor"
-	"brique_engine/security/pending"
-	"brique_engine/security/replay"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/instancedescriptor"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/replay"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/transport/networkpolicy"
 )
 
 type runtimeResolver map[string][]netip.Addr

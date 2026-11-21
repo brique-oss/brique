@@ -23,6 +23,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"brique_engine/platform/filesystem"
+	"brique_engine/platform/protectedfile"
 )
 
 // Files that travel with the instance — the signed policy, the access source — are
@@ -35,7 +38,7 @@ import (
 // relative path; a symbolic link anywhere on the way, a file that is not regular and one
 // larger than maxBytes are refused.
 func ReadInstanceFile(root, relative string, maxBytes int64) ([]byte, error) {
-	if root == "" || maxBytes <= 0 || !ValidProtectedRelativePath(relative) {
+	if root == "" || maxBytes <= 0 || !protectedfile.ValidProtectedRelativePath(relative) {
 		return nil, errors.New("invalid instance file path")
 	}
 	current := filepath.Clean(root)
@@ -77,7 +80,7 @@ func ReadInstanceFile(root, relative string, maxBytes int64) ([]byte, error) {
 // WriteInstanceFile atomically replaces one file below root, creating its directories
 // with ordinary permissions. It refuses to write through a symbolic link.
 func WriteInstanceFile(root, relative string, content []byte, mode os.FileMode) error {
-	if root == "" || !ValidProtectedRelativePath(relative) {
+	if root == "" || !protectedfile.ValidProtectedRelativePath(relative) {
 		return errors.New("invalid instance file path")
 	}
 	current := filepath.Clean(root)
@@ -98,5 +101,5 @@ func WriteInstanceFile(root, relative string, content []byte, mode os.FileMode) 
 			return err
 		}
 	}
-	return WriteFileAtomic(current, content, mode)
+	return filesystem.WriteFileAtomic(current, content, mode)
 }

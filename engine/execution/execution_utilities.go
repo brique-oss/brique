@@ -17,8 +17,8 @@
 package execution
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/configuration"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
 	"encoding/json"
 	"os"
 	"path/filepath"

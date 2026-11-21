@@ -6,13 +6,14 @@
 package browserbridge
 
 import (
-	"brique_engine/shared"
 	"encoding/base64"
 	"errors"
 	"net"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"brique_engine/platform/listener"
 )
 
 const (
@@ -108,7 +109,7 @@ func (service *EngineIPCListener) Server() *EngineIPCServer {
 
 func (service *EngineIPCListener) acceptLoop() {
 	defer service.wg.Done()
-	backoff := shared.AcceptBackoff{Name: "browser bridge IPC"}
+	backoff := listener.AcceptBackoff{Name: "browser bridge IPC"}
 	for {
 		connection, err := service.listener.Accept()
 		if err != nil {

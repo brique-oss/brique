@@ -32,8 +32,8 @@ import (
 	"path"
 	"time"
 
-	"brique_engine/security/policysrc"
-	"brique_engine/shared"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/shared"
 )
 
 const (

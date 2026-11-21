@@ -16,8 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 const (
@@ -144,7 +145,7 @@ func atomicWriteEventJSON(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return shared.WriteFileAtomic(path, encoded, 0o600)
+	return filesystem.WriteFileAtomic(path, encoded, 0o600)
 }
 
 func (l *MatterLoop) persistMatterSubscriptions() error {
@@ -261,7 +262,7 @@ func (l *MatterLoop) removeOutboxEventsLocked(events []MatterPendingEvent) ([]Ma
 			}
 		}
 		l.outbox = kept
-		shared.SyncDir(directory)
+		filesystem.SyncDir(directory)
 	}
 	return removed, firstErr
 }

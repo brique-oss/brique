@@ -27,8 +27,8 @@ package execution
 import (
 	"errors"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // errDSLBranchPanic is what a DSL branch that panicked reports to its parent.

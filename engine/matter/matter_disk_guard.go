@@ -9,8 +9,8 @@ import (
 	"errors"
 	"io"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/platform/storage"
 )
 
 // defaultMinFreeDiskBytes is the free-space floor under which the instance
@@ -19,7 +19,7 @@ import (
 const defaultMinFreeDiskBytes int64 = 256 << 20
 
 // freeDiskBytes is replaceable in tests.
-var freeDiskBytes = shared.FreeDiskBytes
+var freeDiskBytes = storage.FreeDiskBytes
 
 // diskLow reports whether the filesystem holding this Context is under the
 // configured floor. A floor of zero disables the guard. When free space cannot

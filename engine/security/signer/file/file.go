@@ -28,10 +28,10 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/security/seal"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/seal"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/protectedfile"
 )
 
 const maxEncodedKeyBytes = 16 << 10
@@ -47,10 +47,10 @@ type Config struct {
 }
 
 func New(config Config) (signer.Signer, error) {
-	if config.Name == "" || config.ExpectedKeyID == "" || config.SecurityDirectory == "" || !shared.ValidProtectedRelativePath(config.KeyFile) {
+	if config.Name == "" || config.ExpectedKeyID == "" || config.SecurityDirectory == "" || !protectedfile.ValidProtectedRelativePath(config.KeyFile) {
 		return nil, configurationError()
 	}
-	encoded, err := shared.ReadProtectedFile(config.SecurityDirectory, config.KeyFile, shared.ProtectedFileOptions{
+	encoded, err := protectedfile.ReadProtectedFile(config.SecurityDirectory, config.KeyFile, protectedfile.ProtectedFileOptions{
 		MaxBytes:             maxEncodedKeyBytes,
 		AllowedOwnerUIDs:     config.AllowedOwnerUIDs,
 		RequireOwnerReadOnly: config.RequireReadOnly,
@@ -58,7 +58,7 @@ func New(config Config) (signer.Signer, error) {
 	if err != nil {
 		return nil, configurationError()
 	}
-	defer shared.ZeroBytes(encoded)
+	defer protectedfile.ZeroBytes(encoded)
 	privateKey, err := parsePrivateKey(encoded)
 	if err != nil {
 		return nil, configurationError()
@@ -66,7 +66,7 @@ func New(config Config) (signer.Signer, error) {
 	publicKey := append(ed25519.PublicKey(nil), privateKey.Public().(ed25519.PublicKey)...)
 	keyID, err := trust.SigningKeyID(publicKey)
 	if err != nil || keyID != config.ExpectedKeyID {
-		shared.ZeroBytes(privateKey)
+		protectedfile.ZeroBytes(privateKey)
 		return nil, configurationError()
 	}
 
@@ -133,7 +133,7 @@ func (backend *fileBackend) Close() error {
 		return nil
 	}
 	backend.closed = true
-	shared.ZeroBytes(backend.privateKey)
+	protectedfile.ZeroBytes(backend.privateKey)
 	backend.privateKey = nil
 	return nil
 }
@@ -150,7 +150,7 @@ func parsePrivateKey(encoded []byte) (ed25519.PrivateKey, error) {
 		decodedPEM = true
 	}
 	if decodedPEM {
-		defer shared.ZeroBytes(der)
+		defer protectedfile.ZeroBytes(der)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {

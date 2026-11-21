@@ -34,11 +34,11 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 )
 
 const wrapperWebSocketFrameFormat = "brique.wrapper/1"

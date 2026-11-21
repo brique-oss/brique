@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/signer"
+	"brique_engine/engine/security/signer"
 )
 
 type publisherSigner struct {

@@ -22,13 +22,13 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/security/activation"
-	"brique_engine/security/audit"
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/replay"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/trust"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/activation"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/replay"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/trust"
 )
 
 func TestStartReloadAndRecoverDurableGeneration(t *testing.T) {

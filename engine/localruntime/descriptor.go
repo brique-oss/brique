@@ -18,8 +18,11 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/browserbridge"
-	"brique_engine/shared"
+	"brique_engine/contracts/buildinfo"
+	"brique_engine/contracts/directoryobject"
+	"brique_engine/engine/browserbridge"
+	"brique_engine/engine/enginebuild"
+	"brique_engine/platform/protectedfile"
 )
 
 const (
@@ -47,8 +50,8 @@ type EngineRuntimeDescriptor struct {
 	Format          string                           `json:"format"`
 	DiscoveryKey    string                           `json:"discovery_key"`
 	RootPath        string                           `json:"root_path"`
-	RootObject      shared.DirectoryObjectID         `json:"root_object"`
-	Build           shared.BuildInfo                 `json:"build"`
+	RootObject      directoryobject.ID               `json:"root_object"`
+	Build           buildinfo.Info                   `json:"build"`
 	PID             int                              `json:"pid"`
 	Generation      string                           `json:"generation"`
 	State           string                           `json:"state"`
@@ -128,7 +131,7 @@ func (endpoint ControlEndpoint) validate() error {
 	return nil
 }
 
-func NewDescriptor(rootPath string, rootObject shared.DirectoryObjectID, generation, state string, endpoint ControlEndpoint, now time.Time) (EngineRuntimeDescriptor, error) {
+func NewDescriptor(rootPath string, rootObject directoryobject.ID, generation, state string, endpoint ControlEndpoint, now time.Time) (EngineRuntimeDescriptor, error) {
 	discoveryKey, err := DiscoveryKey(rootObject)
 	if err != nil {
 		return EngineRuntimeDescriptor{}, err
@@ -136,7 +139,7 @@ func NewDescriptor(rootPath string, rootObject shared.DirectoryObjectID, generat
 	descriptor := EngineRuntimeDescriptor{
 		Format: EngineRuntimeFormat, DiscoveryKey: discoveryKey,
 		RootPath: filepath.Clean(rootPath), RootObject: rootObject,
-		Build: shared.CurrentBuildInfo(), PID: os.Getpid(), Generation: generation,
+		Build: enginebuild.CurrentBuildInfo(), PID: os.Getpid(), Generation: generation,
 		State: state, Control: endpoint, PublishedAt: now.UTC().Format(time.RFC3339Nano),
 	}
 	return descriptor, descriptor.Validate()
@@ -172,10 +175,10 @@ func PrepareDiscoveryDirectory(directory string) error {
 	if !filepath.IsAbs(directory) {
 		return errors.New("discovery directory must be absolute")
 	}
-	if err := shared.CreateProtectedDirectory(directory); err != nil {
+	if err := protectedfile.CreateProtectedDirectory(directory); err != nil {
 		return fmt.Errorf("create discovery directory: %w", err)
 	}
-	if err := shared.ValidateProtectedDirectory(directory, nil); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(directory, nil); err != nil {
 		return fmt.Errorf("validate discovery directory: %w", err)
 	}
 	return nil
@@ -194,7 +197,7 @@ func PublishDescriptor(directory string, descriptor EngineRuntimeDescriptor) err
 		return errors.New("encode engine runtime descriptor")
 	}
 	raw = append(raw, '\n')
-	return shared.WriteProtectedFile(directory, relative, raw, 0o600)
+	return protectedfile.WriteProtectedFile(directory, relative, raw, 0o600)
 }
 
 func LoadDescriptor(directory, discoveryKey string) (EngineRuntimeDescriptor, error) {
@@ -202,7 +205,7 @@ func LoadDescriptor(directory, discoveryKey string) (EngineRuntimeDescriptor, er
 	if err != nil {
 		return EngineRuntimeDescriptor{}, err
 	}
-	raw, err := shared.ReadProtectedFile(directory, relative, shared.ProtectedFileOptions{MaxBytes: maxDescriptorBytes})
+	raw, err := protectedfile.ReadProtectedFile(directory, relative, protectedfile.ProtectedFileOptions{MaxBytes: maxDescriptorBytes})
 	if err != nil {
 		return EngineRuntimeDescriptor{}, errors.New("engine runtime descriptor unavailable")
 	}

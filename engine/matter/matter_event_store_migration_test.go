@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 func eventStoreFixture(t *testing.T) (*MatterLoop, string) {

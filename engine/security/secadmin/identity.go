@@ -23,9 +23,9 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/protectedfile"
 )
 
 // Identity is what an operator hands to a peer so that the peer can recognize this
@@ -52,7 +52,7 @@ func (d *Dir) Identity() (*Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("message key unavailable: %w", err)
 	}
-	defer shared.ZeroBytes(pemBytes)
+	defer protectedfile.ZeroBytes(pemBytes)
 	public, err := publicKeyFromPEM(pemBytes)
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func publicKeyFromPEM(pemBytes []byte) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("message key is not a PKCS #8 PEM")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	shared.ZeroBytes(block.Bytes)
+	protectedfile.ZeroBytes(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("message key is not a PKCS #8 key")
 	}
@@ -92,7 +92,7 @@ func publicKeyFromPEM(pemBytes []byte) (ed25519.PublicKey, error) {
 	if !ok {
 		return nil, fmt.Errorf("message key is not an Ed25519 key")
 	}
-	defer shared.ZeroBytes(private)
+	defer protectedfile.ZeroBytes(private)
 	public, ok := private.Public().(ed25519.PublicKey)
 	if !ok {
 		return nil, fmt.Errorf("message key has no public half")

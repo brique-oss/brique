@@ -16,7 +16,7 @@
 
 package junction
 
-import "brique_engine/shared"
+import "brique_engine/engine/shared"
 
 // InterfaceEgress is what the routing loops of the communication family met in front of one interface:
 // the queue that feeds its writer (size and fill now) and how often a message found it full, how long the

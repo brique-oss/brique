@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 // panicOnResolveReg is a registry whose lookup of one address panics.

@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 func ownerSource(t *testing.T, grants ...Grant) (*Source, map[string]testKey) {

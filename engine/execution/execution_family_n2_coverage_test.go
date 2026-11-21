@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
 )
 
 // TestExecutionFamily_N2_EXEC_08_WrapperWithReadyErrFailsClosedBeforeDispatch

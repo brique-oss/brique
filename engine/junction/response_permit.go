@@ -24,8 +24,8 @@ import (
 	"math"
 	"sync"
 
-	"brique_engine/circulation"
-	"brique_engine/security/admission"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/admission"
 )
 
 var (

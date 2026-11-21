@@ -19,7 +19,7 @@ package execution
 import (
 	"testing"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 func TestExecutionConfig_N1_EXCFG_01_ParseNilDefaults(t *testing.T) {

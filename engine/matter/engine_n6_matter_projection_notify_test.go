@@ -20,8 +20,8 @@ import (
 	"sync"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // Matter capacities that write a descriptor tell the root which element

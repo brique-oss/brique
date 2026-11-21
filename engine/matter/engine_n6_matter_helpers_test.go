@@ -32,10 +32,10 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	ctxpkg "brique_engine/context"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	ctxpkg "brique_engine/engine/context"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 const (

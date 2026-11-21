@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/pending"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 func outboundSignedMessage(await bool) circulation.Message {

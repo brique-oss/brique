@@ -19,7 +19,7 @@ package reflexive
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // TestReflexiveFamily_N2_REF_05_UnknownCapFailsClosed

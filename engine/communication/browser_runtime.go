@@ -14,10 +14,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"brique_engine/browserclient"
-	"brique_engine/junction"
-	"brique_engine/networkpolicy"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/browserclient"
+	"brique_engine/engine/transport/networkpolicy"
+	"brique_engine/platform/protectedfile"
 )
 
 var ErrBrowserBridgeDisabled = errors.New("browser bridge is not enabled")
@@ -93,8 +94,8 @@ func browserBridgeTLSConfig(machineDirectory string) (*tls.Config, error) {
 	if machineDirectory != "" {
 		trustedPath := filepath.Join(machineDirectory, "tls", "trusted.pem")
 		if _, err := os.Stat(trustedPath); err == nil {
-			content, err := shared.ReadProtectedFile(machineDirectory, "tls/trusted.pem",
-				shared.ProtectedFileOptions{MaxBytes: maxBrowserTrustedPEMBytes})
+			content, err := protectedfile.ReadProtectedFile(machineDirectory, "tls/trusted.pem",
+				protectedfile.ProtectedFileOptions{MaxBytes: maxBrowserTrustedPEMBytes})
 			if err != nil || !roots.AppendCertsFromPEM(content) {
 				return nil, errors.New("browser bridge trusted certificates are invalid")
 			}

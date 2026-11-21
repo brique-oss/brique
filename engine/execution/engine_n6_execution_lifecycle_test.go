@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestEngine_N6_EXEC_13_ContextStopThenFreshBootStartsWrapperAgain(t *testing.T) {

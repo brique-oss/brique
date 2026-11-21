@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestEngine_N6_MAT_10_BriqueSubscribeWriteNotifyAndUnsubscribe(t *testing.T) {

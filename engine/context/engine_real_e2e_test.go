@@ -65,7 +65,7 @@ func buildRealBinaries(t *testing.T) realBinaries {
 	engineDir := filepath.Dir(filepath.Dir(file))
 	out := t.TempDir()
 	bins := realBinaries{engine: filepath.Join(out, "brique_engine"), sec: filepath.Join(out, "brique-sec")}
-	for target, args := range map[string][]string{bins.engine: {"."}, bins.sec: {"./cmd/brique-sec"}} {
+	for target, args := range map[string][]string{bins.engine: {"brique_engine/cmd/brique"}, bins.sec: {"brique_engine/cmd/brique-sec"}} {
 		build := exec.Command("go", append([]string{"build", "-o", target}, args...)...)
 		build.Dir = engineDir
 		if output, err := build.CombinedOutput(); err != nil {

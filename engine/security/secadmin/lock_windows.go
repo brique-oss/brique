@@ -22,23 +22,23 @@ import (
 	"errors"
 	"path/filepath"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // acquireAdminLock opens the lock file beneath the validated protected root (a link,
 // a hard-linked file or one whose access list is not trusted is refused) and takes an
 // exclusive lock on a range beyond its content.
 func acquireAdminLock(root string) (func(), error) {
-	file, err := shared.OpenProtectedFile(filepath.Join(root, adminLockFile), true, nil, nil)
+	file, err := protectedfile.OpenProtectedFile(filepath.Join(root, adminLockFile), true, nil, nil)
 	if err != nil {
 		return nil, errors.New("administrative lock unavailable")
 	}
-	if _, err := shared.LockFile(file, true); err != nil {
+	if _, err := protectedfile.LockFile(file, true); err != nil {
 		_ = file.Close()
 		return nil, errors.New("administrative lock unavailable")
 	}
 	return func() {
-		_ = shared.UnlockFile(file)
+		_ = protectedfile.UnlockFile(file)
 		_ = file.Close()
 	}, nil
 }

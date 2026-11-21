@@ -16,7 +16,7 @@
 
 package circulation
 
-import "brique_engine/shared"
+import "brique_engine/engine/shared"
 
 type MatterRef struct {
 	Context ContextID `json:"context"`

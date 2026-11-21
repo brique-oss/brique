@@ -66,13 +66,13 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/browsertransport"
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/security/browserhello"
-	"brique_engine/security/instancedescriptor"
-	"brique_engine/security/signer"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/security/browserhello"
+	"brique_engine/engine/security/instancedescriptor"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/browsertransport"
 )
 
 // Ensure HttpsInterface implements InterfaceImpl.

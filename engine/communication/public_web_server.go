@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/security/trust"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/trust"
 )
 
 const publicWebSocketPath = "/__brique/public/"

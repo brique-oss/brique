@@ -16,16 +16,16 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/pending"
-	"brique_engine/security/replay"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/shared"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/pending"
+	"brique_engine/engine/security/replay"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 type commSigningBackend struct{ privateKey ed25519.PrivateKey }

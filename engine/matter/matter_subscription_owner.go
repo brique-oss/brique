@@ -32,9 +32,9 @@ package matter
 import (
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/inner"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/inner"
 )
 
 // callerPrincipal returns the durable principal id of the external caller being

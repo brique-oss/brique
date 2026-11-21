@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func updateTestCall(t *testing.T, l *ReflexiveLoop, commCh <-chan circulation.Message, id, capName string, params map[string]any) circulation.Response {

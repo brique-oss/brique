@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func panicIntention(id, capName string) circulation.Message {

@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 func TestSecretsCompileIntoThePolicyAndKeepTheFormat(t *testing.T) {

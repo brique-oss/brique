@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // A measurement, not a check: what a Matter operation costs, alone and under concurrency. It runs only when

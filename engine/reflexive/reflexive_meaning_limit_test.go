@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 // A huge params.limit is clamped: one request cannot ask for the whole index.

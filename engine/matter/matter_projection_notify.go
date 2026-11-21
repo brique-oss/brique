@@ -22,8 +22,8 @@ package matter
 // the meaning projection can follow without waiting for a periodic pass.
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // projectionMutators are the capacities that create, change or remove a

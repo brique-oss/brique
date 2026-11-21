@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestMatterTruncateLinesAndGuards(t *testing.T) {

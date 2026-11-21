@@ -20,7 +20,7 @@ import (
 	"os"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestEngine_N6_EXEC_00_FixtureStartupAndWrappersVisible(t *testing.T) {

@@ -21,7 +21,7 @@
 package refusal
 
 import (
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // Reasons carried in the details of a canonical refusal.

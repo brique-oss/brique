@@ -19,7 +19,7 @@ package matter_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestEngine_N6_MAT_70_StructureReadOptionsAndPatchRevision(t *testing.T) {

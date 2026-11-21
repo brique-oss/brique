@@ -24,13 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/shared"
 )
 
 type controlWorld struct {

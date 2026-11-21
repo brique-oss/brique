@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 // testCatalog is what the compiler needs from the engine: the resource actions

@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func (l *MatterLoop) capMatterStat(msg circulation.Message) {

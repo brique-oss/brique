@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/junction"
-	"brique_engine/security/manager"
-	securityruntime "brique_engine/security/runtime"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/manager"
+	securityruntime "brique_engine/engine/security/runtime"
 )
 
 // An instance that carries its signed policies, and the machine that runs it:

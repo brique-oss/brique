@@ -14,7 +14,7 @@ import {
   hello,
   openChannel,
   parseHostMessage,
-} from "../browser/bridgeProtocol.js";
+} from "../hosts/browser/bridgeProtocol.js";
 
 const session = "bbs1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const channel = "bbc1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";

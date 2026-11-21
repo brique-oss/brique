@@ -17,10 +17,10 @@
 package admission
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/security/access"
-	"brique_engine/security/audit"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/trust"
 )
 
 // baseRecord is what is known about an authenticated caller. Nothing here comes

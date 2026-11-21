@@ -17,7 +17,7 @@
 package file
 
 import (
-	"brique_engine/shared/accesstest"
+	"brique_engine/engine/shared/accesstest"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 func TestFileSignerLoadsStrictPKCS8AndSigns(t *testing.T) {

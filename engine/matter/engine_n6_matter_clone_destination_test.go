@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // TestEngine_N6_MAT_30_MatterCloneToDestinationContext

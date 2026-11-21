@@ -11,8 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/platform/filesystem"
 )
 
 const defaultLineIndexStride int64 = 256
@@ -152,7 +152,7 @@ func loadOrBuildLineIndex(path string, revision, totalBytes, totalLines int64) (
 	if err == nil {
 		tmp := indexPath + tmpSuffix
 		if writeErr := os.WriteFile(tmp, encoded, 0o600); writeErr == nil {
-			_ = shared.AtomicReplace(tmp, indexPath)
+			_ = filesystem.AtomicReplace(tmp, indexPath)
 		}
 	}
 	return index, nil
@@ -279,7 +279,7 @@ func extendLineIndexWithReader(path string, oldRevision, newRevision int64, base
 	if updated, err := json.Marshal(index); err == nil {
 		tmp := indexPath + tmpSuffix
 		if os.WriteFile(tmp, updated, 0o600) == nil {
-			_ = shared.AtomicReplace(tmp, indexPath)
+			_ = filesystem.AtomicReplace(tmp, indexPath)
 		}
 	}
 }

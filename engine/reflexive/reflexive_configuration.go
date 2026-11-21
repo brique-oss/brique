@@ -17,7 +17,7 @@
 package reflexive
 
 import (
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 	"strings"
 	"time"
 )

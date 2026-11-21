@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/security/instancedescriptor"
-	"brique_engine/security/signer"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/instancedescriptor"
+	"brique_engine/engine/security/signer"
+	"brique_engine/engine/security/trust"
 )
 
 const (

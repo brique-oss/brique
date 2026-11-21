@@ -17,8 +17,8 @@
 package execution
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // localTestDelivery wraps a message the way a trusted local producer's delivery

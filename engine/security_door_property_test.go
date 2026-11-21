@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package main
+package engine
 
 import (
 	"crypto/ed25519"
@@ -29,13 +29,13 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/matter"
-	"brique_engine/reflexive"
-	"brique_engine/security/access"
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/matter"
+	"brique_engine/engine/reflexive"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 )
 
 // The door-level property test. For random access sources, the decision the engine

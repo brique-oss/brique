@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/configuration"
+	"brique_engine/engine/configuration"
 )
 
 const testSecret = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"

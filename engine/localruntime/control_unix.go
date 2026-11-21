@@ -9,15 +9,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 func listenLocalControl(directory, key string) (net.Listener, ControlEndpoint, func() error, error) {
 	socketDirectory := filepath.Join(directory, "control")
-	if err := shared.CreateProtectedDirectory(socketDirectory); err != nil {
+	if err := protectedfile.CreateProtectedDirectory(socketDirectory); err != nil {
 		return nil, ControlEndpoint{}, nil, err
 	}
-	if err := shared.ValidateProtectedDirectory(socketDirectory, nil); err != nil {
+	if err := protectedfile.ValidateProtectedDirectory(socketDirectory, nil); err != nil {
 		return nil, ControlEndpoint{}, nil, err
 	}
 	address := filepath.Join(socketDirectory, key+".sock")

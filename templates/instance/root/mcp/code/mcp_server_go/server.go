@@ -147,7 +147,7 @@ var _ ProgressForwarder = (*BriqueCapacityClient)(nil)
 type BriqueOutbound interface {
 	// <brique:import name="mcp.initialize" signature="capacity" resolution="engine_external">
 	Initialize() (map[string]any, error)
-	CognitiveFramework() (string, error)
+	Framework() (string, error)
 	FrameworkPath() (string, error)
 	// <brique:import name="brique.intention" signature="capacity" resolution="engine_external">
 	ForwardIntention(intention map[string]any) (map[string]any, error)
@@ -267,7 +267,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 			}))
 			return
 		case "brique", "":
-			// No server-side bootstrap gate here on purpose: the cognitive
+			// No server-side bootstrap gate here on purpose: the Brique
 			// framework itself instructs the agent to call read.state at
 			// startup and bootstrap when needed (its own §8). Enforcing that
 			// with a process-wide flag penalized the common case — an agent
@@ -304,7 +304,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 			"tools": []any{
 				map[string]any{
 					"name":        "brique.bootstrap",
-					"description": "Required first step. Reads the Brique cognitive framework. Call this before using the `brique` tool — and again if your context was compacted or otherwise lost the framework.",
+					"description": "Required first step. Reads the Brique framework. Call this before using the `brique` tool — and again if your context was compacted or otherwise lost the framework.",
 					"inputSchema": map[string]any{
 						"type":       "object",
 						"properties": map[string]any{},
@@ -312,7 +312,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 				},
 				map[string]any{
 					"name":        "brique",
-					"description": "Send a Brique intention to the engine. Before first use, call `brique.bootstrap` or read the MCP resource `brique://cognitive-framework` via resources/read.",
+					"description": "Send a Brique intention to the engine. Before first use, call `brique.bootstrap` or read the MCP resource `brique://framework` via resources/read.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -341,8 +341,8 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		h.broadcast(okResponse(req.ID, map[string]any{
 			"resources": []any{
 				map[string]any{
-					"uri":         "brique://cognitive-framework",
-					"name":        "Brique Cognitive Framework",
+					"uri":         "brique://framework",
+					"name":        "Brique Framework",
 					"description": "Required bootstrap resource. Read this before any Brique tool call.",
 					"mimeType":    "text/markdown",
 				},
@@ -350,7 +350,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		}))
 
 	case "resources/read":
-		framework, err := h.outbound.CognitiveFramework()
+		framework, err := h.outbound.Framework()
 		if err != nil {
 			h.broadcast(errResponse(req.ID, -32603, err.Error()))
 			return
@@ -358,7 +358,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		h.broadcast(okResponse(req.ID, map[string]any{
 			"contents": []any{
 				map[string]any{
-					"uri":      "brique://cognitive-framework",
+					"uri":      "brique://framework",
 					"mimeType": "text/markdown",
 					"text":     framework,
 				},
@@ -375,7 +375,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 
 // bootstrapText is the whole bootstrap answer: read the framework file in full.
 func bootstrapText(path string) string {
-	return "Lis le framework cognitif Brique en entier avant tout appel à `brique` : " + path
+	return "Lis le framework Brique en entier avant tout appel à `brique` : " + path
 }
 
 func okResponse(id json.RawMessage, result any) JSONRPCResponse {

@@ -5,7 +5,7 @@ package matter
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func TestMatterInlineMutationLimitAndHTTPAmbiguity(t *testing.T) {

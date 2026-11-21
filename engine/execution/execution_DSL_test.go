@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func writeDSLTestCap(t *testing.T, dir, capName string, doc map[string]any) {

@@ -6,14 +6,14 @@
 package activation
 
 import (
-	"brique_engine/shared/accesstest"
+	"brique_engine/engine/shared/accesstest"
 	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/trust"
 )
 
 func activationHash(value byte) string {

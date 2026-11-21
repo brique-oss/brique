@@ -19,7 +19,7 @@ package matter
 import (
 	"strings"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 // invalidObjectIdentifier reports the first matter or structure identifier of a request that

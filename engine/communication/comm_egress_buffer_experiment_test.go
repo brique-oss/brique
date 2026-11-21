@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // An experiment, not a check: does the size of the egress queue matter? A consumer takes a message in

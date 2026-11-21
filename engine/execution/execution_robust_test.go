@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
 )
 
 // answerEach answers every intention seen on commCh after `delay`, tracking

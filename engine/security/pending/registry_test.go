@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/trust"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/security/wire"
 )
 
 func TestRunningAndFinalResponseLifecycle(t *testing.T) {

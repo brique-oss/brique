@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 // setRootWrapperAuth rewrites the root listener config with a wrapper_auth mode.

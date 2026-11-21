@@ -32,10 +32,11 @@ import (
 	"sort"
 	"time"
 
-	"brique_engine/security/bootstrap"
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/bootstrap"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // Layout of the security directory, relative to its root.
@@ -146,12 +147,12 @@ func (d *Dir) abs(rel string) string { return filepath.Join(d.Root, filepath.Fro
 // readProtected reads a file through the same no-follow, owner and mode checks
 // the engine applies.
 func (d *Dir) readProtected(rel string, max int64) ([]byte, error) {
-	return shared.ReadProtectedFile(d.Root, rel, shared.ProtectedFileOptions{MaxBytes: max})
+	return protectedfile.ReadProtectedFile(d.Root, rel, protectedfile.ProtectedFileOptions{MaxBytes: max})
 }
 
 // writeFile atomically replaces a file, creating owner-only parent directories.
 func (d *Dir) writeFile(rel string, content []byte, mode os.FileMode) error {
-	return shared.WriteProtectedFile(d.Root, rel, content, mode)
+	return protectedfile.WriteProtectedFile(d.Root, rel, content, mode)
 }
 
 // LoadSource reads and strictly decodes the access source.

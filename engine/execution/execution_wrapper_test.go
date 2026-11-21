@@ -17,7 +17,7 @@
 package execution
 
 import (
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
 )
 
 func TestExecutionWrapper_N1_EXWRP_01_GetWrapperCfg(t *testing.T) {

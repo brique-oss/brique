@@ -10,12 +10,12 @@ import (
 	"os"
 	"testing"
 
-	"brique_engine/shared"
+	"brique_engine/contracts/directoryobject"
 )
 
 type discoveryVector struct {
-	Identity shared.DirectoryObjectID `json:"identity"`
-	Key      string                   `json:"key"`
+	Identity directoryobject.ID `json:"identity"`
+	Key      string             `json:"key"`
 }
 
 func TestDiscoveryKeyVectors(t *testing.T) {

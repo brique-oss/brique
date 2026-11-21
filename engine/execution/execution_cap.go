@@ -17,9 +17,9 @@
 package execution
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 	"fmt"
 	"time"
 )

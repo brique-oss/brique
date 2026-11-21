@@ -24,8 +24,8 @@ package context
 // only. The cause goes to the trace, and the requester is told "internal error".
 
 import (
-	"brique_engine/circulation"
-	"brique_engine/junction"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
 )
 
 // tracePanic records the cause of a panic in the trace of this context.

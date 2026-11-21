@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/wire"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/wire"
 )
 
 // BenchmarkRunningResponses: the pending registry's two-phase delivery of one

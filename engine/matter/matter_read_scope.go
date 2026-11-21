@@ -19,9 +19,9 @@ package matter
 import (
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
 )
 
 // externalReadScope returns the read scope of the external caller being served,

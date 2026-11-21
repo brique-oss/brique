@@ -24,9 +24,9 @@ import (
 	"sort"
 	"strings"
 
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/protectedfile"
 )
 
 // Severity of a doctor finding.
@@ -169,7 +169,7 @@ func (d *Dir) checkKeys(head Generation, add func(Severity, string, ...any)) {
 			continue
 		}
 		id, _ := trust.SigningKeyID(private.Public().(ed25519.PublicKey))
-		shared.ZeroBytes(private)
+		protectedfile.ZeroBytes(private)
 		if id != signerDefinition.ExpectedKeyID {
 			add(SeverityError, "message signer %q: the key file does not match expected_key_id", signerDefinition.Name)
 		}

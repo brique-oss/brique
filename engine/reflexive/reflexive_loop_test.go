@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 func reflexiveDeliveryBridge(out chan<- circulation.Message, size int) chan junction.Delivery {

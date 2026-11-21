@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/security/admission"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/admission"
 )
 
 // Per-principal byte budget (lot B, D-17/D-18). It is a net against a loop or a

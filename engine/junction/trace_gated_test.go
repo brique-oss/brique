@@ -19,10 +19,10 @@ package junction_test
 import (
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 func frameForTraceTest(enabled bool, level string, ch chan junction.Delivery) *junction.ContextRegistry {

@@ -24,11 +24,11 @@ import (
 	"regexp"
 	"strings"
 
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/signer"
-	filesigner "brique_engine/security/signer/file"
-	"brique_engine/security/trust"
-	"brique_engine/shared"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/signer"
+	filesigner "brique_engine/engine/security/signer/file"
+	"brique_engine/engine/security/trust"
+	"brique_engine/platform/protectedfile"
 )
 
 const (
@@ -153,17 +153,17 @@ func load(options Options, open signerOpener) (*Candidate, error) {
 	if options.BootstrapFile == "" {
 		options.BootstrapFile = "bootstrap.json"
 	}
-	if options.SecurityDirectory == "" || !shared.ValidProtectedRelativePath(options.BootstrapFile) || !generationPattern.MatchString(options.Generation) || open == nil {
+	if options.SecurityDirectory == "" || !protectedfile.ValidProtectedRelativePath(options.BootstrapFile) || !generationPattern.MatchString(options.Generation) || open == nil {
 		return nil, bootstrapError(ErrorConfiguration)
 	}
-	content, err := shared.ReadProtectedFile(options.SecurityDirectory, options.BootstrapFile, shared.ProtectedFileOptions{
+	content, err := protectedfile.ReadProtectedFile(options.SecurityDirectory, options.BootstrapFile, protectedfile.ProtectedFileOptions{
 		MaxBytes:         maxBootstrapBytes,
 		AllowedOwnerUIDs: options.AllowedOwnerUIDs,
 	})
 	if err != nil {
 		return nil, bootstrapError(ErrorStorage)
 	}
-	defer shared.ZeroBytes(content)
+	defer protectedfile.ZeroBytes(content)
 
 	var document Document
 	if err := trust.StrictDecodeJSON(content, &document); err != nil {
@@ -218,7 +218,7 @@ func validateDocument(document *Document) (trust.Authority, *securityruntime.Pee
 	keyIDs := make(map[string]struct{}, len(document.MessageSigners))
 	for _, definition := range document.MessageSigners {
 		if !validIdentifier(definition.Name) || definition.Purpose != messageSigningRole || definition.Provider != messageSignerFile ||
-			!validKeyID(definition.ExpectedKeyID) || !shared.ValidProtectedRelativePath(definition.Config.KeyFile) {
+			!validKeyID(definition.ExpectedKeyID) || !protectedfile.ValidProtectedRelativePath(definition.Config.KeyFile) {
 			return trust.Authority{}, nil, bootstrapError(ErrorConfiguration)
 		}
 		if _, duplicate := names[definition.Name]; duplicate {

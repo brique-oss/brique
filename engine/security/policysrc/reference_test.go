@@ -19,8 +19,8 @@ package policysrc
 import (
 	"testing"
 
-	"brique_engine/security/access"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/security/trust"
 )
 
 // check asserts that the oracle AND the compiled snapshot give the expected

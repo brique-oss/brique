@@ -6,7 +6,7 @@
   },
   "objective": {
     "name": "mcp_intent",
-    "description": "Intent and vision document for the mcp_brique context — cognitive framework for LLM-Brique interoperability."
+    "description": "Intent and vision document for the mcp_brique context — Brique framework for LLM-Brique interoperability."
   },
   "functional": {
     "content_kind": "markdown",

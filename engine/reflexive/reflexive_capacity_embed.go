@@ -23,9 +23,9 @@ import (
 	"io/fs"
 	"strings"
 
-	"brique_engine/execution"
-	"brique_engine/matter"
-	"brique_engine/trace"
+	"brique_engine/engine/execution"
+	"brique_engine/engine/matter"
+	"brique_engine/engine/trace"
 )
 
 //go:embed capacity/*.json

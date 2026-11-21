@@ -23,8 +23,8 @@ import (
 	"io"
 	"sort"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 type orderedJSONEntry struct {

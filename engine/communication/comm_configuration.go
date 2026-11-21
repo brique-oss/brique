@@ -17,8 +17,8 @@
 package comm
 
 import (
-	"brique_engine/configuration"
-	"brique_engine/shared"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/shared"
 	"errors"
 	"fmt"
 	"net/netip"

@@ -19,7 +19,7 @@ package secadmin
 import (
 	"fmt"
 
-	"brique_engine/security/policysrc"
+	"brique_engine/engine/security/policysrc"
 )
 
 // Simulate answers one concrete question from the access source with the

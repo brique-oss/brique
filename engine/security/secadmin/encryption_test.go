@@ -21,8 +21,8 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"brique_engine/security/policysrc"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/policysrc"
+	"brique_engine/engine/security/trust"
 )
 
 func TestAnInstancePrincipalIsSealedByDefaultAndTheOperatorCanChangeIt(t *testing.T) {

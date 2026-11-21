@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/security/hostdir"
-	"brique_engine/security/policysrc"
+	"brique_engine/engine/security/hostdir"
+	"brique_engine/engine/security/policysrc"
 )
 
 const templateSecurityDir = "../../../templates/instance/security"

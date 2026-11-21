@@ -8,7 +8,7 @@ package comm
 import (
 	"testing"
 
-	"brique_engine/circulation"
+	"brique_engine/engine/circulation"
 )
 
 func FuzzDecodePublicWebIntention(f *testing.F) {

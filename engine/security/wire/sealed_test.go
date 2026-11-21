@@ -23,8 +23,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"brique_engine/security/seal"
-	"brique_engine/security/trust"
+	"brique_engine/engine/security/seal"
+	"brique_engine/engine/security/trust"
 )
 
 type sealedRecipient struct {

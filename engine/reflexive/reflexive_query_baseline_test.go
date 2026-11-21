@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 // Baseline measurements for the access-rights work (SECURITY.md §12.2): cost of building the projection and of meaning.query on a synthetic

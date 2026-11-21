@@ -23,11 +23,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	securityruntime "brique_engine/security/runtime"
-	"brique_engine/security/wire"
-	"brique_engine/signedtransport"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	securityruntime "brique_engine/engine/security/runtime"
+	"brique_engine/engine/security/wire"
+	"brique_engine/engine/transport/signedtransport"
 )
 
 // -----------------------------

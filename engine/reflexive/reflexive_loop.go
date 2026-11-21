@@ -41,10 +41,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/access"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/shared"
 )
 
 // -----------------------------

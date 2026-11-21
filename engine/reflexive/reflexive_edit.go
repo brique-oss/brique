@@ -45,7 +45,6 @@ package reflexive
 //   "edit.get_element_template"-> (*ReflexiveLoop).capEditGetElementTemplate
 
 import (
-	"brique_engine/junction"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -55,10 +54,12 @@ import (
 	"strings"
 	"sync"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/shared"
-	"brique_engine/template"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
+	"brique_engine/engine/template"
+	"brique_engine/platform/filesystem"
 )
 
 // loadTemplateBytes
@@ -866,7 +867,7 @@ func ensureDirForFile(absPath string) error {
 // - Reports failure via returned `error`; callers convert it to the appropriate circulation response semantics.
 
 func atomicWriteFile(absPath string, data []byte, perm os.FileMode) error {
-	return shared.WriteFileAtomic(absPath, data, perm)
+	return filesystem.WriteFileAtomic(absPath, data, perm)
 }
 
 // editLock is a per-path mutex with a holder count so that idle entries can
@@ -943,7 +944,7 @@ func (l *ReflexiveLoop) lockEditPath(absPath string) func() {
 //   - none.
 //
 // State/Storage Effects:
-// - writes `dstAbs` atomically via a temporary sibling file and `shared.AtomicReplace`.
+// - writes `dstAbs` atomically via a temporary sibling file and `filesystem.AtomicReplace`.
 //
 // Inputs:
 // - srcAbs, dstAbs string.
@@ -957,7 +958,7 @@ func (l *ReflexiveLoop) lockEditPath(absPath string) func() {
 // - Reports failure via returned `error`; callers convert it to circulation response semantics.
 
 func copyFileAtomic(srcAbs, dstAbs string) error {
-	return shared.CopyFileAtomic(srcAbs, dstAbs, 0o644)
+	return filesystem.CopyFileAtomic(srcAbs, dstAbs, 0o644)
 }
 
 // removeAllIfExists

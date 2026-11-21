@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"brique_engine/shared"
+	"brique_engine/engine/shared"
 )
 
 // Covers: N0-NEWID-01, N0-NEWID-02

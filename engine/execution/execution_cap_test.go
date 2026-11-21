@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 func newExecutionCapHarness(wrapperName string, proc junction.WrapperProcState) (*ExecutionLoop, *junction.WrapperState, chan circulation.Message) {

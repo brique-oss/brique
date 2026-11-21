@@ -45,8 +45,9 @@ import (
 	"strings"
 	"time"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 // capStructureCreate
@@ -144,7 +145,7 @@ func (l *MatterLoop) capStructureCreate(msg circulation.Message) {
 			"failed to write structure temp file"))
 		return
 	}
-	if err := shared.AtomicReplace(tmp, dst); err != nil {
+	if err := filesystem.AtomicReplace(tmp, dst); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit structure file"))
@@ -363,7 +364,7 @@ func (l *MatterLoop) capStructureClone(msg circulation.Message) {
 			"failed to write destination structure temp"))
 		return
 	}
-	if err := shared.AtomicReplace(dstTmp, dstFile); err != nil {
+	if err := filesystem.AtomicReplace(dstTmp, dstFile); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit destination structure"))
@@ -469,7 +470,7 @@ func (l *MatterLoop) capStructureDerive(msg circulation.Message) {
 			"failed to write structure temp file"))
 		return
 	}
-	if err := shared.AtomicReplace(tmp, out); err != nil {
+	if err := filesystem.AtomicReplace(tmp, out); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit structure file"))

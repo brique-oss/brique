@@ -20,8 +20,8 @@ import (
 	"sort"
 	"testing"
 
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 type fakeFamilyLoop struct {

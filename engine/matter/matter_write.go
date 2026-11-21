@@ -40,8 +40,9 @@ import (
 	"strconv"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
+	"brique_engine/platform/filesystem"
 )
 
 var errWriteLeaseStale = errors.New("write lease revision mismatch")
@@ -1017,7 +1018,7 @@ func (l *MatterLoop) capStructurePatch(msg circulation.Message) {
 			"failed to write structure tmp"))
 		return
 	}
-	if err := shared.AtomicReplace(tmp, path); err != nil {
+	if err := filesystem.AtomicReplace(tmp, path); err != nil {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error()},
 			"failed to commit structure file"))

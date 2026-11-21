@@ -27,15 +27,15 @@ import (
 	"strings"
 	"sync"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 
-	commpkg "brique_engine/communication"
-	execpkg "brique_engine/execution"
-	matterpkg "brique_engine/matter"
-	reflexpkg "brique_engine/reflexive"
-	tracepkg "brique_engine/trace"
+	commpkg "brique_engine/engine/communication"
+	execpkg "brique_engine/engine/execution"
+	matterpkg "brique_engine/engine/matter"
+	reflexpkg "brique_engine/engine/reflexive"
+	tracepkg "brique_engine/engine/trace"
 )
 
 // -----------------------------

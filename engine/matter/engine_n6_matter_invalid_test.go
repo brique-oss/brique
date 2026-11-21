@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/configuration"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/configuration"
 )
 
 func TestEngine_N6_MAT_40_ReadWriteBatchFailClosed(t *testing.T) {

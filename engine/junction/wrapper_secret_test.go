@@ -24,8 +24,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func TestWrapperSecretsAreRandomPerLaunchAndInvalidatedByTheNextOne(t *testing.T) {

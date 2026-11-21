@@ -32,10 +32,10 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"brique_engine/circulation"
-	commpkg "brique_engine/communication"
-	"brique_engine/junction"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	commpkg "brique_engine/engine/communication"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/shared"
 )
 
 const (

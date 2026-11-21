@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"brique_engine/shared"
+	"brique_engine/platform/protectedfile"
 )
 
 // apply --reload on windows: engine.pid is locked by the live engine, and the
@@ -50,15 +50,15 @@ func TestApplyReloadAsksTheEngineThroughTheReloadRequestFile(t *testing.T) {
 	if err := d.writeFile(PIDFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := shared.OpenProtectedFile(d.abs(PIDFile), false, nil, nil)
+	owner, err := protectedfile.OpenProtectedFile(d.abs(PIDFile), false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Close()
-	if acquired, err := shared.LockFile(owner, false); err != nil || !acquired {
+	if acquired, err := protectedfile.LockFile(owner, false); err != nil || !acquired {
 		t.Fatalf("the test could not play the engine: %v %v", acquired, err)
 	}
-	defer shared.UnlockFile(owner)
+	defer protectedfile.UnlockFile(owner)
 
 	public, _ := newPublicKey(t)
 	_ = d.PrincipalAdd("p", "instance", public)

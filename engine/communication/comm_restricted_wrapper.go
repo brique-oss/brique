@@ -30,12 +30,12 @@ import (
 	"fmt"
 	"strings"
 
-	"brique_engine/circulation"
-	"brique_engine/junction"
-	"brique_engine/security/admission"
-	"brique_engine/security/audit"
-	"brique_engine/security/limits"
-	"brique_engine/security/trust"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/junction"
+	"brique_engine/engine/security/admission"
+	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/limits"
+	"brique_engine/engine/security/trust"
 )
 
 // wrapperLifecycleCaps are the messages the wrapper libraries send to their own

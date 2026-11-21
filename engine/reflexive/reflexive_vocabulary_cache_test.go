@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/shared"
 )
 
 func vocabCacheCall(t *testing.T, l *ReflexiveLoop, ch <-chan circulation.Message, id string, call func(circulation.Message), params map[string]any) circulation.Response {

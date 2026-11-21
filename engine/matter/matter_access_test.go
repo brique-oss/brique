@@ -20,9 +20,9 @@ import (
 	"strings"
 	"testing"
 
-	"brique_engine/circulation"
-	"brique_engine/security/access"
-	"brique_engine/shared"
+	"brique_engine/engine/circulation"
+	"brique_engine/engine/security/access"
+	"brique_engine/engine/shared"
 )
 
 func matterAccessIntention(capability string, params map[string]any) circulation.Intention {
