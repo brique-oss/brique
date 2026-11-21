@@ -87,6 +87,8 @@ func reflexiveProbes() map[string][]probe {
 		"read.meaning":  {{"capacity element", read}},
 		"read.document": {{"document", map[string]any{circulation.KeyItems: []any{map[string]any{circulation.KeyName: "p-name"}}}}},
 		"read.capacity": {{"capacity", map[string]any{"cap_name": "p-cap"}}},
+		"ui.list":       {{"filtered catalog", map[string]any{}}},
+		"ui.open":       {{"target UI", map[string]any{"contextPath": probeTarget, "uiName": "main"}}},
 		"edit.create": {
 			{"capacity element", element("capacity")}, {"child context", element("context")},
 		},

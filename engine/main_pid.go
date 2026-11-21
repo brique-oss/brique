@@ -24,6 +24,8 @@ import (
 	"brique_engine/shared"
 )
 
+var errEnginePIDOwned = errors.New("another engine owns engine.pid")
+
 // acquireEnginePID creates engine.pid inside the protected security directory and
 // holds an exclusive lock on it for the life of the process: brique-sec uses the
 // lock to tell a running engine from a stale file. It does not truncate before it
@@ -42,7 +44,7 @@ func acquireEnginePID(path string) (*os.File, error) {
 		return fail(err)
 	}
 	if !locked {
-		return fail(errors.New("another engine owns engine.pid"))
+		return fail(errEnginePIDOwned)
 	}
 	if err := file.Truncate(0); err != nil {
 		return fail(err)

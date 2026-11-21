@@ -53,7 +53,8 @@ type ContextLoop struct {
 	// Single local control channel (created here, exposed to Comm via frame).
 	ctrl chan junction.Delivery
 
-	families map[shared.FamilyName]junction.FamilyLoop
+	families   map[shared.FamilyName]junction.FamilyLoop
+	matterHTTP *matterpkg.HTTPSubstanceGetter
 
 	Children []string
 
@@ -142,6 +143,10 @@ type webSocketListenerCloser interface {
 // - Child creation failures do not roll back already created children or initialized families.
 
 func NewContextLoop(contextDir string, contextId string, ctxCommReg junction.ContextCommInRegistry) (*ContextLoop, error) {
+	return newContextLoop(contextDir, contextId, ctxCommReg, nil)
+}
+
+func newContextLoop(contextDir string, contextId string, ctxCommReg junction.ContextCommInRegistry, sharedMatterHTTP *matterpkg.HTTPSubstanceGetter) (*ContextLoop, error) {
 	c := &ContextLoop{
 		dir:        contextDir,
 		frame:      junction.ContextRegistry{CtxCommReg: ctxCommReg},
@@ -151,6 +156,7 @@ func NewContextLoop(contextDir string, contextId string, ctxCommReg junction.Con
 		Children:   []string{},
 		childLoops: make(map[string]*ContextLoop),
 		done:       make(chan struct{}),
+		matterHTTP: sharedMatterHTTP,
 	}
 
 	desc, err := LoadContextDescriptor(contextDir, contextId)
@@ -182,6 +188,11 @@ func NewContextLoop(contextDir string, contextId string, ctxCommReg junction.Con
 	}
 	c.Children = desc.Children
 	childErrors := c.createChildrenFromDescriptor(contextDir, contextId, ctxCommReg)
+	if contextId == shared.RootContextID {
+		if provider, ok := ctxCommReg.(junction.SignedTransportProvider); ok && provider.SignedTransport() != nil {
+			provider.SignedTransport().SetRouteClosed(c.EndSignedRoute)
+		}
+	}
 
 	c.installRuntimeAPI()
 	c.startOnCreate()
@@ -287,7 +298,7 @@ func (c *ContextLoop) createChildrenFromDescriptor(parentContextDir string, pare
 				c.tracePanic(text)
 				errs[i] = "internal error on child " + parentContextId + "/" + childName
 			})
-			child, err := NewContextLoop(filepath.Join(parentContextDir, childName), parentContextId+"/"+childName, ctxCommReg)
+			child, err := newContextLoop(filepath.Join(parentContextDir, childName), parentContextId+"/"+childName, ctxCommReg, c.matterHTTP)
 			if err != nil {
 				errs[i] = err.Error() + " on child " + parentContextId + "/" + childName
 				return
@@ -379,6 +390,66 @@ func (c *ContextLoop) State() shared.ContextState {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	return c.state
+}
+
+// RootCommunicationLoop exposes only the root communication family to the
+// process-level adapters whose lifetime is owned by main (local control and
+// browser IPC). Child contexts and callers cannot use it as a routing shortcut.
+func (c *ContextLoop) RootCommunicationLoop() (*commpkg.CommLoop, bool) {
+	if c == nil || c.frame.CtxId != shared.RootContextID {
+		return nil, false
+	}
+	family, ok := c.families[shared.FamilyComm]
+	if !ok {
+		return nil, false
+	}
+	loop, ok := family.(*commpkg.CommLoop)
+	return loop, ok && loop != nil
+}
+
+// EndUIChannel ends ephemeral Matter subscriptions in the whole context tree.
+// It is called by the ingress owner after the channel has been deactivated, so
+// concurrent subscribe handlers cannot recreate an orphan.
+func (c *ContextLoop) EndUIChannel(kind, channelID string) {
+	if c == nil || strings.TrimSpace(channelID) == "" {
+		return
+	}
+	if family, ok := c.families[shared.FamilyMatter]; ok {
+		if loop, ok := family.(*matterpkg.MatterLoop); ok && loop != nil {
+			loop.EndUIChannel(kind, channelID)
+		}
+	}
+	c.childMu.RLock()
+	children := make([]*ContextLoop, 0, len(c.childLoops))
+	for _, child := range c.childLoops {
+		children = append(children, child)
+	}
+	c.childMu.RUnlock()
+	for _, child := range children {
+		child.EndUIChannel(kind, channelID)
+	}
+}
+
+// EndSignedRoute purges non-durable subscriptions tied to a closed WSS
+// generation throughout the context tree.
+func (c *ContextLoop) EndSignedRoute(routeID string) {
+	if c == nil || strings.TrimSpace(routeID) == "" {
+		return
+	}
+	if family, ok := c.families[shared.FamilyMatter]; ok {
+		if loop, ok := family.(*matterpkg.MatterLoop); ok && loop != nil {
+			loop.EndSignedRoute(routeID)
+		}
+	}
+	c.childMu.RLock()
+	children := make([]*ContextLoop, 0, len(c.childLoops))
+	for _, child := range c.childLoops {
+		children = append(children, child)
+	}
+	c.childMu.RUnlock()
+	for _, child := range children {
+		child.EndSignedRoute(routeID)
+	}
 }
 
 // startOnCreate
@@ -762,8 +833,9 @@ func (c *ContextLoop) initFamiliesFromDescriptor(desc ContextDescriptor) error {
 	if desc.EngineConfig != nil {
 		matterCfg, _ = desc.EngineConfig[shared.FamilyMatter].(map[string]any)
 	}
-	matterLoop := matterpkg.NewMatterLoopWithConfig(&c.frame, matterCfg)
+	matterLoop := matterpkg.NewMatterLoopWithSharedHTTP(&c.frame, matterCfg, c.matterHTTP)
 	c.families[shared.FamilyMatter] = matterLoop
+	c.matterHTTP = matterLoop.SubstanceHTTP()
 
 	// EngineConfig[shared.FamilyTrace] block (trust/scope/interfaces only).
 	var traceCfg map[string]any

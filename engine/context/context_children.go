@@ -94,7 +94,7 @@ func (c *ContextLoop) parentAlive() (bool, shared.ContextState) {
 
 // newChild builds and starts one child loop from its directory.
 func (c *ContextLoop) newChild(op childOp, name string) (*ContextLoop, string) {
-	child, err := NewContextLoop(filepath.Join(c.dir, name), c.frame.CtxId+"/"+name, c.frame.CtxCommReg)
+	child, err := newContextLoop(filepath.Join(c.dir, name), c.frame.CtxId+"/"+name, c.frame.CtxCommReg, c.matterHTTP)
 	if err != nil {
 		return nil, err.Error()
 	}

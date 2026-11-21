@@ -112,7 +112,11 @@ func (n *realNode) startViaSpark(t *testing.T) *sparkInterface {
 	case <-time.After(40 * time.Second):
 		t.Fatalf("%s: Spark did not start the engine and the interface", n.name)
 	}
-	waitFor(t, 20*time.Second, func() bool { return portReachable(n.wsAddr) && portReachable(n.httpsAddr) }, "engine "+n.name+" listening")
+	// Spark deliberately starts an owned engine with a loopback :0 override and
+	// discovers the effective UI address through brique.engine-runtime/1. The
+	// ready event above proves that dynamic listener; only the separately
+	// configured HTTPS peer endpoint remains stable at n.httpsAddr.
+	waitFor(t, 20*time.Second, func() bool { return portReachable(n.httpsAddr) }, "engine "+n.name+" HTTPS listening")
 	return ui
 }
 

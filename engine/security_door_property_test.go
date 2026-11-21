@@ -236,8 +236,10 @@ func modelResources(name, destination string, params map[string]any) []string {
 		out = append(out, res("matter", destination, str(circulation.KeySourceMatterID), "read"), res("matter", destination, str(circulation.KeyTargetMatterID), "create"))
 	case "structure.clone":
 		out = append(out, res("structure", destination, str(circulation.KeySourceStructureID), "read"), res("structure", destination, str(circulation.KeyTargetStructureID), "create"))
-	case "matter.unsubscribe", "matter.subscription.ack", "edit.get_element_template":
+	case "matter.unsubscribe", "matter.subscription.ack", "edit.get_element_template", "ui.list":
 		// no world resource
+	case "ui.open":
+		out = append(out, res("context", str("contextPath"), "", "read"))
 	case "read.state":
 		out = append(out, res("context", destination, "", "stat"))
 	case "read.structure", "meaning.query":
@@ -345,6 +347,7 @@ func doorProbes() map[string]map[string][]doorProbe {
 	}
 	reflexiveProbes := map[string][]doorProbe{
 		"read.state": {{"", map[string]any{}}}, "read.structure": {{"", map[string]any{}}}, "meaning.query": {{"", map[string]any{}}},
+		"ui.list": {{"", map[string]any{}}}, "ui.open": {{"target", map[string]any{"contextPath": probeTarget, "uiName": "main"}}},
 		"meaning.rebuild": {{"", map[string]any{}}}, "meaning.update": {{"", map[string]any{}}},
 		"vocabulary.get": {{"", map[string]any{}}}, "vocabulary.query": {{"", map[string]any{}}},
 		"vocabulary.patch": {{"", map[string]any{}}}, "vocabulary.delete": {{"", map[string]any{}}},

@@ -29,6 +29,12 @@
         "websocket_listener": {
           "_comment": "Root context only — the engine never reads this key from a non-root context.json (setting it there is a silent no-op). Optional even on root: only needed if this instance must expose one shared physical WebSocket listener for wrappers and UIs across the whole context tree to connect to. Child contexts never open their own listener; they only declare logical paths on 'ws' interfaces below, which are served by this single root listener.",
           "addr": "127.0.0.1:8080",
+          "allowed_hosts": [],
+          "_allowed_hosts_note": "Optional exact additional HTTP authorities (host[:port]) accepted by the listener, for example an intentional localhost alias or reverse-proxy authority. The effective non-wildcard bind authority is added automatically. Host validation remains active even when allow_any_origin is true.",
+          "allowed_origins": [],
+          "_allowed_origins_note": "Optional exact additional browser origins (scheme://host[:port]). Same-origin requests on an allowed Host are accepted automatically. Clients without Origin still need an allowed Host.",
+          "allow_any_origin": false,
+          "_allow_any_origin_note": "Development-only origin bypass. This never disables Host validation.",
           "ingress_wait_ms": 5000,
           "_ingress_wait_ms_note": "Optional. How long a connection (wrapper or UI) waits for a place in the ingress channel of the communication family when it is full, before the engine closes that connection. Waiting holds the sender back through its own socket; closing loses everything the connection had in flight. Default: 5000.",
           "wrapper_auth": "required",
@@ -45,6 +51,15 @@
 
         "external_call_silence_ms": 120000,
         "_external_call_silence_note": "Optional. How long a call to a peer instance that awaits an answer may hear nothing (no answer, no running response) before it ends with an error. Any running response renews it. Default 120000, at most 1800000. A capacity called by a peer that works longer than this without answering must call notify_running, or the caller gives up while it still runs.",
+        "browser_bridge": {
+          "enabled": false,
+          "allow_public_internet": false,
+          "allow_cleartext_loopback": false,
+          "allowed_prefixes": [],
+          "max_addresses": 8,
+          "open_timeout_ms": 15000,
+          "_note": "Root context only. Enables the owner-only native-host IPC endpoint. It requires an active Brique Sec runtime. Public Internet, cleartext loopback and every LAN/private CIDR are separate explicit local choices; a signed remote endpoint never enables them. Unknown or malformed keys fail engine startup when this block is declared."
+        },
 
         "interfaces": [
           {
@@ -82,7 +97,14 @@
               "tls_ca_file": "",
               "tls_insecure_skip_verify": false,
               "tls_server_name": "",
-              "_tls_note": "Optional. Only read for 'https' interfaces. tls_cert_file and tls_key_file are the server certificate; when both are empty the engine uses <machine directory>/tls/cert.pem and key.pem, as made by 'brique-sec tls init', which also adds the interface to context.json. tls_ca_file is a PEM bundle used to verify peers from a private PKI; when empty the engine accepts the certificates in <machine directory>/tls/trusted.pem, added with 'brique-sec tls trust', and reads those files again while it runs. Signed external traffic still refuses tls_insecure_skip_verify=true."
+              "_tls_note": "Optional. Only read for 'https' interfaces. tls_cert_file and tls_key_file are the server certificate; when both are empty the engine uses <machine directory>/tls/cert.pem and key.pem, as made by 'brique-sec tls init', which also adds the interface to context.json. tls_ca_file is a PEM bundle used to verify peers from a private PKI; when empty the engine accepts the certificates in <machine directory>/tls/trusted.pem, added with brique-sec tls trust, and reads those files again while it runs. Signed external traffic still refuses tls_insecure_skip_verify=true.",
+              "browser_wss": {
+                "enabled": false,
+                "endpoint_name": "main",
+                "endpoint_url": "wss://instance.example/brique/ui",
+                "ui_origins": ["https://instance.example"]
+              },
+              "_browser_wss_note": "Optional and root outerCtx HTTPS only. When enabled, endpoint_url is the exact externally reachable WSS URL and must end in this interface path plus /ui; it is never inferred from the listener or request Host. ui_origins are the exact public UI origins signed into the short-lived descriptor. The engine serves the descriptor at <path>/descriptor and the engine-to-engine socket at <path>/ui, requires TLS 1.3 and rejects browser Origin headers."
             }
           }
         ],
@@ -152,7 +174,9 @@
               "env": {
                 "BRIQUE_WRAPPER_NAME": "my_wrapper",
                 "_env_note": "Free-form environment variables injected into the wrapper process, in addition to BRIQUE_WS_ADDR/BRIQUE_WS_URL which the engine always injects automatically."
-              }
+              },
+              "secrets": [],
+              "_secrets_note": "Optional. The secrets this wrapper needs, one entry each, {\"name\": \"<secret>\", \"env\": \"<VARIABLE>\"}: name is the secret kept on this machine (brique-sec secret add <name>), env the environment variable the wrapper reads it from (not BRIQUE_*, not a key of run.env). A secret is given only if the access source also grants it to this wrapper (\"secrets\" in security/access.json); otherwise the wrapper does not start and the error names the secret. Leave the list empty when the wrapper needs none. Never write a value here."
             }
           }
         ]
@@ -166,7 +190,17 @@
         "max_handlers": 512,
         "_max_handlers_note": "Optional. Matter operations that may run at once. Past it the Matter loop answers 'busy' at once (reason loop busy). A pilot makes several operations per step: a few dozen active continuities reached the former limit of 64. Default: 512.",
         "lease_ttl_ms": 30000,
-        "_lease_ttl_note": "Optional. Time allowed to begin a leased GET or PUT. An upload claimed before expiry may finish after this deadline. Default: 30000."
+        "_lease_ttl_note": "Optional. Sliding idle lifetime of a leased GET or PUT. Each authenticated request renews it, but never past lease_max_life_ms. A claimed upload may finish after this idle deadline, while still remaining bounded by the absolute lifetime. Default: 30000.",
+        "lease_max_transfers": 32,
+        "_lease_max_transfers_note": "Root only. Maximum simultaneous GET/PUT transfers on the instance-wide Matter data plane. Excess authenticated transfers receive 503 with Retry-After. Default: 32.",
+        "lease_max_life_ms": 600000,
+        "_lease_max_life_note": "Root only. Absolute lifetime of a bearer lease across renewed range requests. Activity extends the idle expiry but never beyond this value. Default: 600000 (10 minutes).",
+        "lease_read_idle_ms": 15000,
+        "_lease_read_idle_note": "Root only. Maximum time a client may stop accepting bytes during a Matter GET before the write is aborted. The lease remains resumable by Range until its lifetime expires. Default: 15000.",
+        "lease_listen": "127.0.0.1:0",
+        "_lease_listen_note": "Root only. Private listener used directly in local mode or behind the reverse proxy. Non-loopback requires public_url.",
+        "public_url": "",
+        "_public_url_note": "Root only. Exact HTTPS base exposed by the instance proxy, for example https://engine.example/brique. Empty keeps the generated loopback URL."
       },
       "_matter_note": "Optional Matter data-plane limits. Omit the block or individual positive integer fields to retain their defaults.",
 

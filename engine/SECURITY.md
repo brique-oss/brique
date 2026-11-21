@@ -86,8 +86,29 @@ These are decisions, not defects, and an operator must know them.
 * **Cross-window safety belongs to the capacity.** The replay guarantee holds while the ledger
   remembers (§6.4). A newly signed request with a new `intention_id` is a new operation; use
   an idempotency key or `expected_revision` where a repeated effect matters.
+* **`define` and `control` granted to an external principal are code execution with the engine's
+  rights.** Native wrapper code is not mediated (above), so a principal that may `define` a
+  capacity or `control` a context can have the engine run code it supplied, with the engine's own
+  authority and none of the policy's restrictions. The engine has no "never external" category
+  (D03, D23): grant these two verbs only to a principal you would trust with a shell on the machine,
+  never to a peer you merely exchange data with, and never to `public.web` or `local.ui`. The
+  compiler warns for each such grant (§3.1); read the warning as this sentence.
 * **A façade hands out what its owner can read** if its author puts it in the answer (§9.2).
 * **The audit journal is an operational record, not a tamper-proof ledger.**
+* **A wrapper that is given a secret can disclose it** (§8.6). The policy decides which wrappers
+  receive a secret; it does not decide what a wrapper does with it. The local machine and its
+  operating-system account are trusted (§1.2): what other processes of that account can read is out
+  of scope.
+  **The right is bound to the wrapper's name, not to the command it runs.** The command (`run.cmd`)
+  comes from the `context.json` of the instance, which is not signed, and a wrapper runs under the
+  account of the engine. Whoever can write the files of an instance can therefore run a program of
+  their choice under that account, and that account can also read the value of the secret
+  (`~/.brique/<name>/secrets/<secret>`, mode 0600, same owner). Changing `run.cmd` while keeping the
+  name gives that program the secret as well; binding the right to a hash of the command would not
+  prevent it, since the program can read the file itself. Treat the files of an instance you did not
+  write as code, not as data, before you start it. The grant would only gain its full meaning if
+  wrappers were confined by the operating system (another account, a sandbox) so that the file is
+  not readable by them.
 
 ---
 
@@ -144,9 +165,10 @@ hash; the engine adopts one successor per reload.
 
 **Policy format.** `1` — capacities opened by name (kept for existing policies; its names are no
 longer checked against the instance). `2` — engine capacities by verb and class, user capacities
-by `capacity/execute`, local principals, actors. `3` — format 2 plus `as_owner`. The compiler emits
-format 2, and format 3 only when a source uses `as_owner`, so an older engine keeps reading a policy
-that does not need the newer feature.
+by `capacity/execute`, local principals, actors. `3` — format 2 plus `as_owner`. `4` — format 3 plus
+the reserved keyless `public.web` subject. The compiler emits the lowest sufficient format: 2 by
+default, 3 for `as_owner`, and 4 only when public web rights are configured. An engine that does not
+understand anonymous admission therefore refuses the policy instead of interpreting it loosely.
 
 ---
 
@@ -195,6 +217,61 @@ target never gives it; a read exception removes it.
 policy identity of a wrapper (§8) or of a façade owner (§3.5). The `local.` prefix and the `local`
 kind go together; any other principal may not use the prefix.
 
+`local.ui` is the exact local principal reserved to a browser controlling its own instance through
+an authenticated bridge. It is absent by default and receives only its explicit grants and limits.
+The engine manufactures `@local_ui:/<channel>/<ui>` and clears page identity; loopback alone is no
+proof. A wrapper cannot borrow this id, including while the principal is disabled. The runtime
+advertises the behavior as `brique.local-ui/1`.
+
+The reference browser rendez-vous is native messaging, not a loopback service. The user chooses one
+registered gateway locally through the launcher; `brique.browser-gateway/1` is an owner-only,
+atomically replaced alias and revision. Browser content never selects this alias, and an unavailable
+choice never falls through to another instance. This rendez-vous carries no authority by itself:
+only the engine may create the `local.ui` admission. Each host captures one alias/revision for its
+whole life; a later choice applies only to a new host. Root object/path, control PID/generation and
+IPC hello generation are independent gates, so a reachable stale or foreign endpoint is rejected
+before it can observe a Sink binding.
+
+For a descriptor-free local open, the keyless native host additionally requires the origin attested
+by the extension to equal the exact `brique-web` URL currently reported ready by the launcher for the
+selected gateway. Merely owning another loopback port is insufficient. The engine re-evaluates
+`local.ui` on every message, carries it only in a non-serializable `Delivery`, and returns responses
+only to the engine-created channel/UI coordinates.
+
+The in-memory native channel speaks `brique.browser.bridge/1`: the host creates session and channel
+ids, client requests have an exact increasing sequence, and `open` binds one canonical origin,
+document, frame and UI after user activation. Payloads are opaque and bounded. EOF, disconnect or
+close destroys the corresponding authority; an id can never restore it. The packaged native host and
+engine adapter now consume this contract, so the runtime advertises it. Chrome registration still
+requires a local manifest with the exact allowed extension origin.
+
+The extension-to-service-worker port is not itself a native rendez-vous. `connectNative()` is delayed
+until the isolated content relay has observed trusted active user input and releases a valid `open`.
+Ordinary pages and synthetic clicks therefore create no native process. Navigation, native-host loss
+or service-worker loss closes the channel; the same document cannot recreate it, while a new document
+must repeat trusted activation and receives fresh session/channel coordinates.
+
+### 3.3.1 Public web subject
+
+`kind: "public"` is reserved to the exact id `public.web`. It has no key, peer, encryption mode or
+actor and raises the signed policy to format 4. It is absent by default. Its grants are ordinary
+explicit grants; merely serving or opening a web page creates no right.
+
+Only the dedicated public ingress may ask the trust runtime to admit this subject. For every
+accepted browser connection the ingress creates an ephemeral channel id and manufactures the whole
+source as `@public_web:/<channel>/<ui>`. Page bytes cannot choose that source, identity, actor or
+owner. `public.web` is the common authorization subject; the channel is the operational owner used
+for responses, subscriptions, leases and quotas. It is not an account or a durable
+identity.
+
+The public listener is distinct from the privileged local listener. It requires the
+`brique.public-web.v1` WebSocket subprotocol, exact Host/Origin policy, server-generated channels and
+64 KiB frames. Connection, address, rate and outgoing-queue budgets are applied before effects. The
+engine publishes only a loopback backend in `brique.engine-runtime/2`; `brique-web` validates its own
+origin and proxies only UI names present in the immutable publication. Authority remains in Comm.
+When an extension bridge becomes identified, Spark emits a disconnect, closes the public channel and
+only then activates the identified transport; messages from the old transport are ignored.
+
 ### 3.4 Actors
 
 ```json
@@ -207,6 +284,13 @@ kind go together; any other principal may not use the prefix.
 * a request with **no** actor uses the `default` entry, and is refused if there is none;
 * a request naming an **undeclared** actor is refused (`actor_denied` in the journal);
 * a principal that declares no actor ignores the label.
+
+One label is deliberately different: `brique.ui` is reserved to the browser bridge. It is refused
+unless the receiving policy contains an exact actor binding of that name, even when the principal
+declares no other actor. A `default` binding does not cover it; an empty binding grants nothing; a
+non-empty binding remains the intersection with the principal. Existing direct calls using any other
+label keep the historical rule above. The runtime advertises this semantic as `brique.ui-actor/1` so
+a bridge can reject an engine that would ignore the reserved label.
 
 The actor is a claim of the sender, signed with the rest of the header. It is not a trust boundary:
 a different level of trust is a different principal. Each actor compiles to its own scope, so the
@@ -284,7 +368,38 @@ created, journaled against the principal (`chain_budget`), and answered to a wai
 belongs to the request: another request of the same principal starts again, and a refused call is
 not counted. `unlimited` lifts it with the rate.
 
+### 3.9 `secrets`
+
+Which wrappers may be given which secret (§8.6), by the name of the secret:
+
+```json
+"secrets": {
+  "anthropic": { "wrappers": ["llm_llm"] }
+}
+```
+
+A name is `[a-z][a-z0-9._-]{0,63}`, like every identifier of the source. `wrappers` lists `wrapper_name`s
+(unique in an instance), at least one and at most 64, without repeats; a source may name at most 256
+secrets. The section is decoded strictly like the rest: an unknown field, a number or a list where an
+object belongs is refused, so the value of a secret cannot be written here by mistake.
+
+It is part of the signed policy (`wrapper_secrets`, absent when there is nothing to grant: such a policy is
+byte for byte what it was before, and no format version changes), so `apply` signs it and `diff` shows it
+as `+ secret <name>: <wrapper>` / `- secret <name>: <wrapper>`. It does not make a wrapper a restricted one
+(§8.2): the two are independent. There is no command that edits it yet; write it by hand, then `apply
+--reload`.
+
 ## 4. How a request is decided
+
+**Matter budgets set on the instance.** Not part of the policy and not per principal: they are settings of
+the Matter configuration, and each one is a net against a loop or a bug, not a defence against an adversary.
+
+| Key | Default | Effect |
+|---|---|---|
+| `min_free_disk_mib` | 256 (`0` disables) | under this free space every Matter mutation is refused with `disk_space_low`, whoever asks; an unmeasurable disk refuses too |
+| `owner_bytes_burst_mib`, `owner_bytes_per_minute_mib` | 2048, 1024 (burst `0` disables) | bytes an external principal may write: inline data, the source of a `clone`, the body of a lease upload (charged at commit); refused with `byte_budget_exceeded`; local callers are not metered |
+| `heavy_burst`, `heavy_per_second` | 40, 20 (burst `0` disables) | `create`, `write`, `append`, `clone`, `derive` (so the opening of a lease) per external principal; refused with `rate_limited`; `define` and `control` are not Matter capabilities and are not counted here |
+| `outbox_ttl_hours` | 168 (`0` keeps forever) | an unacknowledged durable event older than this is dropped and traced `outbox_expired`; an outbox also holds at most 1024 events per subscription and 16384 in all, the overflow event being dropped and traced `outbox_full` |
 
 ### 4.1 The doors
 
@@ -309,8 +424,7 @@ admitting snapshot and the currently active one:
 
 * policy **expansion** cannot enlarge an old chain;
 * **restriction, disabling, retirement and revocation** take effect at the next action;
-* a local admission has no key, so the current snapshot must still hold an active principal of the
-  same id.
+* a keyless local or public admission must still exist with its exact kind in the current snapshot.
 
 ### 4.3 Derived authority
 
@@ -425,6 +539,8 @@ Classes: which verb opens the door of each engine capacity.
 | reflexive | `read.state` | read | read |
 | reflexive | `read.structure` | filtered_read | read |
 | reflexive | `trace.inspect` | all_or_nothing | read |
+| reflexive | `ui.list` | filtered_read | read |
+| reflexive | `ui.open` | read | read |
 | reflexive | `vocabulary.delete` | define | define |
 | reflexive | `vocabulary.get` | all_or_nothing | read |
 | reflexive | `vocabulary.patch` | define | define |
@@ -482,6 +598,8 @@ Resources: what each capacity of a family with extractors needs, as returned by 
 | reflexive | `read.structure` | `context/read_recursive @ target` |
 | reflexive | `trace.inspect (events)` | `trace/read @ target #events` |
 | reflexive | `trace.inspect (with message content)` | `trace/payloads @ target #events`<br>`trace/read @ target #events` |
+| reflexive | `ui.list (filtered catalog)` | none |
+| reflexive | `ui.open (target UI)` | `context/read @ target` |
 | reflexive | `vocabulary.delete` | `context/write @ /root` |
 | reflexive | `vocabulary.get` | `context/read_recursive @ /root` |
 | reflexive | `vocabulary.patch` | `context/write @ /root` |
@@ -911,6 +1029,40 @@ instance**: the call is answered at once with the canonical refusal and journale
 the principal's name. A policy that would grant such a route (decision D07) is not implemented (open item
 E1); an unrestricted local component is not subject to it.
 
+### 8.6 Secrets given to a wrapper
+
+A provider key or any other secret reaches a wrapper's environment if and only if three things hold:
+
+| | Where | Says |
+|---|---|---|
+| **a need** | `run.secrets` of the wrapper in its `context.json`: `{"name": "anthropic", "env": "ANTHROPIC_API_KEY"}` | this wrapper wants this secret, in this variable |
+| **a right** | `secrets` of the access source (§3.9), signed | the policy lets this wrapper have it |
+| **a value** | `~/.brique/<name>/secrets/<secret>` (0600), written by `brique-sec secret add` | the machine holds it |
+
+Nothing less is enough: a value with no right gives nothing, a right with no need gives nothing, and a
+declaration the policy does not grant stops the wrapper from starting. A wrapper that declares no secret
+is launched as before, with the environment it inherits; nothing is removed from it.
+
+**At launch**, in `startWrapperProcess` and never at build time, the engine checks the declaration (a
+secret name, a variable `[A-Z_][A-Z0-9_]*` that is not `BRIQUE_*`, is not set in `run.env` and is not used
+twice), asks the **current** trust runtime whether the policy grants the secret to the wrapper (a reload
+publishes a new runtime, so it is asked at each launch and never kept), reads the value with the protected-file
+reader that guards the keys (owner only, no other link, no group or other access) and puts it in the
+environment, over any inherited variable of the same name. Any failure stops the launch before a process
+exists. The answer is `refused` / `wrapper_run_failed` and names the secret, the wrapper and what to do; it
+never carries the value. With no active policy, no secret is given.
+
+**A refusal because of a secret is not remembered.** A launch that fails otherwise leaves the wrapper marked
+as failed until its context restarts. A refusal for a secret does not: the next call looks again, so storing
+the value or applying the right is enough, with no restart.
+
+**What it does not do.** A wrapper that receives a secret can use it and disclose it (§1.4). The right follows the
+wrapper's name, not its command: a modified `run.cmd` under the same name is given the secret, and in any case
+runs under the account that can read the secret file (§1.4). Withdrawing a right
+does not reach a wrapper already running: it keeps the environment it was given, and the next launch is
+refused. A secret that is still in the environment of the engine's own process, or in a file such as
+`.env`, is still inherited by every wrapper: the mechanism protects only once the value is kept in one place.
+
 ---
 
 ## 9. Running user capacities
@@ -1006,6 +1158,7 @@ parts, and the line between them is **what is secret or belongs to one machine**
   activation-state.json                 written by the engine: durable generation, time floor
   replay.journal                        written by the engine (§6.4)
   audit/                                written by the engine (§10.1)
+  secrets/<name>                        the value of a secret a wrapper may be given (0600, §8.6)
   engine.pid, reload.request            engine / brique-sec signalling
   .admin.lock                           held by every mutating brique-sec command
 ```
@@ -1080,7 +1233,7 @@ context directory; `--dir` (or `BRIQUE_SECURITY_DIR`) overrides the machine's di
 | `init [--strict --authority-public k]` | directory, instance key, authority, bootstrap, generation `g000001` |
 | `key show` | the public keys of this instance (message key, policy authority), and the `principal add` line to run on a peer |
 | `tls init\|trust\|show` | the HTTPS certificate of this machine and the interface that uses it; trust a peer's certificate; show what a peer needs |
-| `principal add\|encryption\|limits\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates `local.<wrapper>` without a key; `--encryption required\|none` on `add`, or `principal encryption <id> required\|none\|default`, chooses how its messages travel (§3.7); `principal limits <id> default\|unlimited\|<rate> [<burst>]` sets its request budget (§3.8) |
+| `principal add\|encryption\|limits\|disable\|enable\|remove\|list` | edit the source; `--kind local` creates a keyless local principal (`local.<wrapper>` or the reserved `local.ui`); `principal add public.web --kind public` creates the keyless public subject with no grant; `--encryption required\|none` on `add`, or `principal encryption <id> required\|none\|default`, chooses how peer messages travel (§3.7); `principal limits <id> default\|unlimited\|<rate> [<burst>]` sets its request budget (§3.8) |
 | `grant add\|remove\|list [--actor a] [--except t] [--as-owner local.x]` | edit grants; the rank is the position in `grant list` |
 | `peer add\|remove\|list` | where a principal is reached: `--audience`, `--interface`, `--target https://…`; part of the signed policy. With `--name <machine> --key <public key>…` (repeatable), `peer add` reaches the principal on one more machine, and `peer remove --name <machine>` stops (§7.4.1) |
 | `principal key add\|remove` | give a principal another public key, with `--not-before <RFC 3339 UTC date>`, or take one away (a key a machine still names stays) |
@@ -1205,6 +1358,31 @@ public key.
 **A façade.** `principal add local.reports --kind local`; give it its `read`/`write`; then
 `grant add partner-a call '/root/reports#capacity:report.generate' --as-owner local.reports`.
 
+**Give a wrapper a secret** (a provider key, say). The value is kept on this machine, the right in the
+access source, the need in the wrapper's `context.json` (§8.6):
+
+```sh
+pbpaste | brique-sec --root $ROOT secret add anthropic   # or any command that prints it; never an argument
+```
+
+Then, in `<instance>/security/access.json`, by hand:
+
+```json
+"secrets": { "anthropic": { "wrappers": ["llm_llm"] } }
+```
+
+and in the wrapper's entry of its context's `context.json`:
+
+```json
+"run": { "secrets": [ { "name": "anthropic", "env": "ANTHROPIC_API_KEY" } ] }
+```
+
+then `brique-sec --root $ROOT diff` (it shows `+ secret anthropic: llm_llm`) and `apply --reload`. The wrapper
+is given the key at its next launch; no restart of the context is needed after a refusal. To rotate, run
+`secret add` again with the new value and restart the wrapper. `secret list` shows names, sizes and dates, never
+values; `secret remove <name>` deletes a value and leaves the right. The last step is to take the key out of
+the engine's own environment and of any file that holds it, or every wrapper keeps inheriting it.
+
 ### 11.4 Runbook
 
 | Situation | What happens | What to do |
@@ -1275,6 +1453,10 @@ broken (most were checked by deliberately breaking it).
 | The wrapper frame is decoded identically by the engine, Go, Python and C++ | `wrapper_frames.json`, run by four suites |
 | No data race in any package | `go test -race ./...` clean |
 | Nine fuzz targets: strict JSON and canonicalization, envelope verification, bootstrap, activation state, replay journal recovery, identifiers, protected paths, targets, the signed ingress handler | eight seconds each without failure; run them long in CI |
+| A wrapper is given a secret only if it declares it, the signed policy grants it and the machine holds a value, and not otherwise; the right is signed (altering it breaks the proof), absent from a policy that grants none, validated like the rest of the source, and installed by `apply` even when it is the only change | `trust/wrapper_secrets_test.go`, `policysrc/secrets_test.go`, `TestSecretRightsGoFromTheSourceToTheEngine`, `TestSecretRightsThroughTheCommandLine` |
+| At launch, a secret replaces an inherited variable; a right with no declaration gives nothing; no policy, a right for another wrapper, no value or a value readable by others starts no process and the refusal never carries the value; a refusal for a secret is retried, any other launch failure is still remembered (checked by removing the guard) | `execution/execution_wrapper_secrets_test.go` |
+| With a real engine, the real `brique-sec` and a real Python wrapper: refused with nothing granted, refused with a value but no right, given after `apply`, not given to a wrapper that declared nothing, kept by a running wrapper when the right is withdrawn and refused at its next launch, given again once granted again with no restart; the value is in no file of the instance, of the machine or of the logs except its own (checked by cutting the delivery) | `TestRealProcesses_AWrapperIsGivenOnlyTheSecretsItIsGranted` |
+| The values are stored owner-only, read back by the engine's own reader, replaced by a rotation, refused when empty, with a NUL or too long, and never printed by `brique-sec`; `doctor` sees a value that others can read | `secadmin/secrets_test.go`, `secrets_doctor_test.go`, `cmd/brique-sec/secret_test.go` |
 
 ### 12.2 Measurements
 
@@ -1351,6 +1533,34 @@ The model was settled decision by decision; this is the surviving list.
 | D31 | Every principal has a request budget by default; lifting it is an explicit setting. An over-budget request is answered `unavailable` when its caller waits, dropped when nobody does |
 | D32 | The calls one admitted request sets off inside the instance are counted in all and by depth, in a counter every derived delivery shares; the call over the budget is refused where it is created |
 | D33 | A key is bound to a machine: a peer lists endpoints, each with its address and the keys that live on it; messages are sealed to the most recent key of the machine they go to, answers go back to the machine of the key that signed the request, and an answer is accepted only from the machine asked |
+| D34 | Anonymous browser authority is the explicit keyless `public.web` policy subject; the engine manufactures a separate ephemeral channel for operational ownership, and no connection grants rights by itself |
+| D35 | Signed browser traffic uses the reserved actor `brique.ui`; it always needs an exact binding, `default` never substitutes for it, and principal-only evaluation is exposed only as a refusal diagnosis, never as an Admission |
+| D36 | A browser controlling its own instance runs as the explicit keyless principal `local.ui`, never as ambient Context authority; engine-created channel/source own the exchange and wrapper channels cannot borrow the id |
+| D37 | The browser rendez-vous uses native messaging and one explicit owner-protected launcher gateway choice; no page-selected alias, loopback trust, silent fallback or bridge-held Brique key |
+| D38 | A browser bridge session is memory-only and host-owned: exact request sequence, immutable origin/document/frame/UI binding, host-created channel, bounded opaque payloads and irreversible close/EOF |
+| D39 | A public instance descriptor is short-lived and self-signed through the signer boundary; identified use additionally requires one atomic check against the active Brique Sec key, principal, audience, browser origin and configured key-to-machine binding. Five-minute validity plus a fresh hello bound to its `bid1_` hash replaces a persistent generation counter |
+| D40 | Identified browser WSS uses a three-message, mutually signed handshake on one connection: initiator challenge and current `bid1_`, responder challenge and complete echo, then initiator finish. Both sides recheck current Brique Sec state; the resulting `bwg1_` generation is transcript-bound, memory-only and never resumes another socket |
+| D41 | A signed browser endpoint is only a proposal: its key selects one configured Brique Sec machine, its WSS URL must remain under that machine's signed HTTPS target, and every resolved IP must pass an explicit local policy. Dialing is pinned to the checked IP set, so DNS is not consulted again |
+| D42 | The browser WSS socket is engine-to-engine, never browser-to-engine: it requires the dedicated subprotocol, rejects Origin, bounds concurrent sessions and handshake time, and completes the three signed messages before handing the socket to any adapter. A proxy is not discovered implicitly because it would be an unchecked destination |
+| D43 | After the hello, signed envelopes remain byte-identical and use a tiny socket-generation-local binary frame. One ordered reader and one writer preserve WebSocket safety; bounded pending sends receive ack only after remote ingress accepts the bytes, reject on explicit refusal, and an unacknowledged close remains outcome-unknown. The transport never retries an Intention |
+| D44 | Authenticated duplex routes are ephemeral and transport-neutral: Comm verifies that the signed key, configured peer instance and reserved `brique.ui` actor match the route, UI requests may select the active peer/key route, and every response or replay returns on the exact admitted `bwg1_` without silent HTTPS fallback |
+| D45 | The identified WSS server is an explicit root `outerCtx` HTTPS feature: its advertised external URL and UI origins are configuration, never inferred from a listener or request; descriptor and hello use the current Brique Sec generation, and every refresh signs under a bounded local deadline even when the HTTP client supplies none. TLS 1.3 is mandatory, browser Origin is refused and interface shutdown cancels every route |
+| D46 | The identified WSS initiator accepts only bridge-attested descriptor bytes and origin, then composes the current Brique Sec gate, endpoint-under-target check, bounded DNS/IP policy, pinned dial and signed hello. It rechecks the atomically published complete runtime after the handshake, so a concurrent reload closes the socket before route registration. It registers the valid route before publishing the channel, and context cancellation closes it without retry |
+| D47 | The remote branch of the browser Sink owns the bridge channel-to-route binding: with a descriptor it derives the exact peer and machine from the authenticated WSS connection, clears page source and identity, keeps only semantic user type, and forces actor `brique.ui`. Root Comm ingress manufactures the registered `@ui_<channel>` source exactly as child ingress does; signed responses return only through that ephemeral UI route. Closing either side removes route and ownership exactly once |
+| D48 | Native host to engine uses a distinct owner-only `brique.browser-engine/1` IPC endpoint, never the administrative control socket or a loopback port. The current engine generation is the first gate; one connection carries one host session, bounded channels and payloads, exact request/event sequences, and EOF closes every Sink binding exactly once. This transport holds no Brique identity or rights |
+| D49 | Engine IPC is mounted only by an explicit root `browser_bridge` block and is published before readiness. Malformed or unknown security keys fail startup. Public Internet, cleartext loopback and each private CIDR are independent local choices; remote signatures cannot enable them. Client TLS is 1.3 with system roots plus the current protected Brique Sec trust bundle. Shutdown closes IPC bindings before Comm |
+| D50 | The native host resolves exactly the owner-selected launcher alias and the matching ready engine descriptor; root object/path, generation, PID and control status must agree. For local mode it also requires the exact launcher-supervised web origin, normalizing only the optional trailing slash of the root URL, never arbitrary loopback or another path. It never starts an instance, falls back to another alias, reads a Brique key or trusts Chrome's process arguments for business authority. One process owns one K2 Session and exits on native EOF or disconnect |
+| D51 | The local branch of the browser Sink accepts descriptor-free traffic only after D50, re-admits the explicit `local.ui` principal on every message, constructs a non-serializable Delivery that replaces page source/identity, and routes replies only to the exact engine-created channel/UI. Revocation, close and EOF fail closed and remove the ephemeral route |
+| D52 | Extension injection and a page port create no native process. Only an `open` released by trusted active user input starts native messaging. Navigation, native-host death and service-worker termination irreversibly close that document's authority; a fresh document repeats activation and receives new process/session/channel coordinates |
+| D53 | A secret reaches a wrapper only if the wrapper declares it, the signed policy grants it and the machine holds the value; the right is indexed by wrapper name, not by `local.<name>` and not by the wrapper's command (an unsigned `run.cmd` under the same name is given the secret, and runs under the account that can read the secret file), so granting a secret does not restrict the wrapper; a refusal for a secret is not remembered; the policy is asked at each launch; the local machine is trusted and a wrapper that receives a secret can disclose it |
+
+The composed remote qualification for D38/D44/D47/D48 crosses a K2 Session, the real owner-only IPC
+listener and client, BrowserSink, Comm, mutually configured Brique Sec runtimes and pinned TLS 1.3.
+It verifies that a page-forged source and identity are removed before signing and that the signed
+response returns through the same IPC generation and exact Session channel. A Chrome for Testing 157
+campaign on macOS additionally covers real injection, trusted activation, native-host process launch,
+the principal/`brique.ui` rights intersection at B, `read.state`, and the final response in the page.
+Other browsers, Windows-native ACLs and non-loopback network deployments remain separate qualifications.
 
 ## Appendix B. Package map
 
@@ -1365,6 +1575,12 @@ The model was settled decision by decision; this is the surviving list.
 | `security/replay` | durable replay ledger, group commit, maintenance, quota |
 | `security/pending` | outbound response registry (two-phase, ordered) |
 | `security/runtime` | one atomically published complete runtime (signers, trust, replay, peers) |
+| `security/instancedescriptor` | strict short-lived public descriptor, signature/freshness/origin checks and `bid1_` binding hash |
+| `security/browserhello` | bounded mutual WSS hello state machines, fresh challenges and transcript-derived `bwg1_` connection generation |
+| `networkpolicy` | bounded DNS resolution, public/LAN address policy and IP-pinned dial function for browser WSS |
+| `browsertransport` | real WebSocket hello, bounded ordered `security/wire` framing and transcript-derived registration into `signedtransport`; no Comm policy |
+| `browserclient` | initiating composition of current Brique Sec, network policy, pinned WSS dial and pre-published hub route; no browser message authority |
+| `signedtransport` | bounded in-memory rendez-vous from authenticated pair/key/`bwg1_` routes to Comm; no WebSocket, Intention or policy semantics |
 | `security/signer`, `signer/file` | signer boundary and the file provider |
 | `security/bootstrap` | protected bootstrap loader |
 | `security/hostdir` | where the instance's security folder and the machine's directory are, found from the instance alone |
@@ -1373,8 +1589,11 @@ The model was settled decision by decision; this is the surviving list.
 | `security/catalog` | resource kinds and actions the policy is compiled against |
 | `security/audit` | denial journal |
 | `security/refusal` | canonical refusals |
-| `security/secadmin`, `cmd/brique-sec` | offline administration |
+| `security/secadmin`, `cmd/brique-sec` | offline administration, including the values of the secrets of the machine |
 | `junction` | `Delivery`, derivation, response permits, wrapper secrets and delegation, provenance |
-| `communication` | signed ingress and egress, routing, restricted wrappers |
+| `communication` | signed ingress and egress, routing, restricted wrappers, and the browser Sink whose distant and local branches bind one bridge channel to authenticated or explicitly admitted authority |
+| `browserbridge` | bounded native-messaging/session state plus owner-only generation-bound engine IPC client/listener; no identity or admission |
+| `browserhost` | keyless native-host orchestration from protected launcher choice and engine discovery to one K2 Session |
+| `launcher` | protected instance registry, supervision and browser gateway choice |
 | `execution`, `matter`, `reflexive`, `context`, `trace` | the families and their doors |
 | `shared` | protected files (unix and windows), instance files, element names, atomic replace |

@@ -257,8 +257,12 @@ func TestParseRootWebSocketListenerConfig_OriginDefaultsAndList(t *testing.T) {
 		t.Fatalf("wrapper authentication default = %q, want required", cfg.WrapperAuth)
 	}
 	cfg = parseRootWebSocketListenerConfig(map[string]any{
-		"addr": "127.0.0.1:1", "allowed_origins": []any{" https://ui.example.com ", "", 3},
+		"addr": "127.0.0.1:1", "allowed_hosts": []any{" localhost:8080 ", "", 3},
+		"allowed_origins": []any{" https://ui.example.com ", "", 3},
 	})
+	if len(cfg.AllowedHosts) != 1 || cfg.AllowedHosts[0] != "localhost:8080" {
+		t.Fatalf("allowed hosts = %v", cfg.AllowedHosts)
+	}
 	if len(cfg.AllowedOrigins) != 1 || cfg.AllowedOrigins[0] != "https://ui.example.com" {
 		t.Fatalf("allowed origins = %v", cfg.AllowedOrigins)
 	}
@@ -302,9 +306,15 @@ func TestNewContextLoop_BuildsChildrenConcurrentlyAndReportsFailures(t *testing.
 	if n != 22 {
 		t.Fatalf("children built = %d, want 22", n)
 	}
+	if c.matterHTTP == nil {
+		t.Fatal("root has no instance Matter data plane")
+	}
 	for _, name := range sortedNames(c.childLoops) {
 		if st := c.childLoops[name].State(); st != shared.ContextRunning {
 			t.Fatalf("child %s state = %v", name, st)
+		}
+		if c.childLoops[name].matterHTTP != c.matterHTTP {
+			t.Fatalf("child %s owns a different Matter data plane", name)
 		}
 	}
 	c.Stop()

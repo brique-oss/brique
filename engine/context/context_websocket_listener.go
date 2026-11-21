@@ -102,6 +102,13 @@ func parseRootWebSocketListenerConfig(raw map[string]any) junction.WebSocketList
 	if v, ok := raw[configuration.KeyIntAnyOri].(bool); ok {
 		cfg.AllowAnyOrigin = v
 	}
+	if list, ok := raw[configuration.KeyIntAllowedHosts].([]any); ok {
+		for _, item := range list {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				cfg.AllowedHosts = append(cfg.AllowedHosts, strings.TrimSpace(s))
+			}
+		}
+	}
 	switch v, _ := raw[configuration.KeyIntWrapperAuth].(string); v {
 	case junction.WrapperAuthRequired, junction.WrapperAuthOptional:
 		cfg.WrapperAuth = v
