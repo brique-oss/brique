@@ -25,6 +25,7 @@ import (
 	"brique_engine/security/trust"
 	"brique_engine/security/wire"
 	"brique_engine/shared"
+	"brique_engine/signedtransport"
 )
 
 type commSigningBackend struct{ privateKey ed25519.PrivateKey }
@@ -36,6 +37,10 @@ func (*commSigningBackend) Health(context.Context) error { return nil }
 func (*commSigningBackend) Close() error                 { return nil }
 
 func newSignedExternalTestLoop(t *testing.T) (commWrapperFixture, *CommLoop, junction.Delivery) {
+	return newSignedExternalTestLoopWithTarget(t, "https://peer.example:8443/brique")
+}
+
+func newSignedExternalTestLoopWithTarget(t *testing.T, target string) (commWrapperFixture, *CommLoop, junction.Delivery) {
 	t.Helper()
 	fixture := newCommWrapperFixture(t)
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -59,7 +64,7 @@ func newSignedExternalTestLoop(t *testing.T) (commWrapperFixture, *CommLoop, jun
 	}
 	peers, err := securityruntime.NewPeerDirectory([]securityruntime.Peer{{
 		PrincipalID: "partner-a", AudienceInstanceID: "partner-instance",
-		Interface: "secure-peer", Target: "https://peer.example:8443/brique",
+		Interface: "secure-peer", Target: target,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +210,49 @@ func TestSignedExternalResponseRetainsAmbiguousOutcomeWithoutRewindingOnRejectio
 		t.Fatalf("transport rejection rewound durable sequence: %d", retry.Sequence())
 	}
 	_ = retry.Abort()
+}
+
+func TestSignedExternalResponseUsesExactAuthenticatedDuplexRoute(t *testing.T) {
+	fixture, loop, _ := newSignedExternalTestLoop(t)
+	routeID := "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	verified, err := wire.VerifyClear(fixture.rootEnvelope(t), "comm-wrapper-instance", fixture.now, fixture.runtime.Active())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := junction.AdmitExternalIntentionFromRoute(verified, routeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markFixtureRequestDispatched(t, loop, request, fixture.now)
+	loop.signedTransportEgress = make(chan signedExternalEgressItem, 1)
+	handle, err := fixture.registry.SignedTransport().Register(signedtransport.Route{
+		ID: routeID, RemoteInstanceID: "partner-instance", RemoteKeyID: fixture.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	delivery, reservation := beginSignedResponse(t, request, circulation.ValueStatusRunning)
+	if reservation.RouteID() != routeID {
+		t.Fatalf("reservation route = %q", reservation.RouteID())
+	}
+	if !loop.routeSignedExternalResponse(delivery) {
+		t.Fatal("duplex response was not routed")
+	}
+	select {
+	case item := <-loop.signedTransportEgress:
+		if item.RouteID != routeID || item.RemoteInstanceID != "partner-instance" || item.RemoteKeyID != fixture.keyID {
+			t.Fatalf("duplex item = %+v", item)
+		}
+	default:
+		t.Fatal("duplex response was not queued")
+	}
+	select {
+	case item := <-loop.ifaces["secure-peer"].SignedExternalEgress:
+		t.Fatalf("response escaped through HTTPS: %+v", item)
+	default:
+	}
 }
 
 // signedExternalTestLimits are the replay limits of the signed-external test fixture;

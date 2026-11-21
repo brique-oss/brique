@@ -19,7 +19,11 @@ package comm
 import (
 	"brique_engine/configuration"
 	"brique_engine/shared"
+	"errors"
+	"fmt"
+	"net/netip"
 	"strings"
+	"time"
 )
 
 // -----------------------------
@@ -52,6 +56,18 @@ type CommCfg struct {
 	// ExternalCallSilenceMs is how long a call to a peer that awaits an answer may hear nothing (no answer and no `running`) before
 	// it is ended with an error. Any `running` answer renews it. 0 = default (120000); at most 1800000.
 	ExternalCallSilenceMs int
+	BrowserBridge         BrowserBridgeCfg
+	BrowserBridgeError    error
+}
+
+type BrowserBridgeCfg struct {
+	Declared               bool
+	Enabled                bool
+	AllowPublicInternet    bool
+	AllowCleartextLoopback bool
+	AllowedPrefixes        []netip.Prefix
+	MaxAddresses           int
+	OpenTimeout            time.Duration
 }
 
 // defaultIngressBuffer: at the observed rate of a loaded wrapper (about 3000 messages per second) 16 places held 5 ms of traffic.
@@ -149,6 +165,7 @@ func ParseCommCfg(engineCfg map[string]any) CommCfg {
 	if v := shared.AnyToInt64(engineCfg[configuration.KeyExternalCallSilenceMs]); v > 0 {
 		cfg.ExternalCallSilenceMs = int(v)
 	}
+	cfg.BrowserBridge, cfg.BrowserBridgeError = parseBrowserBridgeCfg(engineCfg[configuration.KeyBrowserBridge])
 
 	// trust / scope
 	if t, ok := engineCfg[configuration.KeyTrust].(map[string]any); ok && t != nil {
@@ -255,4 +272,97 @@ func ParseCommCfg(engineCfg map[string]any) CommCfg {
 	}
 
 	return cfg
+}
+
+func parseBrowserBridgeCfg(raw any) (BrowserBridgeCfg, error) {
+	if raw == nil {
+		return BrowserBridgeCfg{}, nil
+	}
+	value, ok := raw.(map[string]any)
+	if !ok || value == nil {
+		return BrowserBridgeCfg{Declared: true}, errors.New("browser_bridge must be an object")
+	}
+	cfg := BrowserBridgeCfg{Declared: true, MaxAddresses: 8, OpenTimeout: 15 * time.Second}
+	allowed := map[string]struct{}{
+		configuration.KeyBrowserBridgeEnabled: {}, configuration.KeyBrowserAllowPublic: {},
+		configuration.KeyBrowserAllowLoopback: {}, configuration.KeyBrowserAllowedPrefix: {},
+		configuration.KeyBrowserMaxAddresses: {}, configuration.KeyBrowserOpenTimeoutMS: {},
+	}
+	for key := range value {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		if _, ok := allowed[key]; !ok {
+			return cfg, fmt.Errorf("browser_bridge contains unknown key %q", key)
+		}
+	}
+	var valid bool
+	if cfg.Enabled, valid = optionalBool(value, configuration.KeyBrowserBridgeEnabled); !valid {
+		return cfg, errors.New("browser_bridge enabled must be a boolean")
+	}
+	if cfg.AllowPublicInternet, valid = optionalBool(value, configuration.KeyBrowserAllowPublic); !valid {
+		return cfg, errors.New("browser_bridge allow_public_internet must be a boolean")
+	}
+	if cfg.AllowCleartextLoopback, valid = optionalBool(value, configuration.KeyBrowserAllowLoopback); !valid {
+		return cfg, errors.New("browser_bridge allow_cleartext_loopback must be a boolean")
+	}
+	if rawPrefixes, exists := value[configuration.KeyBrowserAllowedPrefix]; exists {
+		items, ok := rawPrefixes.([]any)
+		if !ok {
+			return cfg, errors.New("browser_bridge allowed_prefixes must be an array")
+		}
+		seen := make(map[netip.Prefix]struct{}, len(items))
+		for _, item := range items {
+			text, ok := item.(string)
+			prefix, err := netip.ParsePrefix(text)
+			if !ok || err != nil || prefix.Addr().Is4In6() || prefix != prefix.Masked() {
+				return cfg, errors.New("browser_bridge contains an invalid canonical prefix")
+			}
+			if _, duplicate := seen[prefix]; duplicate {
+				return cfg, errors.New("browser_bridge contains a duplicate prefix")
+			}
+			seen[prefix] = struct{}{}
+			cfg.AllowedPrefixes = append(cfg.AllowedPrefixes, prefix)
+		}
+	}
+	if number, exists, ok := optionalJSONInt(value, configuration.KeyBrowserMaxAddresses); !ok || exists && (number < 1 || number > 64) {
+		return cfg, errors.New("browser_bridge max_addresses must be an integer from 1 to 64")
+	} else if exists {
+		cfg.MaxAddresses = number
+	}
+	if number, exists, ok := optionalJSONInt(value, configuration.KeyBrowserOpenTimeoutMS); !ok || exists && (number < 1 || number > 60000) {
+		return cfg, errors.New("browser_bridge open_timeout_ms must be an integer from 1 to 60000")
+	} else if exists {
+		cfg.OpenTimeout = time.Duration(number) * time.Millisecond
+	}
+	return cfg, nil
+}
+
+func optionalBool(values map[string]any, key string) (bool, bool) {
+	raw, exists := values[key]
+	if !exists {
+		return false, true
+	}
+	value, ok := raw.(bool)
+	return value, ok
+}
+
+func optionalJSONInt(values map[string]any, key string) (value int, exists, valid bool) {
+	raw, exists := values[key]
+	if !exists {
+		return 0, false, true
+	}
+	switch number := raw.(type) {
+	case int:
+		return number, true, true
+	case int64:
+		return int(number), true, int64(int(number)) == number
+	case float64:
+		if number != float64(int(number)) {
+			return 0, true, false
+		}
+		return int(number), true, true
+	default:
+		return 0, true, false
+	}
 }

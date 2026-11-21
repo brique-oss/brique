@@ -66,8 +66,12 @@ import (
 	"sync"
 	"time"
 
+	"brique_engine/browsertransport"
 	"brique_engine/circulation"
 	"brique_engine/configuration"
+	"brique_engine/security/browserhello"
+	"brique_engine/security/instancedescriptor"
+	"brique_engine/security/signer"
 	"brique_engine/shared"
 )
 
@@ -106,6 +110,8 @@ type HttpsInterface struct {
 	clientStamp   time.Time
 	clientChecked time.Time
 	targets       map[string]string // key: "ext_<pubkey>" -> baseURL (e.g. "https://host:8443/brique")
+	browserWSS    browserWSSConfig
+	publisher     *instancedescriptor.Publisher
 
 	// Server side
 	server   *http.Server
@@ -115,6 +121,14 @@ type HttpsInterface struct {
 	once   sync.Once
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+type browserWSSConfig struct {
+	enabled      bool
+	endpointName string
+	endpointURL  string
+	uiOrigins    []string
+	authority    string
 }
 
 // NewHTTPSInterfaceRuntime
@@ -347,6 +361,13 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 		insecure = v
 	}
 	serverName, _ := cfg[configuration.KeyTLSServerName].(string)
+	browserWSS, err := parseBrowserWSSConfig(cfg, path)
+	if err != nil {
+		return nil, fmt.Errorf("https iface %q: %w", rt.Name, err)
+	}
+	if browserWSS.enabled && (!ingressEnabled || rt.Type != EndpointOuterCtx) {
+		return nil, fmt.Errorf("https iface %q: browser_wss requires an ingress-enabled outerCtx interface", rt.Name)
+	}
 
 	transportCtx, cancel := context.WithCancel(context.Background())
 	h := &HttpsInterface{
@@ -363,6 +384,7 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 		readTimeout:    readTimeout,
 		idleTimeout:    idleTimeout,
 		targets:        targets,
+		browserWSS:     browserWSS,
 
 		certFile:           certFile,
 		keyFile:            keyFile,
@@ -449,6 +471,140 @@ func (h *HttpsInterface) Directions() InterfaceDirections {
 	return InterfaceDirections{ReadLoop: h.ingressEnabled, WriteLoop: h.egressEnabled}
 }
 
+func parseBrowserWSSConfig(cfg map[string]any, basePath string) (browserWSSConfig, error) {
+	var result browserWSSConfig
+	raw, exists := cfg[configuration.KeyBrowserWSS]
+	if !exists {
+		return result, nil
+	}
+	values, ok := raw.(map[string]any)
+	if !ok || values == nil {
+		return result, errors.New("browser_wss must be an object")
+	}
+	result.enabled, _ = values[configuration.KeyBrowserWSSEnabled].(bool)
+	if !result.enabled {
+		return result, nil
+	}
+	result.endpointName, _ = values[configuration.KeyBrowserWSSEndpoint].(string)
+	result.endpointURL, _ = values[configuration.KeyBrowserWSSURL].(string)
+	if result.endpointName == "" {
+		result.endpointName = "main"
+	}
+	switch origins := values[configuration.KeyBrowserWSSUIOrigins].(type) {
+	case []any:
+		for _, value := range origins {
+			origin, ok := value.(string)
+			if !ok || origin == "" {
+				return result, errors.New("browser_wss ui_origins must contain strings")
+			}
+			result.uiOrigins = append(result.uiOrigins, origin)
+		}
+	case []string:
+		result.uiOrigins = append(result.uiOrigins, origins...)
+	default:
+		return result, errors.New("browser_wss ui_origins must be an array")
+	}
+	endpoint, err := url.Parse(result.endpointURL)
+	if err != nil || endpoint.Scheme != "wss" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" ||
+		endpoint.Fragment != "" || endpoint.Path != basePath+"/ui" || len(result.uiOrigins) == 0 {
+		return result, errors.New("browser_wss requires a wss endpoint_url at <path>/ui and non-empty ui_origins")
+	}
+	result.authority = strings.ToLower(endpoint.Host)
+	return result, nil
+}
+
+func minimumTLSVersion(browserWSS bool) uint16 {
+	if browserWSS {
+		return tls.VersionTLS13
+	}
+	return tls.VersionTLS12
+}
+
+func (h *HttpsInterface) browserDescriptorTemplate() instancedescriptor.PublicationTemplate {
+	instanceID := h.rt.SecurityRuntime().InstanceID()
+	return instancedescriptor.PublicationTemplate{
+		InstanceID: instanceID, AudienceInstanceID: instanceID,
+		UIOrigins: append([]string(nil), h.browserWSS.uiOrigins...),
+		Endpoints: []instancedescriptor.Endpoint{{Name: h.browserWSS.endpointName, URL: h.browserWSS.endpointURL}},
+		Protocols: []string{browserhello.Contract, browsertransport.WireContract},
+	}
+}
+
+func (h *HttpsInterface) ensureBrowserDescriptor(ctx context.Context, now time.Time) (*instancedescriptor.Verified, error) {
+	if h == nil || h.publisher == nil || ctx == nil {
+		return nil, browsertransport.ErrTransport
+	}
+	return h.publisher.EnsureFresh(ctx, h.browserDescriptorTemplate(), now.UTC())
+}
+
+func (h *HttpsInterface) mountBrowserWSS(mux *http.ServeMux) error {
+	if h.rt == nil || h.rt.SecurityRuntime == nil || h.rt.SecurityRuntime() == nil || h.rt.SignedTransport == nil || h.rt.SignedExternalIngress == nil || mux == nil {
+		return errors.New("browser_wss requires the root signed security runtime and Comm ingress")
+	}
+	publisher, err := instancedescriptor.NewPublisher(instancedescriptor.PublisherOptions{
+		Signer: func() signer.Signer {
+			current := h.rt.SecurityRuntime()
+			if current == nil || current.Signers() == nil {
+				return nil
+			}
+			return current.Signers().Active()
+		},
+	})
+	if err != nil {
+		return err
+	}
+	h.publisher = publisher
+	initialContext, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+	_, err = h.ensureBrowserDescriptor(initialContext, time.Now())
+	cancel()
+	if err != nil {
+		return err
+	}
+	handler, err := browsertransport.NewServerHandler(browsertransport.ServerOptions{
+		AllowedAuthorities: []string{h.browserWSS.authority},
+		NewHello: func(now time.Time) (*browserhello.Server, error) {
+			refreshContext, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+			defer cancel()
+			if _, err := h.ensureBrowserDescriptor(refreshContext, now); err != nil {
+				return nil, err
+			}
+			current := h.rt.SecurityRuntime()
+			if current == nil {
+				return nil, browsertransport.ErrTransport
+			}
+			return current.NewBrowserHelloServer(h.publisher.Current, now, nil)
+		},
+		Serve: func(_ context.Context, session *browsertransport.Session) error {
+			return browsertransport.RunHubRoute(h.ctx, session, h.rt.SignedTransport,
+				browsertransport.LocalResponder, browsertransport.HubOptions{})
+		},
+	})
+	if err != nil {
+		return err
+	}
+	mux.Handle(h.path+"/ui", handler)
+	mux.HandleFunc(h.path+"/descriptor", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.RawQuery != "" ||
+			!strings.EqualFold(request.Host, h.browserWSS.authority) {
+			http.Error(writer, "not found", http.StatusNotFound)
+			return
+		}
+		refreshContext, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+		value, err := h.ensureBrowserDescriptor(refreshContext, time.Now())
+		cancel()
+		if err != nil {
+			http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(value.Bytes())
+	})
+	return nil
+}
+
 // Start
 //
 // Functional role (Brique DSL):
@@ -527,6 +683,11 @@ func (h *HttpsInterface) Start() error {
 	} else {
 		mux.HandleFunc(msgPath, controlIngressHandler(h.rt, h.done, h.readLimit))
 	}
+	if h.browserWSS.enabled {
+		if err := h.mountBrowserWSS(mux); err != nil {
+			return fmt.Errorf("https iface %q: %w", h.rtName(), err)
+		}
+	}
 
 	h.server = &http.Server{
 		Addr:         h.addr,
@@ -537,7 +698,7 @@ func (h *HttpsInterface) Start() error {
 
 		// Server-side TLS config (minimal)
 		TLSConfig: &tls.Config{
-			MinVersion:     tls.VersionTLS12,
+			MinVersion:     minimumTLSVersion(h.browserWSS.enabled),
 			GetCertificate: certificates.get,
 		},
 	}
@@ -736,14 +897,22 @@ func (h *HttpsInterface) sendSignedExternal(item signedExternalEgressItem) Inter
 		return InterfaceEgressOutcome{Definitive: true, Err: err}
 	}
 	target := strings.TrimRight(item.Endpoint, "/") + "/msg"
-	return sendWithRetry(func() InterfaceEgressOutcome {
+	outcome := sendWithRetry(func() InterfaceEgressOutcome {
 		return sendHTTPControl(h.ctx, h.httpClient(), target, item.Envelope)
 	}, signedRetryBackoff, h.done)
+	if outcome.StatusCode == http.StatusNotFound {
+		// A neutral 404 deliberately carries no Brique admission information. It
+		// is indistinguishable from an ordinary proxy route miss and therefore
+		// cannot be turned into a terminal response for the local intention.
+		outcome.Definitive = false
+	}
+	return outcome
 }
 
 // signedRetryBackoff are the pauses before the retries of a signed message the peer refused as
-// overloaded. The peer refuses before it queues anything (429 over its budget, 503 queue full), so a
-// retry cannot run a request twice, and a second answer for the same call is rejected by the registry
+// overloaded. The peer refuses before it queues anything (503 queue full; an address over its budget
+// now gets the neutral 404 of D-23, which is not retried, 429 stays handled for a peer behind a proxy
+// that answers it), so a retry cannot run a request twice, and a second answer for the same call is rejected by the registry
 // of awaited answers. Without a retry, an answer refused for a moment is lost and its caller waits for
 // the silence timeout. The loop is sequential: the pauses add up to 375 ms at most.
 var signedRetryBackoff = []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 250 * time.Millisecond}
@@ -812,6 +981,9 @@ func (h *HttpsInterface) Close() error {
 	h.once.Do(func() { close(h.done) })
 	if h.cancel != nil {
 		h.cancel()
+	}
+	if h.publisher != nil {
+		h.publisher.Clear()
 	}
 
 	if h.server != nil {

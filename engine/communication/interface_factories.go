@@ -19,6 +19,8 @@ package comm
 import (
 	"brique_engine/configuration"
 	"brique_engine/junction"
+	securityruntime "brique_engine/security/runtime"
+	"brique_engine/signedtransport"
 )
 
 // communication/interface_factories.go
@@ -50,12 +52,25 @@ var ifaceFactories = map[string]InterfaceFactory{
 	},
 	configuration.KeyIntHTTPS: func(frame *junction.ContextRegistry, cfg InterfaceCfg) (*InterfaceRuntime, error) {
 		directory := ""
+		var securityRuntime func() *securityruntime.Runtime
+		var signedTransport *signedtransport.Hub
 		if frame != nil {
 			if provider, ok := frame.CtxCommReg.(junction.MachineDirectoryProvider); ok {
 				directory = provider.MachineDirectory()
 			}
+			if provider, ok := frame.CtxCommReg.(junction.SecurityRuntimeProvider); ok {
+				securityRuntime = provider.SecurityRuntime
+			}
+			if provider, ok := frame.CtxCommReg.(junction.SignedTransportProvider); ok {
+				signedTransport = provider.SignedTransport()
+			}
 		}
-		return newHTTPSInterfaceRuntimeIn(cfg, directory)
+		runtime, err := newHTTPSInterfaceRuntimeIn(cfg, directory)
+		if runtime != nil {
+			runtime.SecurityRuntime = securityRuntime
+			runtime.SignedTransport = signedTransport
+		}
+		return runtime, err
 	},
 }
 

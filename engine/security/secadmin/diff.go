@@ -100,7 +100,7 @@ func dedupe(sorted []string) []string {
 
 // sameAccess reports whether two policies grant exactly the same access.
 func sameAccess(a, b trust.Policy) bool {
-	return len(accessDiff(a, b)) == 0 && samePeers(a.ExternalPeers, b.ExternalPeers)
+	return len(accessDiff(a, b)) == 0 && samePeers(a.ExternalPeers, b.ExternalPeers) && sameSecrets(a.WrapperSecrets, b.WrapperSecrets)
 }
 
 // Change is one difference between two policies.
@@ -193,7 +193,7 @@ func (d *Dir) Diff() (*DiffReport, error) {
 		report.Against = reference.Name
 		base = reference.Policy
 	}
-	report.Changes = accessDiff(base, compiled.Result.Policy)
+	report.Changes = append(accessDiff(base, compiled.Result.Policy), secretsDiff(base.WrapperSecrets, compiled.Result.Policy.WrapperSecrets)...)
 	return report, nil
 }
 

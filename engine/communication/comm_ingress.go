@@ -234,7 +234,7 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	// Stamp the UI origin before validating the message family so a malformed
 	// awaited request can still receive its correlated error on the interface
 	// that submitted it.
-	if endpoint == EndpointUI {
+	if endpoint == EndpointUI && !hasExternalAuthority(source...) {
 		stampFromUIContext(&msg, ifacename)
 	}
 
@@ -761,6 +761,12 @@ func (l *CommLoop) routeIngressRoot(
 	// 3) Messages coming from UI
 	// -------------------------------------------------
 	if endpoint == EndpointUI {
+		// Root follows the same engine-owned UI origin rule as child contexts.
+		// Browser adapters deliberately clear page coordinates before this point;
+		// replies are bound to the registered interface, never to a claimed source.
+		if !hasExternalAuthority(source...) {
+			stampFromUIContext(&msg, ifacename)
+		}
 		// Canonicalize internal context ids early (UI may send "root/..." without leading '/').
 		if strings.TrimSpace(toCtx) != "" && !strings.HasPrefix(toCtx, "@") {
 			canon := canonicalInternalCtxID(toCtx)
@@ -792,6 +798,11 @@ func (l *CommLoop) routeIngressRoot(
 			// @ui_ : handled locally (root may own UIs)
 			if strings.HasPrefix(tag, "ui_") {
 				l.routeIngressLocal(msg, endpoint, ifacename, source...)
+				return
+			}
+
+			if tag == "local_ui" {
+				l.routeEgressRoot(msg, source...)
 				return
 			}
 
@@ -846,6 +857,11 @@ func (l *CommLoop) routeIngressRoot(
 			// @ui_ : handled locally (root may own UIs)
 			if strings.HasPrefix(tag, "ui_") {
 				l.routeIngressLocal(msg, endpoint, ifacename, source...)
+				return
+			}
+
+			if tag == "local_ui" {
+				l.routeEgressRoot(msg, source...)
 				return
 			}
 

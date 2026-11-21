@@ -76,6 +76,8 @@ type CommLoop struct {
 	// ingress is the global ingress channel fed by interface ReadLoop.
 	ingress               chan IngressItem
 	signedExternalIngress chan signedExternalIngressItem
+	signedTransportEgress chan signedExternalEgressItem
+	signedTransportBound  bool
 
 	// limiter holds the request rate of every principal that calls this instance.
 	limiter     *limits.Limiter
@@ -89,6 +91,10 @@ type CommLoop struct {
 	signedExternalMu       sync.Mutex
 	signedExternalPending  map[string]signedExternalEgressItem
 	pendingSweepInterval   time.Duration
+	browserUIMu            sync.RWMutex
+	browserUI              map[string]func(circulation.Message) error
+	browserLocalUI         map[string]browserLocalUIRoute
+	browserPublicUI        map[string]browserPublicUIRoute
 
 	// Interface runtimes (IO surface for impls).
 	ifaces map[string]*InterfaceRuntime
@@ -174,9 +180,11 @@ func ingressBufferOf(cfg CommCfg) int {
 func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *CommLoop {
 	cfg := ParseCommCfg(engineCfg)
 	var signedExternalIngress chan signedExternalIngressItem
+	var signedTransportEgress chan signedExternalEgressItem
 	if frame != nil && shared.IsRootContext(frame.CtxId) && frame.CtxCommReg != nil {
 		if provider, ok := any(frame.CtxCommReg).(junction.SecurityRuntimeProvider); ok && provider.SecurityRuntime() != nil {
 			signedExternalIngress = make(chan signedExternalIngressItem, 64)
+			signedTransportEgress = make(chan signedExternalEgressItem, 16)
 		}
 	}
 	l := &CommLoop{
@@ -187,9 +195,13 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 		ctxIn:                  make(chan junction.Delivery, 16),
 		ingress:                make(chan IngressItem, ingressBufferOf(cfg)),
 		signedExternalIngress:  signedExternalIngress,
+		signedTransportEgress:  signedTransportEgress,
 		interfaceOutcomes:      make(chan interfaceEgressReport, 16),
 		signedExternalOutcomes: make(chan signedExternalEgressReport, 16),
 		signedExternalPending:  make(map[string]signedExternalEgressItem),
+		browserUI:              make(map[string]func(circulation.Message) error),
+		browserLocalUI:         make(map[string]browserLocalUIRoute),
+		browserPublicUI:        make(map[string]browserPublicUIRoute),
 		pendingSweepInterval:   time.Second,
 
 		ifaces:           make(map[string]*InterfaceRuntime),
@@ -236,6 +248,8 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 		rt.Ingress = l.ingress
 		if l.signedExternalIngress != nil && rt.Driver == "https" && rt.Type == EndpointOuterCtx {
 			rt.SignedExternalIngress = l.signedExternalIngress
+			rt.SignedExternalNow = l.externalReplyTime
+			rt.ReportSignedExternalPreAdmission = l.auditUnauthenticated
 		}
 		egressPlaces, egressWait := egressSettings(cfg, rt.Cfg)
 		rt.egressWait = egressWait
@@ -441,6 +455,11 @@ func (l *CommLoop) Start() {
 		l.stateMu.Unlock()
 		return
 	}
+	if l.signedExternalIngress != nil {
+		if hub := l.signedTransportHub(); hub != nil && hub.SetIngress(l.receiveSignedTransport) == nil {
+			l.signedTransportBound = true
+		}
+	}
 
 	// Core loops:
 	l.wg.Add(1)
@@ -488,6 +507,15 @@ func (l *CommLoop) Start() {
 			go func() {
 				defer l.wg.Done()
 				l.loopSignedExternalIngress()
+			}()
+		}
+	}
+	if l.signedTransportEgress != nil {
+		for range 4 {
+			l.wg.Add(1)
+			go func() {
+				defer l.wg.Done()
+				l.loopSignedTransportEgress()
 			}()
 		}
 	}
@@ -647,6 +675,12 @@ func (l *CommLoop) startInterfaceLoop(rt *InterfaceRuntime, direction string, ru
 
 func (l *CommLoop) Stop() {
 	l.once.Do(func() {
+		if l.signedTransportBound {
+			if hub := l.signedTransportHub(); hub != nil {
+				_ = hub.SetIngress(nil)
+			}
+			l.signedTransportBound = false
+		}
 		l.drainPendingExternalState()
 		close(l.done)
 	})
@@ -974,6 +1008,14 @@ func (l *CommLoop) loopInterfaceIngress() {
 // interface: a delegated wrapper call, a restricted wrapper's own intention, or
 // an ordinary message.
 func (l *CommLoop) handleInterfaceIngress(it IngressItem) {
+	if it.Delivery.Valid() {
+		message, valid := it.Delivery.Message()
+		if !valid {
+			return
+		}
+		l.routeIngress(message, it.Endpoint, it.IfaceName, it.Delivery)
+		return
+	}
 	if it.WrapperDelegation.Valid() {
 		if resolved, err := l.resolveWrapperDelegatedIngressDetailed(it); !resolved {
 			detail := "wrapper delegation could not be resolved"

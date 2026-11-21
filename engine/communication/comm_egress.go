@@ -256,6 +256,22 @@ func (l *CommLoop) routeEgressLocal(msg circulation.Message, source ...junction.
 			return
 		}
 
+		// A local browser return is owned by the root bridge adapter. Child
+		// contexts never resolve its channel directly.
+		if tag == "local_ui" {
+			l.forwardToRoot(msg, source...)
+			return
+		}
+
+		if tag == "public_web" {
+			_, path, _ := parseAtAddress(toCtx)
+			if !l.sendToPublicBrowserUI(path, msg) {
+				l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName,
+					fmt.Sprintf("unknown public web UI route: %s", toCtx))
+			}
+			return
+		}
+
 		// 2) Wrapper destination:
 		// - current:  @wrapper_<name>:/...
 		if strings.HasPrefix(tag, "wrapper_") {
@@ -447,6 +463,24 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message, source ...junction.D
 			return
 		}
 
+		if tag == "local_ui" {
+			_, path, _ := parseAtAddress(toCtx)
+			if !l.sendToLocalBrowserUI(path, msg) {
+				l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName,
+					fmt.Sprintf("unknown local UI route: %s", toCtx))
+			}
+			return
+		}
+
+		if tag == "public_web" {
+			_, path, _ := parseAtAddress(toCtx)
+			if !l.sendToPublicBrowserUI(path, msg) {
+				l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName,
+					fmt.Sprintf("unknown public web UI route: %s", toCtx))
+			}
+			return
+		}
+
 		// 2) Wrapper transport is NEVER a root egress target.
 		if strings.HasPrefix(tag, "wrapper_") {
 			l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidToContextName, fmt.Sprintf("forbidden root egress tag: %s", tag))
@@ -456,7 +490,11 @@ func (l *CommLoop) routeEgressRoot(msg circulation.Message, source ...junction.D
 		// 3) External egress is signed exclusively by the protected adapter.
 		if strings.HasPrefix(tag, "ext_") {
 			if msg.Kind == circulation.ValueKindIntention && l.securityRuntime() != nil {
-				l.routeSignedExternalIntention(msg, tag)
+				routeID := ""
+				if len(source) == 1 {
+					routeID, _ = source[0].SignedRouteHint()
+				}
+				l.routeSignedExternalIntention(msg, tag, routeID)
 				return
 			}
 			l.sendToTrace(msg, circulation.ValueTraceCommDrop, circulation.ValueReasonInvalidCrypto,

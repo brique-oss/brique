@@ -331,3 +331,23 @@ func TestContextCommRegistry_N1_CCR_15_UnregisterWrapperBoundary(t *testing.T) {
 		t.Fatalf("wrapper mapping should be removed")
 	}
 }
+
+func TestContextCommRegistryOwnsUIChannelLifetime(t *testing.T) {
+	r := junction.NewContextCommRegistry()
+	if r.UIChannelActive("local_ui", "channel-a") {
+		t.Fatal("unknown channel is active")
+	}
+	if !r.ActivateUIChannel("local_ui", "channel-a") || r.ActivateUIChannel("local_ui", "channel-a") {
+		t.Fatal("channel activation is not exclusive")
+	}
+	if !r.UIChannelActive("local_ui", "channel-a") || r.UIChannelActive("public_web", "channel-a") {
+		t.Fatal("channel kind is not part of ownership")
+	}
+	r.DeactivateUIChannel("local_ui", "channel-a")
+	if r.UIChannelActive("local_ui", "channel-a") {
+		t.Fatal("deactivated channel remained active")
+	}
+	if r.ActivateUIChannel("invalid", "channel-a") || r.ActivateUIChannel("local_ui", "") {
+		t.Fatal("invalid channel coordinate was accepted")
+	}
+}

@@ -18,6 +18,7 @@ package junction
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	securityruntime "brique_engine/security/runtime"
 	"brique_engine/security/trust"
 	"brique_engine/shared"
+	"brique_engine/signedtransport"
 )
 
 // ContextCommEntry is what the engine knows about a context for routing.
@@ -68,6 +70,10 @@ type ContextCommRegistry struct {
 	// provenance maps a root intention to the principal it was admitted for.
 	provenance *ProvenanceBook
 
+	// signedTransport is the transport-neutral rendez-vous shared by the root
+	// Comm loop and authenticated duplex adapters. It contains no policy.
+	signedTransport *signedtransport.Hub
+
 	// Internal addressing: ctx_id -> entry
 	byID map[shared.ContextAddr]ContextCommEntry
 
@@ -81,14 +87,133 @@ type ContextCommRegistry struct {
 	byUIName map[string]shared.ContextAddr
 	// UI scoped addressing: ui_name -> owner ctx_ids
 	byUINameOwners map[string]map[shared.ContextAddr]struct{}
+	// uiChannels contains only live ingress-owned browser channels. It is
+	// separate from UI name resolution: a channel is a connection lifetime,
+	// not a declared UI.
+	uiChannelMu   sync.RWMutex
+	uiChannels    map[string]struct{}
+	publicationID string
+	publishedUIs  []PublishedUI
 
 	// Wrapper addressing:
 	// - byWrapperNameToBoundaryID: wrapper_name -> boundary ctx_id
 	byWrapperNameToBoundaryID map[string]shared.ContextAddr
 
-	wsListener *webSocketSharedListener
+	wsListener     *webSocketSharedListener
+	wsAddrOverride string
 	// wrapperSecrets proves which connection is the wrapper the engine launched.
 	wrapperSecrets *WrapperSecrets
+}
+
+// UIChannelRegistry is the transport-neutral lifetime registry for browser
+// channels. Ingresses create and end channels; families only test ownership.
+// Keeping it separate from ContextCommInRegistry lets routing-only test doubles
+// remain small.
+type UIChannelRegistry interface {
+	ActivateUIChannel(kind, channelID string) bool
+	DeactivateUIChannel(kind, channelID string)
+	UIChannelActive(kind, channelID string) bool
+}
+
+// ContextInventoryProvider exposes only the logical identifiers that currently
+// own a registered Comm route. It reveals no channel or filesystem path.
+type ContextInventoryProvider interface {
+	ActiveContextIDs() []shared.ContextAddr
+}
+
+type PublishedUI struct {
+	ContextPath shared.ContextAddr
+	UIName      string
+	URL         string
+}
+
+type PublishedUIProvider interface {
+	PublishedUIInventory() (string, []PublishedUI, bool)
+}
+
+func (r *ContextCommRegistry) InstallPublishedUIInventory(publicationID string, entries []PublishedUI) error {
+	if r == nil || strings.TrimSpace(publicationID) == "" || len(entries) == 0 {
+		return fmt.Errorf("published UI inventory is required")
+	}
+	copyOf := append([]PublishedUI(nil), entries...)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.publicationID != "" {
+		return fmt.Errorf("published UI inventory is already installed")
+	}
+	r.publicationID = publicationID
+	r.publishedUIs = copyOf
+	return nil
+}
+
+func (r *ContextCommRegistry) PublishedUIInventory() (string, []PublishedUI, bool) {
+	if r == nil {
+		return "", nil, false
+	}
+	r.mu.RLock()
+	id := r.publicationID
+	entries := append([]PublishedUI(nil), r.publishedUIs...)
+	r.mu.RUnlock()
+	return id, entries, id != ""
+}
+
+func (r *ContextCommRegistry) ActiveContextIDs() []shared.ContextAddr {
+	if r == nil {
+		return []shared.ContextAddr{}
+	}
+	r.mu.RLock()
+	result := make([]shared.ContextAddr, 0, len(r.byID))
+	for id := range r.byID {
+		result = append(result, id)
+	}
+	r.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func uiChannelKey(kind, channelID string) (string, bool) {
+	kind, channelID = strings.TrimSpace(kind), strings.TrimSpace(channelID)
+	if (kind != "local_ui" && kind != "public_web") || channelID == "" {
+		return "", false
+	}
+	return kind + "\x00" + channelID, true
+}
+
+// ActivateUIChannel reserves one ingress-created channel until its transport
+// closes. Reusing a live coordinate is refused.
+func (r *ContextCommRegistry) ActivateUIChannel(kind, channelID string) bool {
+	key, valid := uiChannelKey(kind, channelID)
+	if r == nil || !valid {
+		return false
+	}
+	r.uiChannelMu.Lock()
+	defer r.uiChannelMu.Unlock()
+	if _, exists := r.uiChannels[key]; exists {
+		return false
+	}
+	r.uiChannels[key] = struct{}{}
+	return true
+}
+
+func (r *ContextCommRegistry) DeactivateUIChannel(kind, channelID string) {
+	key, valid := uiChannelKey(kind, channelID)
+	if r == nil || !valid {
+		return
+	}
+	r.uiChannelMu.Lock()
+	delete(r.uiChannels, key)
+	r.uiChannelMu.Unlock()
+}
+
+func (r *ContextCommRegistry) UIChannelActive(kind, channelID string) bool {
+	key, valid := uiChannelKey(kind, channelID)
+	if r == nil || !valid {
+		return false
+	}
+	r.uiChannelMu.RLock()
+	_, exists := r.uiChannels[key]
+	r.uiChannelMu.RUnlock()
+	return exists
 }
 
 // ProjectionHint names one element whose descriptor just changed. The zero
@@ -168,6 +293,17 @@ type SecurityRuntimeProvider interface {
 
 type WrapperDelegationProvider interface {
 	WrapperDelegations() *WrapperDelegationStore
+}
+
+type SignedTransportProvider interface {
+	SignedTransport() *signedtransport.Hub
+}
+
+func (r *ContextCommRegistry) SignedTransport() *signedtransport.Hub {
+	if r == nil {
+		return nil
+	}
+	return r.signedTransport
 }
 
 // InstallTrustRuntime publishes the single trust runtime for this instance.
@@ -345,15 +481,21 @@ func (r *ContextCommRegistry) WrapperDelegations() *WrapperDelegationStore {
 
 func NewContextCommRegistry() *ContextCommRegistry {
 	secrets := newWrapperSecrets()
+	signedHub, err := signedtransport.New(signedtransport.Options{})
+	if err != nil {
+		panic(err)
+	}
 	registry := &ContextCommRegistry{
 		byID:                      make(map[shared.ContextAddr]ContextCommEntry),
 		byCtxExtName:              make(map[string]shared.ContextAddr),
 		byIDToCtxExtName:          make(map[shared.ContextAddr]string),
 		byUIName:                  make(map[string]shared.ContextAddr),
 		byUINameOwners:            make(map[string]map[shared.ContextAddr]struct{}),
+		uiChannels:                make(map[string]struct{}),
 		byWrapperNameToBoundaryID: make(map[string]shared.ContextAddr),
 		wrapperDelegations:        MustWrapperDelegationStore(DefaultWrapperDelegationConfig()),
 		provenance:                newProvenanceBook(),
+		signedTransport:           signedHub,
 		wsListener:                newWebSocketSharedListener(),
 		wrapperSecrets:            secrets,
 	}
@@ -369,7 +511,29 @@ func (r *ContextCommRegistry) ConfigureWebSocketListener(cfg WebSocketListenerCo
 	if r == nil || r.wsListener == nil {
 		return nil
 	}
+	r.mu.RLock()
+	override := r.wsAddrOverride
+	r.mu.RUnlock()
+	if override != "" {
+		cfg.Addr = override
+	}
 	return r.wsListener.Configure(cfg)
+}
+
+// SetWebSocketListenerAddrOverride installs one host-local launch override
+// before the root Context configures the shared listener. It never rewrites the
+// portable context.json and cannot publish a listener on a non-loopback host.
+func (r *ContextCommRegistry) SetWebSocketListenerAddrOverride(address string) error {
+	if r == nil || address == "" {
+		return nil
+	}
+	if !loopbackListenAddress(address) {
+		return fmt.Errorf("websocket listener override must be an explicit loopback host:port")
+	}
+	r.mu.Lock()
+	r.wsAddrOverride = address
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *ContextCommRegistry) WebSocketListenerAddr() string {

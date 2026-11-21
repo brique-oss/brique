@@ -18,7 +18,9 @@ import (
 	"brique_engine/junction"
 	"brique_engine/security/pending"
 	"brique_engine/security/signer"
+	"brique_engine/security/trust"
 	"brique_engine/security/wire"
+	"brique_engine/signedtransport"
 )
 
 func outboundSignedMessage(await bool) circulation.Message {
@@ -114,6 +116,43 @@ func TestSignedExternalFireAndForgetCreatesNoResponseWait(t *testing.T) {
 	<-loop.ifaces["secure-peer"].SignedExternalEgress
 	if _, found := loop.securityRuntime().Pending().Lookup(message.Intention.IntentionID); found {
 		t.Fatal("fire-and-forget intention created a pending response")
+	}
+}
+
+func TestOnlyReservedUIActorUsesAuthenticatedDuplexRoute(t *testing.T) {
+	fixture, loop, _ := newSignedExternalTestLoop(t)
+	loop.signedTransportEgress = make(chan signedExternalEgressItem, 1)
+	routeID := "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	handle, err := fixture.registry.SignedTransport().Register(signedtransport.Route{
+		ID: routeID, RemoteInstanceID: "partner-instance", RemoteKeyID: fixture.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	ui := outboundSignedMessage(false)
+	ui.Intention.Identity = circulation.Identity{ID: trust.ReservedUIActorID, Kind: "ui"}
+	loop.routeSignedExternalIntention(ui, "ext_partner-a")
+	select {
+	case item := <-loop.signedTransportEgress:
+		protected, _ := decodeSignedIntention(t, item)
+		if item.RemoteInstanceID != "partner-instance" || item.RemoteKeyID != fixture.keyID || protected.ActorID != trust.ReservedUIActorID {
+			t.Fatalf("duplex UI item = %+v protected=%+v", item, protected)
+		}
+	default:
+		t.Fatal("UI intention did not select authenticated duplex route")
+	}
+	ordinary := outboundSignedMessage(false)
+	ordinary.Intention.IntentionID = "123e4567-e89b-42d3-a456-426614174001"
+	loop.routeSignedExternalIntention(ordinary, "ext_partner-a")
+	select {
+	case item := <-loop.ifaces["secure-peer"].SignedExternalEgress:
+		if item.RemoteInstanceID != "partner-instance" {
+			t.Fatalf("HTTPS fallback item = %+v", item)
+		}
+	default:
+		t.Fatal("non-UI intention incorrectly depended on browser duplex route")
 	}
 }
 
@@ -264,6 +303,52 @@ func TestMatterSubscriptionEventToAnExternalSubscriberIsSignedForItsPeer(t *test
 	}
 	if _, found := loop.securityRuntime().Pending().Lookup(event.Intention.IntentionID); found {
 		t.Fatal("an event created a pending response wait")
+	}
+}
+
+func TestMatterSubscriptionEventIsFrozenToItsExactDuplexGeneration(t *testing.T) {
+	fixture, loop, _ := newSignedExternalTestLoop(t)
+	loop.signedTransportEgress = make(chan signedExternalEgressItem, 1)
+	const routeID = "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	handle, err := fixture.registry.SignedTransport().Register(signedtransport.Route{
+		ID: routeID, RemoteInstanceID: "partner-instance", RemoteKeyID: fixture.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
+		IntentionID: circulation.NewIntentionID(),
+		To:          circulation.Address{Context: "@ext_partner-a:/root/subscriber", Type: circulation.ValueTypeUser, Cap: "inbox"},
+		From:        circulation.Address{Context: "/root/chat", Type: circulation.ValueTypeMatter, Cap: circulation.ValueCapMatterEvent},
+	}}
+	loop.routeSignedExternalIntention(event, "ext_partner-a", routeID)
+	select {
+	case item := <-loop.signedTransportEgress:
+		if item.RouteID != routeID {
+			t.Fatalf("event route = %q", item.RouteID)
+		}
+		protected, _ := decodeSignedIntention(t, item)
+		if protected.ActorID != "" {
+			t.Fatalf("subscription event invented actor %q", protected.ActorID)
+		}
+	default:
+		t.Fatal("route-bound event did not use the duplex transport")
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	event.Intention.IntentionID = circulation.NewIntentionID()
+	loop.routeSignedExternalIntention(event, "ext_partner-a", routeID)
+	select {
+	case item := <-loop.signedTransportEgress:
+		t.Fatalf("closed exact route was reused: %+v", item)
+	default:
+	}
+	select {
+	case item := <-loop.ifaces["secure-peer"].SignedExternalEgress:
+		t.Fatalf("closed exact route fell back to HTTPS: %+v", item)
+	default:
 	}
 }
 

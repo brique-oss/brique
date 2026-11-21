@@ -86,11 +86,9 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		return false
 	}
 	item := signedExternalEgressItem{
-		Key:      built.SignedEnvelopeHash(),
-		Endpoint: machine.Target,
-		Envelope: built.Bytes(),
-		Message:  message,
-		Purpose:  wire.PurposeResponse,
+		Key: built.SignedEnvelopeHash(), Endpoint: machine.Target, RouteID: reservation.RouteID(),
+		RemoteInstanceID: peer.AudienceInstanceID, RemoteKeyID: signingKeyID,
+		Envelope: built.Bytes(), Message: message, Purpose: wire.PurposeResponse,
 	}
 	replayKey := replay.Key{
 		AudienceInstanceID: securityRuntime.InstanceID(),
@@ -117,7 +115,13 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		l.sendToTrace(message, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto, "external response reservation commit failed")
 		return true
 	}
-	if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
+	if item.RouteID != "" {
+		hub := l.signedTransportHub()
+		if hub == nil || !hub.HasRouteID(item.RouteID) {
+			l.sendToTrace(message, circulation.ValueTraceCommReject, "signed_external_interface_unavailable", "authenticated response route is unavailable; exact response remains cached")
+			return true
+		}
+	} else if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
 		l.sendToTrace(message, circulation.ValueTraceCommReject, "signed_external_interface_unavailable", "protected external interface is unavailable; exact response remains cached")
 		return true
 	}
@@ -125,10 +129,17 @@ func (l *CommLoop) routeSignedExternalResponse(delivery junction.Delivery) bool 
 		l.sendToTrace(message, circulation.ValueTraceCommReject, "signed_external_pending_full", "signed external pending capacity reached")
 		return true
 	}
-	select {
-	case runtime.SignedExternalEgress <- item:
+	if item.RouteID != "" {
+		if !l.enqueueSignedTransport(item) {
+			l.forgetSignedExternal(item.Key, item.Envelope)
+			l.sendToTrace(message, circulation.ValueTraceCommReject, "signed_external_queue_full", "authenticated response route queue is full")
+		}
 		return true
-	case <-l.done:
+	}
+	switch l.offerSignedEgress(runtime, item) {
+	case offerAccepted:
+		return true
+	case offerStopped:
 		l.forgetSignedExternal(item.Key, item.Envelope)
 		l.sendToTrace(message, circulation.ValueTraceCommReject, circulation.ValueReasonContextStopped, "communication loop is stopping")
 	default:

@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,9 +35,12 @@ import (
 )
 
 type InterfaceIngressItem struct {
-	Endpoint          string
-	IfaceName         string
-	Msg               circulation.Message
+	Endpoint  string
+	IfaceName string
+	Msg       circulation.Message
+	// Delivery carries non-serializable authority created by a trusted local
+	// adapter. Network readers leave it at the invalid zero value.
+	Delivery          Delivery
 	WrapperConnection WrapperConnection
 	WrapperDelegation WrapperDelegationHandle
 }
@@ -58,6 +62,10 @@ type WebSocketListenerConfig struct {
 	IngressWait time.Duration
 	// AllowAnyOrigin disables the browser origin check entirely.
 	AllowAnyOrigin bool
+	// AllowedHosts lists exact HTTP authorities (host[:port]) accepted by the
+	// listener. Configure also adds the effective bound authority when it is not
+	// a wildcard address. Host validation is never disabled by AllowAnyOrigin.
+	AllowedHosts []string
 	// WrapperAuth is WrapperAuthRequired (the fail-closed default) or the explicit
 	// development-only WrapperAuthOptional mode.
 	WrapperAuth string
@@ -66,11 +74,14 @@ type WebSocketListenerConfig struct {
 	AllowedOrigins []string
 }
 
-// originAllowed is the WebSocket upgrade origin policy. Browsers always send
-// Origin and cannot forge it, so a web page from another site is refused;
-// non-browser clients (wrappers, tools) send none and are not a cross-site
-// threat.
+// originAllowed is the WebSocket upgrade Host and Origin policy. Host is
+// checked independently so a hostile DNS name resolving to the listener cannot
+// become trusted merely by sending the same Host and Origin. Non-browser
+// clients may omit Origin, but still have to use an admitted Host.
 func (cfg WebSocketListenerConfig) originAllowed(r *http.Request) bool {
+	if !authorityInList(r.Host, cfg.AllowedHosts) {
+		return false
+	}
 	if cfg.AllowAnyOrigin {
 		return true
 	}
@@ -78,19 +89,112 @@ func (cfg WebSocketListenerConfig) originAllowed(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
+	scheme, originAuthority, normalizedOrigin, ok := normalizeWebOrigin(origin)
+	if !ok {
 		return false
 	}
-	if strings.EqualFold(u.Host, r.Host) {
+	requestAuthority, _ := normalizeHTTPAuthority(r.Host)
+	if (scheme == "http" || scheme == "https") && originAuthority == requestAuthority {
 		return true
 	}
 	for _, allowed := range cfg.AllowedOrigins {
-		if strings.EqualFold(strings.TrimRight(allowed, "/"), origin) {
+		_, _, normalizedAllowed, valid := normalizeWebOrigin(allowed)
+		if valid && normalizedAllowed == normalizedOrigin {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeWebOrigin(origin string) (scheme, authority, normalized string, ok bool) {
+	origin = strings.TrimSpace(origin)
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", "", "", false
+	}
+	authority, ok = normalizeHTTPAuthority(u.Host)
+	if !ok {
+		return "", "", "", false
+	}
+	scheme = strings.ToLower(u.Scheme)
+	return scheme, authority, scheme + "://" + authority, true
+}
+
+func authorityInList(authority string, allowed []string) bool {
+	normalized, ok := normalizeHTTPAuthority(authority)
+	if !ok {
+		return false
+	}
+	for _, candidate := range allowed {
+		if allowedAuthority, valid := normalizeHTTPAuthority(candidate); valid && normalized == allowedAuthority {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeHTTPAuthority(authority string) (string, bool) {
+	authority = strings.TrimSpace(authority)
+	if authority == "" {
+		return "", false
+	}
+	u, err := url.Parse("http://" + authority)
+	if err != nil || u.Host == "" || u.Host != authority || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		if strings.HasSuffix(authority, ":") {
+			return "", false
+		}
+		if strings.Contains(host, ":") {
+			return "[" + host + "]", true
+		}
+		return host, true
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", false
+	}
+	return net.JoinHostPort(host, port), true
+}
+
+func addBoundAuthority(cfg *WebSocketListenerConfig, addr net.Addr) {
+	if cfg == nil || addr == nil {
+		return
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip != nil && ip.IsUnspecified() {
+		return
+	}
+	if normalized, ok := normalizeHTTPAuthority(addr.String()); ok && !authorityInList(normalized, cfg.AllowedHosts) {
+		cfg.AllowedHosts = append(cfg.AllowedHosts, normalized)
+	}
+}
+
+func addConfiguredAuthority(cfg *WebSocketListenerConfig) {
+	if cfg == nil {
+		return
+	}
+	host, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil || port == "0" || host == "" {
+		return
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip != nil && ip.IsUnspecified() {
+		return
+	}
+	if normalized, ok := normalizeHTTPAuthority(cfg.Addr); ok && !authorityInList(normalized, cfg.AllowedHosts) {
+		cfg.AllowedHosts = append(cfg.AllowedHosts, normalized)
+	}
 }
 
 func loopbackListenAddress(addr string) bool {
@@ -198,6 +302,17 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	if cfg.WrapperAuth != WrapperAuthRequired && cfg.WrapperAuth != WrapperAuthOptional {
 		return errors.New("websocket listener: invalid wrapper authentication mode")
 	}
+	for _, host := range cfg.AllowedHosts {
+		if _, ok := normalizeHTTPAuthority(host); !ok {
+			return fmt.Errorf("websocket listener: invalid allowed host %q", host)
+		}
+	}
+	for _, origin := range cfg.AllowedOrigins {
+		if _, _, _, ok := normalizeWebOrigin(origin); !ok {
+			return fmt.Errorf("websocket listener: invalid allowed origin %q", origin)
+		}
+	}
+	addConfiguredAuthority(&cfg)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -211,6 +326,11 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 		return errors.New("websocket listener: already configured")
 	}
 
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return err
+	}
+	addBoundAuthority(&cfg, ln.Addr())
 	l.cfg = cfg
 	l.upgrader = websocket.Upgrader{
 		ReadBufferSize:  4096,
@@ -221,10 +341,6 @@ func (l *webSocketSharedListener) Configure(cfg WebSocketListenerConfig) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", l.handleHTTP)
 
-	ln, err := net.Listen("tcp", cfg.Addr)
-	if err != nil {
-		return err
-	}
 	l.ln = ln
 	l.server = &http.Server{
 		Addr:              cfg.Addr,
@@ -244,6 +360,9 @@ func (l *webSocketSharedListener) Addr() string {
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if l.ln != nil {
+		return l.ln.Addr().String()
+	}
 	return l.cfg.Addr
 }
 

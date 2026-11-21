@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/security/admission"
@@ -75,7 +77,12 @@ type Delivery struct {
 type deliverySecurity struct {
 	localSource string
 	external    *admission.Context
-	responses   *responseState
+	// externalRoute is the authenticated duplex generation that admitted a
+	// signed request. signedRouteHint freezes that generation on a trusted local
+	// event emitted in response to an ephemeral subscription.
+	externalRoute   string
+	signedRouteHint string
+	responses       *responseState
 	// chain counts what the admitted request sets off; every derived delivery shares it.
 	chain       *chainState
 	response    *ResponseReservation
@@ -85,7 +92,15 @@ type deliverySecurity struct {
 	// it is authorized like an external one, but it is answered locally (no
 	// signed response, no permit).
 	restricted bool
+	// public is a keyless external admission answered through its manufactured
+	// @public_web source, never through the signed response adapter.
+	public bool
+	// localUI is a keyless admission created only after the browser bridge has
+	// authenticated locally. It answers through its manufactured channel.
+	localUI bool
 }
+
+var externalRoutePattern = regexp.MustCompile(`^bwg1_[A-Za-z0-9_-]{43}$`)
 
 // MarshalJSON prevents an internal authority envelope from crossing a wire
 // boundary accidentally. Call Message explicitly at an authorized adapter.
@@ -113,13 +128,27 @@ func NewLocalDelivery(authority LocalAuthority, message circulation.Message) (De
 // binds the exact verified payload to its immutable admission before either is
 // exposed to internal routing.
 func AdmitExternalIntention(verified *wire.Verified) (Delivery, error) {
+	return admitExternalIntention(verified, "")
+}
+
+// AdmitExternalIntentionFromRoute binds a verified root to the exact duplex
+// generation that carried it. The route is private delivery metadata and can
+// never be decoded from the signed payload.
+func AdmitExternalIntentionFromRoute(verified *wire.Verified, routeID string) (Delivery, error) {
+	if !externalRoutePattern.MatchString(routeID) {
+		return Delivery{}, fmt.Errorf("valid authenticated external route is required")
+	}
+	return admitExternalIntention(verified, routeID)
+}
+
+func admitExternalIntention(verified *wire.Verified, routeID string) (Delivery, error) {
 	message, context, err := admission.DecodeIntention(verified)
 	if err != nil {
 		return Delivery{}, err
 	}
-	security := &deliverySecurity{external: context, chain: &chainState{}}
+	security := &deliverySecurity{external: context, externalRoute: routeID, chain: &chainState{}}
 	if context.AwaitResponse() {
-		security.responses = newResponseState(context)
+		security.responses = newResponseState(context, routeID)
 	}
 	return Delivery{message: message, security: security}, nil
 }
@@ -136,10 +165,49 @@ func AdmitRestrictedLocal(message circulation.Message, context *admission.Contex
 	return Delivery{message: message, security: &deliverySecurity{external: context, restricted: true, chain: &chainState{}}}, nil
 }
 
+// AdmitPublicWeb is the sole constructor for an anonymous browser root. The
+// caller supplies an already admitted public.web authority and server-created
+// channel/UI coordinates; admission replaces all page-controlled source data.
+func AdmitPublicWeb(admitted trust.Admission, channelID, uiName string, message circulation.Message, now time.Time) (Delivery, error) {
+	projected, context, err := admission.NewPublicWeb(admitted, channelID, uiName, message, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	return Delivery{message: projected, security: &deliverySecurity{external: context, public: true, chain: &chainState{}}}, nil
+}
+
+// AdmitLocalUI constructs a browser request to its own instance under the
+// explicit local.ui policy authority. Authentication of the bridge channel is
+// a prerequisite of the future caller; no loopback address is accepted here.
+func AdmitLocalUI(admitted trust.Admission, channelID, uiName string, message circulation.Message, now time.Time) (Delivery, error) {
+	projected, context, err := admission.NewLocalUI(admitted, channelID, uiName, message, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	return Delivery{message: projected, security: &deliverySecurity{external: context, localUI: true, chain: &chainState{}}}, nil
+}
+
 // RestrictedLocal returns the admission of a restricted internal component, when
 // that is what admitted this delivery.
 func (d Delivery) RestrictedLocal() (*admission.Context, bool) {
 	if !d.Valid() || d.security.external == nil || !d.security.restricted {
+		return nil, false
+	}
+	return d.security.external, true
+}
+
+// PublicWeb returns the public admission and its protected channel ownership.
+func (d Delivery) PublicWeb() (*admission.Context, bool) {
+	if !d.Valid() || d.security.external == nil || !d.security.public || !d.security.external.IsPublicWeb() {
+		return nil, false
+	}
+	return d.security.external, true
+}
+
+// LocalUI returns the protected admission of a browser controlling its own
+// instance. It is neither public nor a restricted wrapper.
+func (d Delivery) LocalUI() (*admission.Context, bool) {
+	if !d.Valid() || d.security.external == nil || !d.security.localUI || !d.security.external.IsLocalUI() {
 		return nil, false
 	}
 	return d.security.external, true
@@ -198,7 +266,7 @@ func DeriveExternalAudited(parent Delivery, child circulation.Message, runtime *
 	// Derived work keeps the admission and root response state, but never
 	// inherits transport-only response or wrapper-dispatch metadata.
 	return Delivery{message: child, security: &deliverySecurity{
-		external: context, responses: parent.security.responses, restricted: parent.security.restricted, chain: parent.security.chain,
+		external: context, externalRoute: parent.security.externalRoute, responses: parent.security.responses, restricted: parent.security.restricted, public: parent.security.public, localUI: parent.security.localUI, chain: parent.security.chain,
 	}}, nil
 }
 
@@ -245,7 +313,7 @@ func DispatchExternalToWrapper(request Delivery, wrapperName string) (Delivery, 
 		return Delivery{}, fmt.Errorf("external wrapper dispatch is already selected")
 	}
 	security := &deliverySecurity{
-		external: context, responses: request.security.responses, chain: request.security.chain, wrapper: wrapperName, restricted: request.security.restricted,
+		external: context, externalRoute: request.security.externalRoute, responses: request.security.responses, chain: request.security.chain, wrapper: wrapperName, restricted: request.security.restricted, public: request.security.public, localUI: request.security.localUI,
 	}
 	if request.security.wrapperBack != nil {
 		route := *request.security.wrapperBack
@@ -292,8 +360,8 @@ func BindExternalResponse(request Delivery, response circulation.Message) (Deliv
 	if !valid || !external || requestMessage.Kind != circulation.ValueKindIntention {
 		return Delivery{}, ResponseReservation{}, fmt.Errorf("external request delivery is required")
 	}
-	if request.security.restricted {
-		return replyRestrictedLocal(request, response)
+	if request.security.restricted || request.security.public || request.security.localUI {
+		return replyKeyless(request, response)
 	}
 	if requestMessage.Intention.IntentionID == context.RootIntentionID() {
 		return BeginExternalResponse(request, response)
@@ -302,18 +370,26 @@ func BindExternalResponse(request Delivery, response circulation.Message) (Deliv
 	return delivery, ResponseReservation{}, err
 }
 
-// replyRestrictedLocal answers a restricted internal component. There is nothing
-// to sign and no permit: the answer is an ordinary local response, with its
-// coordinates forced from the request so a family cannot redirect it.
-func replyRestrictedLocal(request Delivery, response circulation.Message) (Delivery, ResponseReservation, error) {
+// replyKeyless answers a restricted internal component, a public browser or a
+// locally authenticated browser UI.
+// There is nothing to sign and no permit: the answer is an ordinary local
+// response, with its coordinates forced from the request so a family cannot
+// redirect it.
+func replyKeyless(request Delivery, response circulation.Message) (Delivery, ResponseReservation, error) {
 	requestMessage, _ := request.Message()
 	if response.Kind != circulation.ValueKindResponse || response.Response.IntentionID != requestMessage.Intention.IntentionID {
-		return Delivery{}, ResponseReservation{}, fmt.Errorf("response does not match the restricted request")
+		return Delivery{}, ResponseReservation{}, fmt.Errorf("response does not match the keyless admitted request")
 	}
 	response.Response.To = requestMessage.Intention.From
 	response.Response.From = requestMessage.Intention.To
 	response.Response.Identity = circulation.Identity{}
-	return Delivery{message: response, security: &deliverySecurity{localSource: "restricted:" + request.security.external.PrincipalID()}}, ResponseReservation{}, nil
+	source := "restricted:"
+	if request.security.public {
+		source = "public:"
+	} else if request.security.localUI {
+		source = "local-ui:"
+	}
+	return Delivery{message: response, security: &deliverySecurity{localSource: source + request.security.external.PrincipalID()}}, ResponseReservation{}, nil
 }
 
 // ReplyExternalDerived constructs the internal response to one derived
@@ -361,7 +437,7 @@ func replyExternalDelegated(request Delivery, response circulation.Message) (Del
 	}
 	response.Response.To = child.From
 	response.Response.From = child.To
-	security := &deliverySecurity{external: context, restricted: request.security.restricted}
+	security := &deliverySecurity{external: context, restricted: request.security.restricted, public: request.security.public, localUI: request.security.localUI}
 	if request.security.wrapperBack != nil {
 		route := *request.security.wrapperBack
 		security.wrapperBack = &route
@@ -420,6 +496,34 @@ func (d Delivery) LocalAuthoritySource() (string, bool) {
 		return "", false
 	}
 	return d.security.localSource, true
+}
+
+// ExternalRouteID returns the authenticated duplex generation that carried a
+// signed admitted request. It is private delivery metadata, never wire input.
+func (d Delivery) ExternalRouteID() (string, bool) {
+	if !d.Valid() || d.security.external == nil || !externalRoutePattern.MatchString(d.security.externalRoute) {
+		return "", false
+	}
+	return d.security.externalRoute, true
+}
+
+// BindSignedRoute freezes one authenticated route on a trusted local delivery.
+// It is used for ephemeral callbacks whose old generation must never migrate to
+// a replacement socket.
+func BindSignedRoute(delivery Delivery, routeID string) (Delivery, error) {
+	if _, local := delivery.LocalAuthoritySource(); !local || !externalRoutePattern.MatchString(routeID) {
+		return Delivery{}, fmt.Errorf("valid local delivery and signed route are required")
+	}
+	security := *delivery.security
+	security.signedRouteHint = routeID
+	return Delivery{message: delivery.message, security: &security}, nil
+}
+
+func (d Delivery) SignedRouteHint() (string, bool) {
+	if _, local := d.LocalAuthoritySource(); !local || !externalRoutePattern.MatchString(d.security.signedRouteHint) {
+		return "", false
+	}
+	return d.security.signedRouteHint, true
 }
 
 // ExternalAdmission returns immutable read-only admission metadata. Local

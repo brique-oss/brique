@@ -66,10 +66,12 @@ func newCommWrapperFixture(t *testing.T) commWrapperFixture {
 	}
 	descendants := true
 	policy := trust.Policy{
-		Format: trust.PolicyFormat, FormatVersion: trust.PolicyFormatVersion,
+		Format: trust.PolicyFormat, FormatVersion: trust.PolicyFormatVersionV2,
 		PolicyID: "main", InstanceID: "comm-wrapper-instance", Revision: "1", IssuedAt: "2026-10-25T12:00:00Z",
 		Principals: []trust.Principal{{
 			PrincipalID: "partner-a", Kind: "instance", Status: "active", ScopeIDs: []string{"execute"},
+			Actors: []trust.ActorBinding{{ActorID: trust.DefaultActor, ScopeIDs: []string{"execute"}},
+				{ActorID: trust.ReservedUIActorID, ScopeIDs: []string{"execute"}}},
 			SigningKeys: []trust.SigningKey{{
 				KeyID: messageKeyID, Algorithm: trust.SigningAlgorithm,
 				PublicKey: base64.RawURLEncoding.EncodeToString(messagePublic), Status: "active",
@@ -78,11 +80,10 @@ func newCommWrapperFixture(t *testing.T) commWrapperFixture {
 		Scopes: []trust.Scope{{
 			ScopeID: "execute", Description: "wrapper delegation test",
 			Allow: trust.PermissionSet{
-				Capabilities: []trust.CapabilityPermission{{
-					PermissionID: "user-cap", Context: trust.ContextSelector{Path: "/root", IncludeDescendants: &descendants},
-					Family: "user", Names: []string{"sample.echo", "sample.child"},
-				}},
-				Resources: []trust.ResourcePermission{},
+				Capabilities: []trust.CapabilityPermission{},
+				Resources: []trust.ResourcePermission{{PermissionID: "user-cap", Kind: "capacity",
+					Context:  trust.ContextSelector{Path: "/root", IncludeDescendants: &descendants},
+					Selector: &trust.ResourceSelector{IDs: []string{"sample.child", "sample.echo"}}, Actions: []string{"execute"}}},
 			},
 			Deny: trust.PermissionSet{Capabilities: []trust.CapabilityPermission{}, Resources: []trust.ResourcePermission{}},
 		}},
@@ -115,7 +116,7 @@ func newCommWrapperFixture(t *testing.T) commWrapperFixture {
 		t.Fatal(err)
 	}
 	candidate, err := runtime.Prepare(decoded, trust.Catalog{
-		Capabilities: map[string][]string{"user": {"sample.echo", "sample.child"}},
+		Capabilities: map[string][]string{"user": {"sample.echo", "sample.child"}}, ResourceActions: trust.EngineResourceActions(),
 	})
 	if err != nil {
 		t.Fatal(err)

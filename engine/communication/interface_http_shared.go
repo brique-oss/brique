@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/security/limits"
@@ -83,9 +84,18 @@ func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, re
 		readLimit = wire.MaxEnvelopeBytes
 	}
 	byAddress := limits.New(nil)
+	// Signature verification is deliberately bounded independently from the
+	// HTTP server's connection limit. A flood cannot create an unbounded number
+	// of concurrent public-key operations.
+	verificationSlots := make(chan struct{}, 32)
+	neutral := func(w http.ResponseWriter) {
+		// Deliberately indistinguishable from an ordinary reverse-proxy route that
+		// does not exist: no Brique-specific header or body is emitted.
+		w.WriteHeader(http.StatusNotFound)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			neutral(w)
 			return
 		}
 		defer r.Body.Close()
@@ -93,22 +103,43 @@ func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, re
 		// Before the body is read and before the queue: a stranger with no key can still fill
 		// the queue every peer shares, so each address has a budget of its own.
 		if !byAddress.Allow(remoteBucket(r.RemoteAddr), budget) {
-			w.WriteHeader(http.StatusTooManyRequests)
+			// An address over its budget gets the same neutral answer as any stranger (D-23): a 429 would
+			// tell an unknown sender that a Brique entry point is here.
+			neutral(w)
+			return
+		}
+		select {
+		case verificationSlots <- struct{}{}:
+			defer func() { <-verificationSlots }()
+		default:
+			neutral(w)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, readLimit)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				return
-			}
-			w.WriteHeader(http.StatusBadRequest)
+			neutral(w)
 			return
 		}
-		if len(body) == 0 || rt == nil || rt.SignedExternalIngress == nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		if len(body) == 0 || rt == nil || rt.SignedExternalIngress == nil || rt.SecurityRuntime == nil {
+			neutral(w)
+			return
+		}
+		securityRuntime := rt.SecurityRuntime()
+		if securityRuntime == nil || securityRuntime.Trust().Active() == nil {
+			neutral(w)
+			return
+		}
+		now := time.Now().UTC()
+		if rt.SignedExternalNow != nil {
+			now = rt.SignedExternalNow().UTC()
+		}
+		_, diagnosis, verifyErr := wire.VerifyClearDiagnosed(body, securityRuntime.InstanceID(), now, securityRuntime.Trust().Active())
+		if verifyErr != nil {
+			if rt.ReportSignedExternalPreAdmission != nil {
+				rt.ReportSignedExternalPreAdmission(diagnosis)
+			}
+			neutral(w)
 			return
 		}
 		item := signedExternalIngressItem{Interface: rt.Name, Envelope: append([]byte(nil), body...)}

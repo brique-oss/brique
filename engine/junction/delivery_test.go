@@ -59,6 +59,25 @@ func TestLocalDeliveryKeepsAuthorityOutsideWireMessage(t *testing.T) {
 	}
 }
 
+func TestLocalDeliveryCanFreezeAnAuthenticatedSignedRoute(t *testing.T) {
+	const routeID = "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	delivery := junction.MustLocalDelivery(junction.MustLocalAuthority("family:matter"),
+		circulation.Message{Kind: circulation.ValueKindIntention})
+	bound, err := junction.BindSignedRoute(delivery, routeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hint, ok := bound.SignedRouteHint(); !ok || hint != routeID {
+		t.Fatalf("route hint = %q, %v", hint, ok)
+	}
+	if _, ok := delivery.SignedRouteHint(); ok {
+		t.Fatal("binding mutated the original delivery")
+	}
+	if _, err := junction.BindSignedRoute(delivery, "invalid"); err == nil {
+		t.Fatal("invalid signed route was accepted")
+	}
+}
+
 func TestLocalAuthorityRejectsEmptySource(t *testing.T) {
 	if _, err := junction.NewLocalAuthority("  "); err == nil {
 		t.Fatal("expected empty authority source rejection")

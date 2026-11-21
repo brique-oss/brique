@@ -16,6 +16,7 @@ import (
 	"brique_engine/circulation"
 	"brique_engine/security/inner"
 	"brique_engine/security/pending"
+	"brique_engine/security/trust"
 	"brique_engine/security/wire"
 	"brique_engine/shared"
 )
@@ -55,7 +56,7 @@ func splitExternalTag(tag string) (principal, machine string) {
 	return rest, ""
 }
 
-func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag string) {
+func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag string, routeHint ...string) {
 	securityRuntime := l.securityRuntime()
 	if securityRuntime == nil || securityRuntime.Pending() == nil || securityRuntime.Signers() == nil || securityRuntime.Signers().Active() == nil {
 		l.failSignedExternalIntention(message, "security_runtime_unavailable", "external security runtime is unavailable")
@@ -69,10 +70,18 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 	}
 	peer := destination.Peer
 	runtime := l.ifaces[peer.Interface]
-	if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
-		l.failSignedExternalIntention(message, "signed_external_interface_unavailable", "protected external interface is unavailable")
+	hub := l.signedTransportHub()
+	exactRoute := ""
+	if len(routeHint) == 1 {
+		exactRoute = strings.TrimSpace(routeHint[0])
+	}
+	exactRouteAvailable := exactRoute != "" && hub != nil && hub.RouteMatches(exactRoute, peer.AudienceInstanceID, destination.Key.KeyID)
+	if exactRoute != "" && !exactRouteAvailable {
+		l.failSignedExternalIntention(message, "signed_external_route_closed", "the subscription transport generation is no longer active")
 		return
 	}
+	duplexRouteAvailable := hub != nil && hub.HasRoute(peer.AudienceInstanceID, destination.Key.KeyID)
+	https := runtime != nil && runtime.Driver == "https" && runtime.SignedExternalEgress != nil && runtime.State().Status == InterfaceRunning
 
 	origin := message.Intention.From
 	// The origin is where the answer is delivered here, and what the other instance is told is the
@@ -103,6 +112,11 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 	// canonical identifier; the legacy inner field never crosses the membrane.
 	actor := actorFromIdentity(wireMessage.Intention.Identity)
 	wireMessage.Intention.Identity = circulation.Identity{}
+	duplex := exactRouteAvailable || duplexRouteAvailable && actor == trust.ReservedUIActorID
+	if !duplex && !https {
+		l.failSignedExternalIntention(message, "signed_external_interface_unavailable", "protected external interface is unavailable")
+		return
+	}
 	if correlation := wireMessage.Intention.Correlation; correlation != nil && correlation.RootIntentionID == "" && correlation.ParentIntentionID == "" {
 		wireMessage.Intention.Correlation = nil
 	}
@@ -158,6 +172,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 
 	item := signedExternalEgressItem{
 		Key: built.SignedEnvelopeHash(), Endpoint: destination.Endpoint.Target, Envelope: built.Bytes(), Message: message,
+		RouteID: exactRoute, RemoteInstanceID: peer.AudienceInstanceID, RemoteKeyID: destination.Key.KeyID,
 		Purpose: wire.PurposeIntention, RequestHash: requestHash, AwaitResponse: message.Intention.AwaitResponse,
 	}
 	if !l.rememberSignedExternal(item) {
@@ -165,10 +180,19 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 		l.failSignedExternalIntention(message, "signed_external_pending_full", "signed external pending capacity reached")
 		return
 	}
-	select {
-	case runtime.SignedExternalEgress <- item:
+	if duplex {
+		if l.enqueueSignedTransport(item) {
+			return
+		}
+		l.forgetSignedExternal(item.Key, item.Envelope)
+		l.cancelPendingExternalIntention(item)
+		l.failSignedExternalIntention(message, "signed_external_queue_full", "protected external interface queue is full")
 		return
-	case <-l.done:
+	}
+	switch l.offerSignedEgress(runtime, item) {
+	case offerAccepted:
+		return
+	case offerStopped:
 		l.forgetSignedExternal(item.Key, item.Envelope)
 		l.cancelPendingExternalIntention(item)
 		l.failSignedExternalIntention(message, circulation.ValueReasonContextStopped, "communication loop is stopping")

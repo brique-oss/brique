@@ -53,13 +53,22 @@ func (l *CommLoop) admitSignedExternalEnvelope(item signedExternalIngressItem) {
 		l.traceSignedAdmissionReject("authentication_failed")
 		return
 	}
+	if item.RouteID != "" {
+		admission := verified.Admission()
+		peer, _, found := securityRuntime.DestinationOfKey(admission.PrincipalID(), item.RemoteKeyID)
+		if admission.SigningKeyID() != item.RemoteKeyID || !found || peer.AudienceInstanceID != item.RemoteInstanceID ||
+			(verified.Protected().Purpose == wire.PurposeIntention && verified.Protected().ActorID != trust.ReservedUIActorID) {
+			l.traceSignedAdmissionReject("authenticated_route_mismatch")
+			return
+		}
+	}
 	overRate := verified.Protected().Purpose == wire.PurposeIntention && !l.withinRate(verified.Admission())
 	if !l.openSigned(verified) {
 		return
 	}
 	switch verified.Protected().Purpose {
 	case wire.PurposeIntention:
-		l.admitVerifiedExternalIntention(verified, overRate)
+		l.admitVerifiedExternalIntention(verified, overRate, item.RouteID)
 	case wire.PurposeResponse:
 		l.admitSignedExternalResponse(verified)
 	default:
@@ -87,7 +96,7 @@ func (l *CommLoop) admitSignedExternalIntention(item signedExternalIngressItem) 
 	if !l.openSigned(verified) {
 		return
 	}
-	l.admitVerifiedExternalIntention(verified, overRate)
+	l.admitVerifiedExternalIntention(verified, overRate, "")
 }
 
 // withinRate takes one request from the budget of the authenticated principal and reports
@@ -128,13 +137,19 @@ func (l *CommLoop) openSigned(verified *wire.Verified) bool {
 // admitVerifiedExternalIntention admits one authenticated intention. overRate says its sender
 // went over the request budget its policy gives: the request is then not run, and a caller that
 // waits for an answer is told so with the answer a saturated instance gives.
-func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified, overRate bool) {
+func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified, overRate bool, routeID string) {
 	securityRuntime := l.securityRuntime()
 	if securityRuntime == nil || securityRuntime.Replay() == nil {
 		l.traceSignedAdmissionReject("security_runtime_unavailable")
 		return
 	}
-	delivery, err := junction.AdmitExternalIntention(verified)
+	var delivery junction.Delivery
+	var err error
+	if routeID == "" {
+		delivery, err = junction.AdmitExternalIntention(verified)
+	} else {
+		delivery, err = junction.AdmitExternalIntentionFromRoute(verified, routeID)
+	}
 	if err != nil {
 		l.traceSignedAdmissionReject("invalid_authenticated_intention")
 		return
@@ -193,7 +208,7 @@ func (l *CommLoop) admitVerifiedExternalIntention(verified *wire.Verified, overR
 		l.sendToTrace(message, circulation.ValueTraceCommReject, "replay_conflict", "external intention identifier conflicts with an existing request")
 		return
 	case replay.ReservationDuplicate:
-		l.replayCachedExternalResponse(key, reservation.Entry, admission.SigningKeyID())
+		l.replayCachedExternalResponse(key, reservation.Entry, admission.SigningKeyID(), routeID)
 		return
 	case replay.ReservationNew:
 	default:
@@ -299,7 +314,7 @@ func (l *CommLoop) dispatchAdmittedExternal(delivery junction.Delivery, message 
 
 // replayCachedExternalResponse answers a duplicate request again from the ledger, to the machine the
 // key that signed the duplicate lives on.
-func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Entry, signingKeyID string) {
+func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Entry, signingKeyID, routeID string) {
 	envelope := entry.TerminalEnvelope
 	if len(envelope) == 0 {
 		envelope = entry.LatestRunning
@@ -316,23 +331,29 @@ func (l *CommLoop) replayCachedExternalResponse(key replay.Key, entry replay.Ent
 		return
 	}
 	runtime := l.ifaces[peer.Interface]
-	if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
+	if routeID != "" {
+		hub := l.signedTransportHub()
+		if hub == nil || !hub.HasRouteID(routeID) {
+			return
+		}
+	} else if runtime == nil || runtime.Driver != "https" || runtime.SignedExternalEgress == nil || runtime.State().Status != InterfaceRunning {
 		return
 	}
 	item := signedExternalEgressItem{
-		Key:      cachedExternalEnvelopeKey(key, envelope),
-		Endpoint: machine.Target,
-		Envelope: append([]byte(nil), envelope...),
-		Purpose:  wire.PurposeResponse,
+		Key: cachedExternalEnvelopeKey(key, envelope), Endpoint: machine.Target, RouteID: routeID,
+		RemoteInstanceID: peer.AudienceInstanceID, RemoteKeyID: signingKeyID,
+		Envelope: append([]byte(nil), envelope...), Purpose: wire.PurposeResponse,
 	}
 	if !l.rememberSignedExternal(item) {
 		return
 	}
-	select {
-	case runtime.SignedExternalEgress <- item:
-	case <-l.done:
-		l.forgetSignedExternal(item.Key, item.Envelope)
-	default:
+	if routeID != "" {
+		if !l.enqueueSignedTransport(item) {
+			l.forgetSignedExternal(item.Key, item.Envelope)
+		}
+		return
+	}
+	if l.offerSignedEgress(runtime, item) != offerAccepted {
 		l.forgetSignedExternal(item.Key, item.Envelope)
 	}
 }

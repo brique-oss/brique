@@ -1,0 +1,15 @@
+{
+  "format": "brique.public-web-profile/1",
+  "control_frame_max_bytes": 65536,
+  "connections_global": 64,
+  "connections_per_address": 8,
+  "intentions_per_second_per_channel": 10,
+  "intentions_burst_per_channel": 20,
+  "intentions_per_second_global": 100,
+  "intentions_burst_global": 200,
+  "outgoing_messages_per_connection": 128,
+  "outgoing_bytes_per_connection": 1048576,
+  "write_timeout_ms": 5000,
+  "read_idle_timeout_ms": 45000,
+  "ping_interval_ms": 15000
+}

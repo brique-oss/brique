@@ -25,6 +25,9 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
+	securityruntime "brique_engine/security/runtime"
+	"brique_engine/security/wire"
+	"brique_engine/signedtransport"
 )
 
 // -----------------------------
@@ -119,13 +122,16 @@ type interfaceEgressReport struct {
 }
 
 type signedExternalEgressItem struct {
-	Key           string
-	Endpoint      string
-	Envelope      []byte
-	Message       circulation.Message
-	Purpose       string
-	RequestHash   string
-	AwaitResponse bool
+	Key              string
+	Endpoint         string
+	RouteID          string
+	RemoteInstanceID string
+	RemoteKeyID      string
+	Envelope         []byte
+	Message          circulation.Message
+	Purpose          string
+	RequestHash      string
+	AwaitResponse    bool
 }
 
 type signedExternalEgressReport struct {
@@ -134,8 +140,11 @@ type signedExternalEgressReport struct {
 }
 
 type signedExternalIngressItem struct {
-	Interface string
-	Envelope  []byte
+	Interface        string
+	RouteID          string
+	RemoteInstanceID string
+	RemoteKeyID      string
+	Envelope         []byte
 }
 
 type wrapperInterfaceEgressItem struct {
@@ -157,6 +166,11 @@ type InterfaceRuntime struct {
 	// SignedExternalIngress is a root-only raw-byte membrane. It is installed
 	// only when a complete security runtime exists before Comm construction.
 	SignedExternalIngress chan<- signedExternalIngressItem
+	// SignedExternalNow and ReportSignedExternalPreAdmission keep the HTTP
+	// adapter on the engine's security clock and denial journal while it performs
+	// the bounded authentication gate required before returning a Brique status.
+	SignedExternalNow                func() time.Time
+	ReportSignedExternalPreAdmission func(wire.Diagnosis)
 
 	// Egress is the per-interface egress channel owned by CommLoop.
 	// WriteLoop must consume outgoing messages from this channel.
@@ -184,6 +198,10 @@ type InterfaceRuntime struct {
 	// machineDirectory is the machine's security directory, "" when there is none; an HTTPS
 	// interface looks there for the files its configuration does not name.
 	machineDirectory string
+	// SecurityRuntime and SignedTransport are injected only for the root
+	// instance transport. Concrete adapters must still fail closed when absent.
+	SecurityRuntime func() *securityruntime.Runtime
+	SignedTransport *signedtransport.Hub
 
 	// egressWait is how long a routing loop waits for a place in a full queue of this interface; 0 = default.
 	egressWait time.Duration

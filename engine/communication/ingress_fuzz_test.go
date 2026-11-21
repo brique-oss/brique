@@ -24,8 +24,8 @@ import (
 )
 
 // FuzzSignedIngressHandler posts arbitrary bodies to the raw-envelope ingress. It
-// answers one of four statuses, never panics, never queues more than the read limit,
-// and what it queues is exactly what was sent.
+// answers neutrally when no security runtime can authenticate the sender, never
+// panics, and never queues unauthenticated bytes.
 func FuzzSignedIngressHandler(f *testing.F) {
 	for _, seed := range []string{"", "{}", `{"protected":{}}`, strings.Repeat("x", 63), strings.Repeat("x", 64), strings.Repeat("x", 65), "\x00\xff"} {
 		f.Add(seed)
@@ -37,22 +37,8 @@ func FuzzSignedIngressHandler(f *testing.F) {
 		handler := signedExternalIngressHandler(runtime, make(chan struct{}), limit, 0)
 		response := httptest.NewRecorder()
 		handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(body)))
-		switch response.Code {
-		case http.StatusAccepted:
-			item := <-queue
-			if string(item.Envelope) != body || len(body) == 0 || len(body) > limit {
-				t.Fatalf("queued %q for a body of %d bytes", item.Envelope, len(body))
-			}
-		case http.StatusRequestEntityTooLarge:
-			if len(body) <= limit {
-				t.Fatalf("refused %d bytes as too large", len(body))
-			}
-		case http.StatusServiceUnavailable:
-			if len(body) != 0 {
-				t.Fatalf("refused a %d-byte body with room in the queue", len(body))
-			}
-		default:
-			t.Fatalf("unexpected status %d", response.Code)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("status=%d want neutral 404", response.Code)
 		}
 		if len(queue) != 0 {
 			t.Fatal("something was queued without being accepted")

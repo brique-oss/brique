@@ -60,6 +60,9 @@ func (l *CommLoop) restrictedWrapperDelivery(item IngressItem) (delivery junctio
 	}
 	runtime := provider.TrustRuntime()
 	principalID := trust.LocalPrincipalPrefix + item.IfaceName
+	if principalID == trust.LocalUIPrincipalID && runtime.HasDeclaredLocalPrincipal(principalID) {
+		return junction.Delivery{}, true, errReservedLocalUIPrincipal
+	}
 	if !runtime.HasLocalPrincipal(principalID) {
 		return junction.Delivery{}, false, nil
 	}
@@ -95,6 +98,8 @@ func (l *CommLoop) restrictedWrapperDelivery(item IngressItem) (delivery junctio
 // errWrapperRateLimited says a restricted wrapper went over the request budget its policy gives.
 var errWrapperRateLimited = errors.New("restricted wrapper is over its request rate")
 
+var errReservedLocalUIPrincipal = errors.New("local.ui is reserved to an authenticated browser bridge")
+
 // projectWrapperOrigin places a wrapper-local origin in instance space, as the
 // ingress does for a trusted wrapper.
 func projectWrapperOrigin(message *circulation.Message, boundary string) {
@@ -120,6 +125,8 @@ func (l *CommLoop) refuseRestrictedWrapper(item IngressItem, cause error) {
 	layer, reason := audit.LayerAuthentication, audit.ReasonWrapperSecret
 	if errors.Is(cause, errWrapperRateLimited) {
 		layer, reason = audit.LayerTransport, audit.ReasonRateLimited
+	} else if errors.Is(cause, errReservedLocalUIPrincipal) {
+		reason = audit.ReasonUnsupported
 	}
 	l.auditRecorder().Record(audit.Record{
 		Principal: trust.LocalPrincipalPrefix + item.IfaceName, Channel: "wrapper", Layer: layer,

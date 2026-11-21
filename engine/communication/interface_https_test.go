@@ -17,6 +17,7 @@
 package comm
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -37,6 +38,8 @@ import (
 
 	"brique_engine/circulation"
 	"brique_engine/configuration"
+	"brique_engine/security/browserhello"
+	"brique_engine/security/instancedescriptor"
 )
 
 func writeTestTLSCertificate(t *testing.T) (string, string) {
@@ -275,6 +278,113 @@ func TestHTTPSInterface_N1_HTTPS_05_StartServerHandlerIngress(t *testing.T) {
 
 }
 
+func TestHTTPSInterfaceMountsExplicitBrowserWSSAndPublishesFreshDescriptor(t *testing.T) {
+	fixture, _, _ := newSignedExternalTestLoop(t)
+	certFile, keyFile := writeTestTLSCertificate(t)
+	rt, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("secure-peer", "", map[string]any{
+		configuration.KeyIntIngressEnabled: true,
+		configuration.KeyIntEgressEnabled:  false,
+		configuration.KeyIntAddr:           "127.0.0.1:0",
+		configuration.KeyTLSCertFile:       certFile,
+		configuration.KeyTLSKeyFile:        keyFile,
+		configuration.KeyBrowserWSS: map[string]any{
+			configuration.KeyBrowserWSSEnabled:   true,
+			configuration.KeyBrowserWSSEndpoint:  "main",
+			configuration.KeyBrowserWSSURL:       "wss://engine.example/brique/ui",
+			configuration.KeyBrowserWSSUIOrigins: []any{"https://ui.example"},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.SecurityRuntime = fixture.registry.SecurityRuntime
+	rt.SignedTransport = fixture.registry.SignedTransport()
+	rt.SignedExternalIngress = make(chan signedExternalIngressItem, 1)
+	h := rt.Impl.(*HttpsInterface)
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	if h.server.TLSConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("browser WSS TLS minimum = %x", h.server.TLSConfig.MinVersion)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "https://engine.example/brique/descriptor", nil)
+	request.Host = "engine.example"
+	response := httptest.NewRecorder()
+	h.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("descriptor response = %d, headers=%v", response.Code, response.Header())
+	}
+	descriptor, err := instancedescriptor.Verify(response.Body.Bytes(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected := descriptor.Protected()
+	if protected.InstanceID != fixture.registry.SecurityRuntime().InstanceID() ||
+		len(protected.Endpoints) != 1 || protected.Endpoints[0].URL != "wss://engine.example/brique/ui" ||
+		len(protected.UIOrigins) != 1 || protected.UIOrigins[0] != "https://ui.example" ||
+		!containsString(protected.Protocols, browserhello.Contract) {
+		t.Fatalf("published descriptor = %+v", protected)
+	}
+
+	// Force the cached publication outside its validity window. The HTTP
+	// request itself has no deadline, so the handler must supply the bounded
+	// signing context required by Brique Sec when it renews the descriptor.
+	expiredContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, err = h.publisher.Refresh(expiredContext, h.browserDescriptorTemplate(), time.Now().Add(-3*time.Minute))
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshRequest := httptest.NewRequest(http.MethodGet, "https://engine.example/brique/descriptor", nil)
+	refreshRequest.Host = "engine.example"
+	refreshResponse := httptest.NewRecorder()
+	h.server.Handler.ServeHTTP(refreshResponse, refreshRequest)
+	if refreshResponse.Code != http.StatusOK {
+		t.Fatalf("renewed descriptor response = %d, body=%q", refreshResponse.Code, refreshResponse.Body.String())
+	}
+	if _, err := instancedescriptor.Verify(refreshResponse.Body.Bytes(), time.Now()); err != nil {
+		t.Fatalf("renewed descriptor: %v", err)
+	}
+
+	browserRequest := httptest.NewRequest(http.MethodGet, "https://engine.example/brique/ui", nil)
+	browserRequest.Host = "engine.example"
+	browserRequest.Header.Set("Origin", "https://ui.example")
+	browserRequest.Header.Set("Sec-WebSocket-Protocol", "brique.browser-wss.1")
+	browserResponse := httptest.NewRecorder()
+	h.server.Handler.ServeHTTP(browserResponse, browserRequest)
+	if browserResponse.Code != http.StatusForbidden {
+		t.Fatalf("browser-origin WSS status = %d", browserResponse.Code)
+	}
+}
+
+func TestBrowserWSSConfigurationFailsClosed(t *testing.T) {
+	base := map[string]any{configuration.KeyBrowserWSSEnabled: true,
+		configuration.KeyBrowserWSSURL: "wss://engine.example/brique/ui"}
+	if _, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("secure-peer", "", map[string]any{
+		configuration.KeyBrowserWSS: base,
+	})); err == nil {
+		t.Fatal("browser WSS without UI origins was accepted")
+	}
+	base[configuration.KeyBrowserWSSUIOrigins] = []any{"https://ui.example"}
+	base[configuration.KeyBrowserWSSURL] = "wss://engine.example/other/ui"
+	if _, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("secure-peer", "", map[string]any{
+		configuration.KeyBrowserWSS: base,
+	})); err == nil {
+		t.Fatal("browser WSS outside the interface path was accepted")
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestHTTPSInterface_N1_HTTPS_06_ReadLoopGuards(t *testing.T) {
 	rtNoIngress, err := NewHTTPSInterfaceRuntime(newHTTPSTestCfg("https-no-ingress", "", map[string]any{
 		configuration.KeyIntIngressEnabled: false,
@@ -504,6 +614,12 @@ func TestHTTPSInterfaceSignedExternalRequiresProtectedVerifiedTLSAndSendsExactEn
 	item := signedExternalEgressItem{Endpoint: "https://peer.example:8443/brique", Envelope: want}
 	if outcome := h.sendSignedExternal(item); outcome.Err != nil || !outcome.Definitive || outcome.StatusCode != http.StatusNoContent {
 		t.Fatalf("verified signed outcome = %#v", outcome)
+	}
+	h.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	if outcome := h.sendSignedExternal(item); outcome.Err == nil || outcome.Definitive || outcome.StatusCode != http.StatusNotFound {
+		t.Fatalf("neutral peer response became definitive: %#v", outcome)
 	}
 
 	h.insecureSkipVerify = true

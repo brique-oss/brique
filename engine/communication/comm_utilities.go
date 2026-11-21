@@ -1106,6 +1106,18 @@ func (l *CommLoop) sendToIface(name string, msg circulation.Message) deliveryRes
 	if target == "" {
 		target = "@interface_" + name
 	}
+	l.browserUIMu.RLock()
+	browserDeliver := l.browserUI[name]
+	l.browserUIMu.RUnlock()
+	if browserDeliver != nil {
+		if err := browserDeliver(msg); err == nil {
+			return newDeliveryResult(deliveryAccepted, target, nil)
+		} else {
+			result := newDeliveryResult(deliveryUnavailable, target, err)
+			l.reportDeliveryFailure(msg, result)
+			return result
+		}
+	}
 	rt, ok := l.ifaces[name]
 	if !ok || rt == nil || rt.Egress == nil {
 		result := newDeliveryResult(deliveryUnavailable, target, fmt.Errorf("unknown iface: %s", name))

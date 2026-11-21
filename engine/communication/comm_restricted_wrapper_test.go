@@ -44,13 +44,19 @@ type restrictedWorld struct {
 	secrets  map[string]string
 }
 
-func newRestrictedWorld(t *testing.T) *restrictedWorld {
+func newRestrictedWorld(t testing.TB) *restrictedWorld {
 	t.Helper()
 	src := &policysrc.Source{Format: policysrc.Format, Version: policysrc.Version, InstanceID: "comm-wrapper-instance", PolicyID: "main",
 		Principals: map[string]*policysrc.Principal{
 			"local.pilot": {Kind: "local", Grants: []policysrc.Grant{
 				{Read: policysrc.TargetList{"/root/catalog/**"}, Except: []string{"/root/catalog/secret/**"}},
 				{Call: policysrc.TargetList{"/root/catalog#capacity:report"}},
+			}},
+			trust.LocalUIPrincipalID: {Kind: "local", Grants: []policysrc.Grant{
+				{Read: policysrc.TargetList{"/root/catalog/**"}},
+			}},
+			trust.PublicWebPrincipalID: {Kind: "public", Grants: []policysrc.Grant{
+				{Read: policysrc.TargetList{"/root/catalog/**"}},
 			}},
 		}}
 	result, err := policysrc.Compile(src, trust.Catalog{Capabilities: map[string][]string{}, ResourceActions: trust.EngineResourceActions()},
@@ -84,7 +90,7 @@ func newRestrictedWorld(t *testing.T) *restrictedWorld {
 	registry.SetAuditRecorder(journal)
 	w := &restrictedWorld{registry: registry, runtime: runtime, matterIn: make(chan junction.Delivery, 8), execIn: make(chan junction.Delivery, 8), traceIn: make(chan junction.Delivery, 32),
 		journal: journal, secrets: map[string]string{}}
-	for _, name := range []string{"pilot", "architect"} {
+	for _, name := range []string{"pilot", "architect", "ui"} {
 		secret, err := registry.IssueWrapperSecret("/root/catalog", name)
 		if err != nil {
 			t.Fatal(err)
@@ -100,6 +106,20 @@ func newRestrictedWorld(t *testing.T) *restrictedWorld {
 	}
 	w.loop.frame.SetLocalAuthority(junction.MustLocalAuthority("context:/root/catalog"))
 	return w
+}
+
+func TestAWrapperCannotBorrowTheReservedLocalUIPrincipal(t *testing.T) {
+	w := newRestrictedWorld(t)
+	w.loop.handleInterfaceIngress(w.item("ui", w.secrets["ui"], readIntention("ui-wrapper-1")))
+	select {
+	case <-w.matterIn:
+		t.Fatal("a wrapper borrowed the local.ui browser authority")
+	case <-time.After(150 * time.Millisecond):
+	}
+	records := w.journal.Records()
+	if len(records) == 0 || records[len(records)-1].Principal != trust.LocalUIPrincipalID || records[len(records)-1].Reason != audit.ReasonUnsupported {
+		t.Fatalf("reserved local UI refusal = %+v", records)
+	}
 }
 
 func (w *restrictedWorld) item(name, secret string, message circulation.Message) IngressItem {

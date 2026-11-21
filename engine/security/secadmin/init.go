@@ -74,7 +74,7 @@ func (d *Dir) Init(options InitOptions) (*InitResult, error) {
 			if options.InstanceID == "" {
 				return nil, fmt.Errorf("this instance still carries the name of the template: choose its name with --instance")
 			}
-			if len(src.Principals) != 0 || len(src.Peers) != 0 {
+			if len(src.Principals) != 0 || len(src.Peers) != 0 || len(src.Secrets) != 0 {
 				return nil, fmt.Errorf("the source carries the template's name but is not empty: rename it by hand")
 			}
 			src.InstanceID = options.InstanceID

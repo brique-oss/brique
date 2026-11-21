@@ -35,11 +35,14 @@ func (d *Dir) PrincipalAdd(id, kind, publicKey string) error {
 	if _, exists := src.Principals[id]; exists {
 		return fmt.Errorf("principal %q already exists", id)
 	}
-	if kind == "local" {
+	if kind == trust.PrincipalKindLocal || kind == trust.PrincipalKindPublic {
 		// A restricted local component has no key: the engine admits it from its
 		// wrapper channel. Validation checks the "local." prefix on save.
 		if publicKey != "" {
-			return fmt.Errorf("a local principal has no key")
+			return fmt.Errorf("a keyless principal has no key")
+		}
+		if kind == trust.PrincipalKindPublic && id != trust.PublicWebPrincipalID {
+			return fmt.Errorf("the only public principal is %q", trust.PublicWebPrincipalID)
 		}
 		src.Principals[id] = &policysrc.Principal{Kind: kind}
 		return d.SaveSource(src)
@@ -183,8 +186,8 @@ func (d *Dir) PrincipalKeyAdd(id, publicKey, notBefore string) error {
 	if principal == nil {
 		return fmt.Errorf("principal %q does not exist", id)
 	}
-	if principal.Kind == "local" {
-		return fmt.Errorf("a local principal has no key")
+	if principal.Kind == trust.PrincipalKindLocal || principal.Kind == trust.PrincipalKindPublic {
+		return fmt.Errorf("a keyless principal has no key")
 	}
 	if _, err := decodeKey(publicKey); err != nil {
 		return err

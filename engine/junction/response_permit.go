@@ -43,6 +43,7 @@ type responseState struct {
 	contentMode   string
 	sealKeyID     string
 	sealKey       ed25519.PublicKey
+	routeID       string
 	nextSequence  uint64
 	nextToken     uint64
 	inFlight      bool
@@ -98,13 +99,14 @@ type ResponseReservation struct {
 	contentMode string
 	sealKeyID   string
 	sealKey     ed25519.PublicKey
+	routeID     string
 }
 
-func newResponseState(context *admission.Context) *responseState {
+func newResponseState(context *admission.Context, routeID string) *responseState {
 	return &responseState{
 		requestHash: context.RequestHash(), intentionID: context.RootIntentionID(),
 		principalID: context.PrincipalID(), contentMode: context.ContentMode(),
-		sealKeyID: context.SigningKeyID(), sealKey: context.SigningPublicKey(),
+		sealKeyID: context.SigningKeyID(), sealKey: context.SigningPublicKey(), routeID: routeID,
 	}
 }
 
@@ -140,7 +142,7 @@ func (security *deliverySecurity) beginResponse(status string) (ResponseReservat
 		state: state, token: state.nextToken, sequence: state.nextSequence,
 		phase: phase, status: status, requestHash: state.requestHash,
 		intentionID: state.intentionID, principalID: state.principalID,
-		contentMode: state.contentMode, sealKeyID: state.sealKeyID, sealKey: state.sealKey,
+		contentMode: state.contentMode, sealKeyID: state.sealKeyID, sealKey: state.sealKey, routeID: state.routeID,
 	}, nil
 }
 
@@ -154,6 +156,7 @@ func (reservation ResponseReservation) RequestHash() string { return reservation
 func (reservation ResponseReservation) IntentionID() string { return reservation.intentionID }
 func (reservation ResponseReservation) PrincipalID() string { return reservation.principalID }
 func (reservation ResponseReservation) ContentMode() string { return reservation.contentMode }
+func (reservation ResponseReservation) RouteID() string     { return reservation.routeID }
 
 // SealTo is the key that signed the request, to seal the response to when the request was sealed.
 func (reservation ResponseReservation) SealTo() (keyID string, publicKey ed25519.PublicKey) {

@@ -20,6 +20,7 @@ import (
 	"brique_engine/junction"
 	"brique_engine/security/audit"
 	"brique_engine/security/replay"
+	"brique_engine/security/trust"
 	"brique_engine/security/wire"
 )
 
@@ -51,6 +52,10 @@ func signedIngressEnvelope(t *testing.T, fixture commWrapperFixture, intentionID
 }
 
 func signedIngressEnvelopeAwaiting(t *testing.T, fixture commWrapperFixture, intentionID, target, capability string, params map[string]any, await bool) []byte {
+	return signedIngressEnvelopeActorAwaiting(t, fixture, intentionID, target, capability, params, "", await)
+}
+
+func signedIngressEnvelopeActorAwaiting(t *testing.T, fixture commWrapperFixture, intentionID, target, capability string, params map[string]any, actor string, await bool) []byte {
 	t.Helper()
 	payload, err := json.Marshal(circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
 		IntentionID: intentionID, AwaitResponse: await,
@@ -63,6 +68,7 @@ func signedIngressEnvelopeAwaiting(t *testing.T, fixture commWrapperFixture, int
 	}
 	protected := wire.Protected{
 		Format: wire.Format, Version: wire.Version, Purpose: wire.PurposeIntention,
+		ActorID:            actor,
 		AudienceInstanceID: "comm-wrapper-instance", KeyID: fixture.keyID,
 		IssuedAtMS:  strconv.FormatInt(fixture.now.UnixMilli(), 10),
 		ExpiresAtMS: strconv.FormatInt(fixture.now.Add(wire.MaxLifetime).UnixMilli(), 10),
@@ -122,6 +128,37 @@ func TestSignedExternalIngressReservesBeforeDirectDispatchAndSuppressesReplay(t 
 	select {
 	case <-target:
 		t.Fatal("identical replay was dispatched twice")
+	default:
+	}
+}
+
+func TestAuthenticatedDuplexIngressBindsPeerActorAndResponseRoute(t *testing.T) {
+	fixture, loop, _ := newSignedExternalTestLoop(t)
+	target := make(chan junction.Delivery, 1)
+	fixture.registry.Register("/root/catalog/child", target, "catalog-child")
+	routeID := "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	envelope := signedIngressEnvelopeActorAwaiting(t, fixture, commWrapperRootID, "/root/catalog/child", "sample.echo", nil,
+		trust.ReservedUIActorID, true)
+	loop.admitSignedExternalEnvelope(signedExternalIngressItem{Interface: "browser-wss", RouteID: routeID,
+		RemoteInstanceID: "partner-instance", RemoteKeyID: fixture.keyID, Envelope: envelope})
+	select {
+	case request := <-target:
+		_, reservation := beginSignedResponse(t, request, circulation.ValueStatusRunning)
+		if reservation.RouteID() != routeID {
+			t.Fatalf("response route = %q", reservation.RouteID())
+		}
+	default:
+		t.Fatal("authenticated duplex ingress was not dispatched")
+	}
+
+	otherID := "123e4567-e89b-42d3-a456-426614174001"
+	mismatch := signedIngressEnvelopeActorAwaiting(t, fixture, otherID, "/root/catalog/child", "sample.echo", nil,
+		trust.ReservedUIActorID, true)
+	loop.admitSignedExternalEnvelope(signedExternalIngressItem{Interface: "browser-wss", RouteID: routeID,
+		RemoteInstanceID: "other-instance", RemoteKeyID: fixture.keyID, Envelope: mismatch})
+	select {
+	case <-target:
+		t.Fatal("envelope whose signed peer did not match the socket was dispatched")
 	default:
 	}
 }

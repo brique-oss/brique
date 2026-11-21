@@ -17,6 +17,7 @@
 package comm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/security/wire"
 )
 
 func controlRequest(t *testing.T, ctx context.Context) *http.Request {
@@ -148,47 +150,105 @@ func TestSendHTTPControlClassifiesPeerRejectionAndNetworkFailure(t *testing.T) {
 }
 
 func TestSignedExternalIngressHandlerKeepsRawEnvelopeSeparateAndBounded(t *testing.T) {
+	fixture, _, _ := newSignedExternalTestLoop(t)
 	queue := make(chan signedExternalIngressItem, 1)
-	runtime := &InterfaceRuntime{Name: "secure", SignedExternalIngress: queue}
-	handler := signedExternalIngressHandler(runtime, make(chan struct{}), 64, 0)
+	runtime := &InterfaceRuntime{
+		Name: "secure", SignedExternalIngress: queue,
+		SecurityRuntime:   fixture.registry.SecurityRuntime,
+		SignedExternalNow: func() time.Time { return fixture.now },
+	}
+	handler := signedExternalIngressHandler(runtime, make(chan struct{}), wire.MaxEnvelopeBytes, 0)
+	envelope := signedIngressEnvelope(t, fixture, commWrapperRootID, "/root/catalog", "sample.echo", nil)
 	response := httptest.NewRecorder()
-	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(`{"protected":{}}`)))
+	handler(response, httptest.NewRequest(http.MethodPost, "/msg", bytes.NewReader(envelope)))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status=%d want 202", response.Code)
 	}
 	item := <-queue
-	if item.Interface != "secure" || string(item.Envelope) != `{"protected":{}}` {
+	if item.Interface != "secure" || !bytes.Equal(item.Envelope, envelope) {
 		t.Fatalf("raw signed envelope changed: %#v", item)
 	}
 
 	queue <- signedExternalIngressItem{}
 	response = httptest.NewRecorder()
-	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(`{}`)))
+	handler(response, httptest.NewRequest(http.MethodPost, "/msg", bytes.NewReader(envelope)))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("full queue status=%d want 503", response.Code)
 	}
 
 	response = httptest.NewRecorder()
-	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(strings.Repeat("x", 65))))
-	if response.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversized status=%d want 413", response.Code)
+	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(strings.Repeat("x", wire.MaxEnvelopeBytes+1))))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("oversized unrecognized status=%d want neutral 404", response.Code)
+	}
+}
+
+func TestSignedExternalIngressHandlerUsesOneNeutralResponseBeforeAuthentication(t *testing.T) {
+	fixture, _, _ := newSignedExternalTestLoop(t)
+	runtime := &InterfaceRuntime{
+		Name: "secure", SignedExternalIngress: make(chan signedExternalIngressItem, 1),
+		SecurityRuntime:   fixture.registry.SecurityRuntime,
+		SignedExternalNow: func() time.Time { return fixture.now },
+	}
+	handler := signedExternalIngressHandler(runtime, make(chan struct{}), wire.MaxEnvelopeBytes, 0)
+	valid := signedIngressEnvelope(t, fixture, commWrapperRootID, "/root/catalog", "sample.echo", nil)
+	corrupted := append([]byte(nil), valid...)
+	corrupted[len(corrupted)-2] ^= 1
+
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/msg", nil),
+		httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader("not-json")),
+		httptest.NewRequest(http.MethodPost, "/msg", bytes.NewReader(corrupted)),
+		httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(strings.Repeat("x", wire.MaxEnvelopeBytes+1))),
+	}
+	for index, request := range requests {
+		response := httptest.NewRecorder()
+		handler(response, request)
+		if response.Code != http.StatusNotFound || response.Body.Len() != 0 || len(response.Header()) != 0 {
+			t.Fatalf("case %d response = %d headers=%v body=%q; want identical empty 404", index, response.Code, response.Header(), response.Body.String())
+		}
+	}
+}
+
+func TestSignedExternalIngressHandlerKeepsAuthenticatedRetryOpaqueToTransport(t *testing.T) {
+	fixture, _, _ := newSignedExternalTestLoop(t)
+	queue := make(chan signedExternalIngressItem, 2)
+	runtime := &InterfaceRuntime{
+		Name: "secure", SignedExternalIngress: queue,
+		SecurityRuntime:   fixture.registry.SecurityRuntime,
+		SignedExternalNow: func() time.Time { return fixture.now },
+	}
+	handler := signedExternalIngressHandler(runtime, make(chan struct{}), wire.MaxEnvelopeBytes, 0)
+	envelope := signedIngressEnvelope(t, fixture, commWrapperRootID, "/root/catalog", "sample.echo", nil)
+	for attempt := 0; attempt < 2; attempt++ {
+		response := httptest.NewRecorder()
+		handler(response, httptest.NewRequest(http.MethodPost, "/msg", bytes.NewReader(envelope)))
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("attempt %d status=%d want 202", attempt, response.Code)
+		}
+	}
+	if len(queue) != 2 {
+		t.Fatalf("authenticated retry queue length=%d want 2 for authoritative replay handling", len(queue))
 	}
 }
 
 // The address budget is a flood guard, not a ceiling on a peer: by default it carries the
 // rate at which an authenticated peer answers this instance's own calls, and a budget that
-// is set is the one that applies. A request over it is refused with 429.
+// is set is the one that applies. A request over it gets the neutral 404 of every unrecognized
+// sender (D-23), never a 429 that would reveal an entry point to a stranger.
 func TestSignedExternalIngressAddressBudget(t *testing.T) {
+	fixture, _, _ := newSignedExternalTestLoop(t)
+	envelope := signedIngressEnvelope(t, fixture, commWrapperRootID, "/root/catalog", "sample.echo", nil)
 	post := func(handler http.HandlerFunc, count int) (accepted, refused int) {
 		for i := 0; i < count; i++ {
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(`{}`))
+			request := httptest.NewRequest(http.MethodPost, "/msg", bytes.NewReader(envelope))
 			request.RemoteAddr = "192.0.2.10:4000"
 			handler(response, request)
 			switch response.Code {
 			case http.StatusAccepted:
 				accepted++
-			case http.StatusTooManyRequests:
+			case http.StatusNotFound:
 				refused++
 			default:
 				t.Fatalf("status=%d", response.Code)
@@ -198,7 +258,9 @@ func TestSignedExternalIngressAddressBudget(t *testing.T) {
 	}
 	newHandler := func(rate int) http.HandlerFunc {
 		queue := make(chan signedExternalIngressItem, 20000)
-		return signedExternalIngressHandler(&InterfaceRuntime{Name: "secure", SignedExternalIngress: queue}, make(chan struct{}), 64, rate)
+		return signedExternalIngressHandler(&InterfaceRuntime{Name: "secure", SignedExternalIngress: queue,
+			SecurityRuntime:   fixture.registry.SecurityRuntime,
+			SignedExternalNow: func() time.Time { return fixture.now }}, make(chan struct{}), wire.MaxEnvelopeBytes, rate)
 	}
 
 	// The default carries a burst of 4000 at once: far above the 400 it used to refuse at.

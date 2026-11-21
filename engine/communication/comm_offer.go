@@ -96,6 +96,16 @@ func offer[T any](queue chan<- T, item T, wait time.Duration, done <-chan struct
 	}
 }
 
+// offerSignedEgress puts a signed message in the queue in front of the signed writer of an interface.
+// Like every other egress queue it holds the routing loop back for at most the wait of the interface
+// instead of dropping the message at the first full queue: a burst of answers (a peer refused for its
+// rate answers every call at once) is a normal load, not a reason to lose answers its callers wait for.
+func (l *CommLoop) offerSignedEgress(runtime *InterfaceRuntime, item signedExternalEgressItem) offerOutcome {
+	outcome, waited := offer(runtime.SignedExternalEgress, item, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	return outcome
+}
+
 // egressCounters say what the routing loops met in front of one interface: how often its queue
 // was full when a message came, how long they waited for a place, and how often they gave up.
 // They answer the question "is the queue too small?" with a measure instead of a guess.
