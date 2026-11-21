@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,10 +55,89 @@ type Context struct {
 	// local marks the admission of a restricted internal component: no key, no
 	// signature, no signed envelope, the channel was the proof.
 	local bool
+	// public and localUI mark browser subjects. Their authority comes from
+	// policy, while channelID is operational ownership created by the ingress;
+	// none is supplied by the page.
+	public    bool
+	localUI   bool
+	channelID string
 	// owner is the local principal whose rights this admission carries instead of
 	// the caller's, when the capacity runs as_owner. The caller's identity,
 	// correlation and response state are unchanged.
 	owner string
+}
+
+var publicCoordinatePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// NewPublicWeb binds an anonymous browser intention to the reserved public.web
+// policy subject and a server-created channel. It replaces the complete source
+// address so page-controlled bytes can never claim an UI, actor or owner.
+func NewPublicWeb(trustAdmission trust.Admission, channelID, uiName string, message circulation.Message, now time.Time) (circulation.Message, *Context, error) {
+	if message.Kind != circulation.ValueKindIntention || message.Intention.IntentionID == "" || now.IsZero() ||
+		trustAdmission.PrincipalKind() != trust.PrincipalKindPublic || trustAdmission.PrincipalID() != trust.PublicWebPrincipalID ||
+		!publicCoordinatePattern.MatchString(channelID) || !publicCoordinatePattern.MatchString(uiName) {
+		return circulation.Message{}, nil, ErrInvalidAdmission
+	}
+	message.Intention.From = circulation.Address{
+		Context: circulation.ContextID("@public_web:/" + channelID + "/" + uiName),
+		Type:    "public",
+		Cap:     "web",
+	}
+	message.Intention.Identity = circulation.Identity{}
+	context := &Context{
+		trustAdmission:  trustAdmission,
+		principalID:     trust.PublicWebPrincipalID,
+		principalKind:   trust.PrincipalKindPublic,
+		authenticatedAt: now.UTC(),
+		rootIntentionID: message.Intention.IntentionID,
+		contentMode:     "public",
+		sourceNamespace: channelID + "/" + uiName,
+		awaitResponse:   message.Intention.AwaitResponse,
+		policyRevision:  trustAdmission.PolicyRevision(),
+		policyHash:      trustAdmission.PolicyHash(),
+		public:          true,
+		channelID:       channelID,
+	}
+	if !context.Valid() {
+		return circulation.Message{}, nil, ErrInvalidAdmission
+	}
+	return message, context, nil
+}
+
+// NewLocalUI binds a request from an authenticated browser bridge to the
+// explicitly configured local.ui authority. It manufactures the source and
+// clears page-provided identity exactly like public admission, but carries the
+// narrower local UI policy rather than public.web.
+func NewLocalUI(trustAdmission trust.Admission, channelID, uiName string, message circulation.Message, now time.Time) (circulation.Message, *Context, error) {
+	if message.Kind != circulation.ValueKindIntention || message.Intention.IntentionID == "" || now.IsZero() ||
+		trustAdmission.PrincipalKind() != trust.PrincipalKindLocal || trustAdmission.PrincipalID() != trust.LocalUIPrincipalID ||
+		!publicCoordinatePattern.MatchString(channelID) || !publicCoordinatePattern.MatchString(uiName) {
+		return circulation.Message{}, nil, ErrInvalidAdmission
+	}
+	message.Intention.From = circulation.Address{
+		Context: circulation.ContextID("@local_ui:/" + channelID + "/" + uiName),
+		Type:    "local_ui",
+		Cap:     "web",
+	}
+	message.Intention.Identity = circulation.Identity{}
+	context := &Context{
+		trustAdmission:  trustAdmission,
+		principalID:     trust.LocalUIPrincipalID,
+		principalKind:   trust.PrincipalKindLocal,
+		authenticatedAt: now.UTC(),
+		rootIntentionID: message.Intention.IntentionID,
+		contentMode:     "local_ui",
+		sourceNamespace: channelID + "/" + uiName,
+		awaitResponse:   message.Intention.AwaitResponse,
+		policyRevision:  trustAdmission.PolicyRevision(),
+		policyHash:      trustAdmission.PolicyHash(),
+		localUI:         true,
+		channelID:       channelID,
+	}
+	if !context.Valid() {
+		return circulation.Message{}, nil, ErrInvalidAdmission
+	}
+	return message, context, nil
 }
 
 // DecodeIntention is the sole phase-1 constructor. Decoding and admission are
@@ -162,7 +242,35 @@ func (context *Context) OwnerID() string {
 // internal component rather than of a signed external caller.
 func (context *Context) IsRestrictedLocal() bool { return context != nil && context.local }
 
+// IsPublicWeb reports whether the dedicated public ingress admitted the call.
+func (context *Context) IsPublicWeb() bool { return context != nil && context.public }
+
+// IsLocalUI reports whether an authenticated browser bridge to this same
+// instance created the admission.
+func (context *Context) IsLocalUI() bool { return context != nil && context.localUI }
+
+// ChannelID is the engine-created operational owner of a public or local UI
+// call. It is empty for signed and restricted-wrapper admissions.
+func (context *Context) ChannelID() string {
+	if context == nil || (!context.public && !context.localUI) {
+		return ""
+	}
+	return context.channelID
+}
+
 func (context *Context) Valid() bool {
+	if context != nil && context.public {
+		return context.principalID == trust.PublicWebPrincipalID && context.principalKind == trust.PrincipalKindPublic &&
+			context.signingKeyID == "" && !context.local && !context.authenticatedAt.IsZero() &&
+			context.rootIntentionID != "" && context.contentMode == "public" && context.sourceNamespace != "" &&
+			publicCoordinatePattern.MatchString(context.channelID) && context.policyRevision != "" && context.policyHash != ""
+	}
+	if context != nil && context.localUI {
+		return context.principalID == trust.LocalUIPrincipalID && context.principalKind == trust.PrincipalKindLocal &&
+			context.signingKeyID == "" && !context.local && !context.public && !context.authenticatedAt.IsZero() &&
+			context.rootIntentionID != "" && context.contentMode == "local_ui" && context.sourceNamespace != "" &&
+			publicCoordinatePattern.MatchString(context.channelID) && context.policyRevision != "" && context.policyHash != ""
+	}
 	if context != nil && context.local {
 		return context.principalID != "" && context.principalKind == trust.PrincipalKindLocal && context.signingKeyID == "" &&
 			!context.authenticatedAt.IsZero() && context.rootIntentionID != "" && context.sourceNamespace != "" &&

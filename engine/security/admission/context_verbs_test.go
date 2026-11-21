@@ -193,3 +193,25 @@ func TestRefusalByTheActorIsJournaledAsSuch(t *testing.T) {
 		}
 	}
 }
+
+func TestSignedReservedUIActorIsFailClosedWithoutBinding(t *testing.T) {
+	fixture := newVerbFixture(t)
+	payload := []byte(`{"kind":"intention","intention":{"intention_id":"123e4567-e89b-42d3-a456-426614174000","await_response":true,` +
+		`"to":{"context":"/root/catalog","cap":"matter.read","type":"matter"},"from":{"context":"/sender/ui","cap":"","type":"user"}}}`)
+	message, context, err := admission.DecodeIntention(fixture.verifyAs(t, payload, trust.ReservedUIActorID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.ActorID() != trust.ReservedUIActorID {
+		t.Fatalf("actor = %q", context.ActorID())
+	}
+	if context.AuthorizeCapability(fixture.runtime, "/root/catalog", "matter", "matter.read") {
+		t.Fatal("signed browser actor reached a principal with no explicit actor binding")
+	}
+	journal := &audit.Memory{}
+	context.RecordCapabilityDenial(journal, fixture.runtime, "wire", message.Intention)
+	records := journal.Records()
+	if len(records) != 1 || records[0].Reason != audit.ReasonActorDenied || records[0].Actor != trust.ReservedUIActorID {
+		t.Fatalf("records = %+v", records)
+	}
+}

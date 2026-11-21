@@ -68,7 +68,7 @@ func (context *Context) RecordCapabilityDenial(recorder audit.Recorder, runtime 
 		if class, known := access.ClassOf(to.Type, to.Cap); known {
 			classVerbs = class.Verbs()
 		}
-		if runtime.AuthorizeCapabilityVerbs(context.trustAdmission.StripActor(), string(to.Context), to.Type, to.Cap, classVerbs) {
+		if runtime.ActorCausedCapabilityDenial(context.trustAdmission, string(to.Context), to.Type, to.Cap, classVerbs) {
 			record.Reason = audit.ReasonActorDenied
 		}
 		path := string(to.Context)
@@ -106,7 +106,7 @@ func (context *Context) RecordResourceDenial(recorder audit.Recorder, runtime *t
 		if runtime.AuthorizeResource(context.trustAdmission, string(normalized.Context), normalized.Kind, normalized.ID, normalized.Action) {
 			continue
 		}
-		if runtime.AuthorizeResource(context.trustAdmission.StripActor(), string(normalized.Context), normalized.Kind, normalized.ID, normalized.Action) {
+		if runtime.ActorCausedResourceDenial(context.trustAdmission, string(normalized.Context), normalized.Kind, normalized.ID, normalized.Action) {
 			record.Reason = audit.ReasonActorDenied
 		}
 		record.Context = string(normalized.Context)

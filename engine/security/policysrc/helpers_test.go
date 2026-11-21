@@ -123,6 +123,12 @@ func compileToSnapshot(tb testing.TB, src *Source, keys map[string]testKey) comp
 				tb.Fatalf("AdmitLocal %s: %v", id, err)
 			}
 			admissions[id] = admission
+		} else if principal.Kind == trust.PrincipalKindPublic {
+			admission, err := snapshot.AdmitPublicWeb()
+			if err != nil && !principal.Disabled {
+				tb.Fatalf("AdmitPublicWeb: %v", err)
+			}
+			admissions[id] = admission
 		}
 	}
 	return compiled{snapshot: snapshot, admissions: admissions, result: result}

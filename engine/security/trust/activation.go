@@ -207,6 +207,16 @@ func (runtime *Runtime) AuthorizeCapabilityVerbs(admission Admission, contextPat
 		current.AuthorizeCapabilityVerbs(currentAdmission, contextPath, family, name, verbs)
 }
 
+// ActorCausedCapabilityDenial reports whether the principal alone would pass
+// the capability door. It exists only for refusal diagnostics and never returns
+// a weakened Admission to its caller.
+func (runtime *Runtime) ActorCausedCapabilityDenial(admission Admission, contextPath, family, name string, verbs []string) bool {
+	if admission.actorID == "" {
+		return false
+	}
+	return runtime.AuthorizeCapabilityVerbs(admission.principalOnlyForDenial(), contextPath, family, name, verbs)
+}
+
 // AuthorizePrincipalResource is the check for a record that must be re-evaluated
 // long after its admission, such as a durable subscription: the principal is
 // looked up in the current snapshot, and a disabled, revoked or removed
@@ -225,6 +235,15 @@ func (runtime *Runtime) AuthorizeResource(admission Admission, contextPath, kind
 		current.AuthorizeResource(currentAdmission, contextPath, kind, id, action)
 }
 
+// ActorCausedResourceDenial is the resource counterpart used by the audit path.
+// It exposes only a diagnosis, never principal-only authority.
+func (runtime *Runtime) ActorCausedResourceDenial(admission Admission, contextPath, kind, id, action string) bool {
+	if admission.actorID == "" {
+		return false
+	}
+	return runtime.AuthorizeResource(admission.principalOnlyForDenial(), contextPath, kind, id, action)
+}
+
 // AdmitLocal admits a restricted local component against the active snapshot.
 func (runtime *Runtime) AdmitLocal(principalID string) (Admission, error) {
 	current := runtime.active.Load()
@@ -232,6 +251,34 @@ func (runtime *Runtime) AdmitLocal(principalID string) (Admission, error) {
 		return Admission{}, ErrUnknownKey
 	}
 	return current.AdmitLocal(principalID)
+}
+
+// AdmitLocalUI admits the explicitly configured local browser authority. The
+// authenticated bridge channel is the proof at the future caller boundary;
+// this method only resolves its policy authority.
+func (runtime *Runtime) AdmitLocalUI() (Admission, error) {
+	if runtime == nil {
+		return Admission{}, ErrLocalUIUnavailable
+	}
+	current := runtime.active.Load()
+	if current == nil {
+		return Admission{}, ErrLocalUIUnavailable
+	}
+	return current.AdmitLocalUI()
+}
+
+// AdmitPublicWeb admits the reserved public subject against the active policy.
+// A missing public.web entry is deliberately indistinguishable from no public
+// configuration and therefore fails closed.
+func (runtime *Runtime) AdmitPublicWeb() (Admission, error) {
+	if runtime == nil {
+		return Admission{}, ErrPublicWebUnavailable
+	}
+	current := runtime.active.Load()
+	if current == nil {
+		return Admission{}, ErrPublicWebUnavailable
+	}
+	return current.AdmitPublicWeb()
 }
 
 // AdmitOwner derives, for a call to a user capacity that the caller's rule opens
@@ -271,12 +318,28 @@ func (runtime *Runtime) HasLocalPrincipal(principalID string) bool {
 	return runtime.active.Load().HasLocalPrincipal(principalID)
 }
 
+// HasDeclaredLocalPrincipal is the non-authorizing lifecycle-independent form
+// used to reserve a local identity from the wrong channel kind.
+func (runtime *Runtime) HasDeclaredLocalPrincipal(principalID string) bool {
+	if runtime == nil {
+		return false
+	}
+	current := runtime.active.Load()
+	return current != nil && current.HasDeclaredLocalPrincipal(principalID)
+}
+
 func (runtime *Runtime) currentAdmission(original Admission) (*Snapshot, Admission, bool) {
 	current := runtime.active.Load()
-	if current != nil && original.snapshot != nil && original.principalKind == PrincipalKindLocal {
-		// A local admission has no key: the current snapshot must still hold an
-		// active local principal of the same id.
-		admitted, err := current.AdmitLocal(original.principalID)
+	if current != nil && original.snapshot != nil && (original.principalKind == PrincipalKindLocal || original.principalKind == PrincipalKindPublic) {
+		// Keyless admissions must still exist with their exact reserved kind in
+		// the current snapshot. Policy reload may revoke, but never widen them.
+		var admitted Admission
+		var err error
+		if original.principalKind == PrincipalKindPublic && original.principalID == PublicWebPrincipalID {
+			admitted, err = current.AdmitPublicWeb()
+		} else {
+			admitted, err = current.AdmitLocal(original.principalID)
+		}
 		if err != nil {
 			return nil, Admission{}, false
 		}

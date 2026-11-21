@@ -29,9 +29,11 @@ import (
 // Authentication failure classes, kept distinct for the denial journal. The
 // wire layer still collapses them for the network-facing caller.
 var (
-	ErrUnknownKey        = errors.New("unknown signing key")
-	ErrPrincipalInactive = errors.New("principal is not active")
-	ErrKeyInactive       = errors.New("signing key is not active or outside its validity window")
+	ErrUnknownKey           = errors.New("unknown signing key")
+	ErrPrincipalInactive    = errors.New("principal is not active")
+	ErrKeyInactive          = errors.New("signing key is not active or outside its validity window")
+	ErrPublicWebUnavailable = errors.New("public web admission is not configured")
+	ErrLocalUIUnavailable   = errors.New("local UI admission is not configured")
 )
 
 // Catalog is the exact set of capacity and resource-action names understood by
@@ -149,11 +151,10 @@ func (admission Admission) WithActor(actorID string) Admission {
 	return admission
 }
 
-// StripActor returns the same admission evaluated on the principal alone, with
-// the actor layer skipped, to tell a refusal that comes from the actor from one
-// that comes from the principal. It can only be used to explain: the result of
-// such an evaluation is never an authorization.
-func (admission Admission) StripActor() Admission {
+// principalOnlyForDenial returns an internal diagnostic view. It is deliberately
+// unexported: a caller can ask whether the actor caused a denial through Runtime,
+// but can never obtain an authority that bypasses the actor layer.
+func (admission Admission) principalOnlyForDenial() Admission {
 	admission.actorID = ""
 	admission.baseOnly = true
 	return admission
@@ -273,6 +274,47 @@ func (snapshot *Snapshot) AdmitLocal(principalID string) (Admission, error) {
 	return Admission{}, ErrUnknownKey
 }
 
+// AdmitLocalUI admits the exact keyless principal reserved to an authenticated
+// browser bridge connected to its own instance. It is distinct from a wrapper
+// admission even though both reuse the local principal policy kind.
+func (snapshot *Snapshot) AdmitLocalUI() (Admission, error) {
+	if snapshot == nil {
+		return Admission{}, ErrLocalUIUnavailable
+	}
+	admitted, err := snapshot.AdmitLocal(LocalUIPrincipalID)
+	if err == ErrUnknownKey {
+		return Admission{}, ErrLocalUIUnavailable
+	}
+	return admitted, err
+}
+
+// AdmitPublicWeb admits the reserved anonymous web subject. No credential is
+// checked here: callers must be the dedicated public ingress, which is why the
+// principal has a distinct kind instead of being a keyless network principal.
+func (snapshot *Snapshot) AdmitPublicWeb() (Admission, error) {
+	if snapshot == nil {
+		return Admission{}, ErrPublicWebUnavailable
+	}
+	for index := range snapshot.principals {
+		principal := &snapshot.principals[index]
+		if principal.id != PublicWebPrincipalID {
+			continue
+		}
+		if principal.kind != PrincipalKindPublic || principal.status != "active" {
+			return Admission{}, ErrPrincipalInactive
+		}
+		return Admission{
+			principalID:    principal.id,
+			principalKind:  principal.kind,
+			policyRevision: snapshot.revision,
+			policyHash:     snapshot.policyHash,
+			snapshot:       snapshot,
+			principalIndex: index,
+		}, nil
+	}
+	return Admission{}, ErrPublicWebUnavailable
+}
+
 // HasLocalPrincipal reports whether the policy restricts this internal component:
 // an active local principal of that id exists. A component without one keeps the
 // trust of the local authority.
@@ -284,6 +326,22 @@ func (snapshot *Snapshot) HasLocalPrincipal(principalID string) bool {
 		principal := &snapshot.principals[index]
 		if principal.id == principalID {
 			return principal.kind == PrincipalKindLocal && principal.status == "active"
+		}
+	}
+	return false
+}
+
+// HasDeclaredLocalPrincipal reports whether the policy reserves this id for a
+// local principal in any lifecycle state. It is used only to prevent another
+// channel kind from borrowing a reserved identity; it grants no authority.
+func (snapshot *Snapshot) HasDeclaredLocalPrincipal(principalID string) bool {
+	if snapshot == nil {
+		return false
+	}
+	for index := range snapshot.principals {
+		principal := &snapshot.principals[index]
+		if principal.id == principalID {
+			return principal.kind == PrincipalKindLocal
 		}
 	}
 	return false
@@ -444,6 +502,9 @@ func (snapshot *Snapshot) decide(admission Admission, contextPath string, lookup
 	if !snapshot.match(contextPath, principal.scopes, func(node *contextNode, exact bool) (bool, bool) {
 		return lookup(node, exact, principal.scopes)
 	}) {
+		return false
+	}
+	if admission.actorID == ReservedUIActorID && principal.actors == nil && !admission.baseOnly {
 		return false
 	}
 	if principal.actors == nil || admission.baseOnly {

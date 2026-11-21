@@ -80,6 +80,41 @@ func TestSignerValidatesBoundaryAndCopiesValues(t *testing.T) {
 	}
 }
 
+func TestSignerSeparatesExternalMessageAndInstanceDescriptorDomains(t *testing.T) {
+	current, _, publicKey := newTestSigner(t, Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	descriptorInput := []byte(InstanceDescriptorV1Domain + `{\"format\":\"brique.instance-descriptor\"}`)
+	signature, err := current.Sign(ctx, PurposeInstanceDescriptorV1, descriptorInput)
+	if err != nil || !ed25519.Verify(publicKey, descriptorInput, signature) {
+		t.Fatalf("descriptor signing failed: %v", err)
+	}
+	if _, err := current.Sign(ctx, PurposeExternalMessageV1, descriptorInput); !IsKind(err, ErrorConfiguration) {
+		t.Fatalf("descriptor domain crossed into external-message purpose: %v", err)
+	}
+	if _, err := current.Sign(ctx, PurposeInstanceDescriptorV1, []byte(ExternalMessageV1Domain+"header")); !IsKind(err, ErrorConfiguration) {
+		t.Fatalf("external-message domain crossed into descriptor purpose: %v", err)
+	}
+	oversized := append([]byte(InstanceDescriptorV1Domain), make([]byte, MaxInstanceDescriptorSigningInputBytes)...)
+	if _, err := current.Sign(ctx, PurposeInstanceDescriptorV1, oversized); !IsKind(err, ErrorConfiguration) {
+		t.Fatalf("oversized descriptor input was accepted: %v", err)
+	}
+}
+
+func TestSignerSeparatesBrowserHelloDomain(t *testing.T) {
+	current, _, publicKey := newTestSigner(t, Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := []byte(BrowserHelloV1Domain + `{\"kind\":\"init\"}`)
+	signature, err := current.Sign(ctx, PurposeBrowserHelloV1, input)
+	if err != nil || !ed25519.Verify(publicKey, input, signature) {
+		t.Fatalf("browser hello signing failed: %v", err)
+	}
+	if _, err := current.Sign(ctx, PurposeInstanceDescriptorV1, input); !IsKind(err, ErrorConfiguration) {
+		t.Fatalf("browser hello crossed into descriptor purpose: %v", err)
+	}
+}
+
 func TestSignerRejectsInvalidPurposeDomainSizeAndDeadline(t *testing.T) {
 	current, _, _ := newTestSigner(t, Options{})
 	valid := []byte(ExternalMessageV1Domain + "header")

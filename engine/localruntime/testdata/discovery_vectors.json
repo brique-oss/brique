@@ -1,0 +1,14 @@
+[
+  {
+    "identity": {"format":"brique.directory-object/1","platform":"darwin","volume":"1000006","file":"1234abcd"},
+    "key": "brd1_j1wkNAlHf5ETE8LUEpxAlW1o"
+  },
+  {
+    "identity": {"format":"brique.directory-object/1","platform":"linux","volume":"fd00","file":"2a"},
+    "key": "brd1_TrSdSrQPG01jZRXxcDGkgEvW"
+  },
+  {
+    "identity": {"format":"brique.directory-object/1","platform":"windows","volume":"deadbeef","file":"0000000100000002"},
+    "key": "brd1_hGPkDJ7Utd1TfetLhICyzBJr"
+  }
+]

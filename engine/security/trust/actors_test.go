@@ -89,6 +89,69 @@ func TestAPrincipalWithoutActorsIgnoresTheActorLabel(t *testing.T) {
 			t.Errorf("actor %q narrowed a principal that declares none", actor)
 		}
 	}
+	if snapshot.AuthorizeResource(admission.WithActor(ReservedUIActorID), "/root/a/z", "matter", "m", "read") {
+		t.Fatal("the reserved browser actor was accepted without an explicit binding")
+	}
+}
+
+func TestReservedUIActorRequiresItsExactBindingAndIntersection(t *testing.T) {
+	policy, authority, key := actorPolicy(t)
+	snapshot, admission := v2Snapshot(t, policy, authority, key)
+	if snapshot.AuthorizeResource(admission.WithActor(ReservedUIActorID), "/root/a/public", "matter", "m", "read") {
+		t.Fatal("the default actor binding admitted the reserved browser actor")
+	}
+
+	policy.Principals[0].Actors = append(policy.Principals[0].Actors,
+		ActorBinding{ActorID: ReservedUIActorID, ScopeIDs: []string{"alice"}})
+	snapshot, admission = v2Snapshot(t, policy, authority, key)
+	ui := admission.WithActor(ReservedUIActorID)
+	if !snapshot.AuthorizeResource(ui, "/root/a/x", "matter", "m", "read") {
+		t.Fatal("an explicitly bound browser actor was refused inside the intersection")
+	}
+	if snapshot.AuthorizeResource(ui, "/root/a/y", "matter", "m", "read") ||
+		snapshot.AuthorizeResource(ui, "/root/b", "matter", "m", "read") {
+		t.Fatal("the browser actor widened either its binding or its principal")
+	}
+
+	policy.Principals[0].Actors[len(policy.Principals[0].Actors)-1].ScopeIDs = []string{}
+	snapshot, admission = v2Snapshot(t, policy, authority, key)
+	if snapshot.AuthorizeResource(admission.WithActor(ReservedUIActorID), "/root/a/x", "matter", "m", "read") {
+		t.Fatal("an explicit empty browser binding granted access")
+	}
+}
+
+func TestReservedUIActorCannotGainABindingAcrossReload(t *testing.T) {
+	policy, authority, key := actorPolicy(t)
+	policy.Principals[0].Actors = nil
+	runtime := mustRuntime(t)
+	activatePolicy(t, runtime, policy, authority, key)
+	base, err := runtime.Active().Authenticate(policy.Principals[0].SigningKeys[0].KeyID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldUI := base.WithActor(ReservedUIActorID)
+	if runtime.AuthorizeResource(oldUI, "/root/a/x", "matter", "m", "read") {
+		t.Fatal("reserved browser actor passed before a binding existed")
+	}
+	if !runtime.ActorCausedResourceDenial(oldUI, "/root/a/x", "matter", "m", "read") {
+		t.Fatal("refusal diagnostics did not identify the actor layer")
+	}
+
+	next := clonePolicy(t, policy)
+	next.Revision = "2"
+	next.PreviousPolicyHash = runtime.Active().PolicyHash()
+	next.Principals[0].Actors = []ActorBinding{{ActorID: ReservedUIActorID, ScopeIDs: []string{"base"}}}
+	activatePolicy(t, runtime, next, authority, key)
+	if runtime.AuthorizeResource(oldUI, "/root/a/x", "matter", "m", "read") {
+		t.Fatal("an old UI admission gained a binding from a policy expansion")
+	}
+	fresh, err := runtime.Active().Authenticate(next.Principals[0].SigningKeys[0].KeyID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.AuthorizeResource(fresh.WithActor(ReservedUIActorID), "/root/a/x", "matter", "m", "read") {
+		t.Fatal("a fresh UI admission did not receive its explicit binding")
+	}
 }
 
 func TestActorTravelsWithTheAdmissionAcrossAPolicyReload(t *testing.T) {

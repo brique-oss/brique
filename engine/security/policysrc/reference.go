@@ -16,7 +16,11 @@
 
 package policysrc
 
-import "strings"
+import (
+	"strings"
+
+	"brique_engine/security/trust"
+)
 
 // reference.go
 //
@@ -70,6 +74,9 @@ func (s *Source) Allowed(principal, verb, ctx, kind, id string) bool {
 // refused: absent without a "default" entry, or unknown (model §6).
 func actorGrants(p *Principal, actor string) (grants []Grant, declared, ok bool) {
 	if len(p.Actors) == 0 {
+		if actor == trust.ReservedUIActorID {
+			return nil, true, false
+		}
 		return nil, false, true
 	}
 	entry := actor

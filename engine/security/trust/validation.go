@@ -42,7 +42,7 @@ const (
 var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 
 func validatePolicy(policy *Policy) error {
-	if policy.Format != PolicyFormat || !oneOf(policy.FormatVersion, PolicyFormatVersion, PolicyFormatVersionV2, PolicyFormatVersionV3) {
+	if policy.Format != PolicyFormat || !oneOf(policy.FormatVersion, PolicyFormatVersion, PolicyFormatVersionV2, PolicyFormatVersionV3, PolicyFormatVersionV4) {
 		return fmt.Errorf("unsupported trust policy format %q version %q", policy.Format, policy.FormatVersion)
 	}
 	if err := validateIdentifier("policy_id", policy.PolicyID); err != nil {
@@ -55,6 +55,9 @@ func validatePolicy(policy *Policy) error {
 		return err
 	}
 	if err := validateExternalPeers(policy); err != nil {
+		return err
+	}
+	if err := validateWrapperSecrets(policy); err != nil {
 		return err
 	}
 	if policy.PreviousPolicyHash != "" && !validDigestID(policy.PreviousPolicyHash, "bp1_") {
@@ -103,6 +106,7 @@ func validatePolicy(policy *Policy) error {
 	principalIDs := make(map[string]struct{}, len(policy.Principals))
 	keyIDs := make(map[string]string)
 	totalKeys := 0
+	publicWebPrincipals := 0
 	for index := range policy.Principals {
 		principal := &policy.Principals[index]
 		if err := validatePrincipal(policy.FormatVersion, principal, scopeIDs, keyIDs); err != nil {
@@ -112,10 +116,16 @@ func validatePolicy(policy *Policy) error {
 			return fmt.Errorf("duplicate principal_id %q", principal.PrincipalID)
 		}
 		principalIDs[principal.PrincipalID] = struct{}{}
+		if principal.PrincipalID == PublicWebPrincipalID && principal.Kind == PrincipalKindPublic {
+			publicWebPrincipals++
+		}
 		totalKeys += len(principal.SigningKeys)
 		if totalKeys > maxSigningKeysTotal {
 			return fmt.Errorf("policy has more than %d signing keys", maxSigningKeysTotal)
 		}
+	}
+	if policy.FormatVersion == PolicyFormatVersionV4 && publicWebPrincipals != 1 {
+		return fmt.Errorf("trust policy format version %s requires exactly one %q principal", PolicyFormatVersionV4, PublicWebPrincipalID)
 	}
 	return validateOwners(policy)
 }
@@ -165,7 +175,7 @@ func validatePrincipal(version string, principal *Principal, scopes map[string]s
 	if err := validateIdentifier("principal_id", principal.PrincipalID); err != nil {
 		return err
 	}
-	if !oneOf(principal.Kind, "instance", "service", "user", PrincipalKindLocal) {
+	if !oneOf(principal.Kind, "instance", "service", "user", PrincipalKindLocal, PrincipalKindPublic) {
 		return fmt.Errorf("principal %q has invalid kind %q", principal.PrincipalID, principal.Kind)
 	}
 	isLocalName := strings.HasPrefix(principal.PrincipalID, LocalPrincipalPrefix)
@@ -175,7 +185,14 @@ func validatePrincipal(version string, principal *Principal, scopes map[string]s
 	if principal.Kind == PrincipalKindLocal && version == PolicyFormatVersion {
 		return fmt.Errorf("principal %q: local principals require format version %s", principal.PrincipalID, PolicyFormatVersionV2)
 	}
-	if principal.ContentMode != "" && (!oneOf(principal.ContentMode, ContentModeClear, ContentModeHPKE) || principal.Kind == PrincipalKindLocal) {
+	isPublicWeb := principal.Kind == PrincipalKindPublic || principal.PrincipalID == PublicWebPrincipalID
+	if isPublicWeb && (principal.Kind != PrincipalKindPublic || principal.PrincipalID != PublicWebPrincipalID) {
+		return fmt.Errorf("principal %q: kind %q and the reserved id %q go together", principal.PrincipalID, PrincipalKindPublic, PublicWebPrincipalID)
+	}
+	if isPublicWeb && version != PolicyFormatVersionV4 {
+		return fmt.Errorf("principal %q: public web admission requires format version %s", principal.PrincipalID, PolicyFormatVersionV4)
+	}
+	if principal.ContentMode != "" && (!oneOf(principal.ContentMode, ContentModeClear, ContentModeHPKE) || principal.Kind == PrincipalKindLocal || isPublicWeb) {
 		return fmt.Errorf("principal %q has invalid content_mode", principal.PrincipalID)
 	}
 	if err := ValidateLimits(principal.Limits); err != nil {
@@ -200,15 +217,18 @@ func validatePrincipal(version string, principal *Principal, scopes map[string]s
 	if err := validateActors(version, principal, scopes); err != nil {
 		return err
 	}
+	if isPublicWeb && len(principal.Actors) != 0 {
+		return fmt.Errorf("principal %q must not declare actors", principal.PrincipalID)
+	}
 	if principal.SigningKeys == nil || len(principal.SigningKeys) > maxSigningKeysPerUser {
 		return fmt.Errorf("principal %q signing_keys must be present and bounded", principal.PrincipalID)
 	}
-	if principal.Kind == PrincipalKindLocal && len(principal.SigningKeys) != 0 {
+	if (principal.Kind == PrincipalKindLocal || isPublicWeb) && len(principal.SigningKeys) != 0 {
 		// A local principal is authenticated by its channel (the wrapper secret),
 		// never by a signature: a key here would let a signed message impersonate it.
-		return fmt.Errorf("local principal %q must not have a signing key", principal.PrincipalID)
+		return fmt.Errorf("principal %q of kind %q must not have a signing key", principal.PrincipalID, principal.Kind)
 	}
-	if principal.Kind != PrincipalKindLocal && principal.Status == "active" && len(principal.SigningKeys) == 0 {
+	if principal.Kind != PrincipalKindLocal && !isPublicWeb && principal.Status == "active" && len(principal.SigningKeys) == 0 {
 		return fmt.Errorf("active principal %q has no signing key", principal.PrincipalID)
 	}
 	for index := range principal.SigningKeys {
@@ -374,7 +394,7 @@ func validatePermissionSet(version, scopeID, label string, set *PermissionSet, p
 		}
 		atomic += resourceCount * len(permission.Actions)
 		if permission.AsOwner != "" {
-			if version != PolicyFormatVersionV3 {
+			if version != PolicyFormatVersionV3 && version != PolicyFormatVersionV4 {
 				return 0, 0, fmt.Errorf("permission %q: as_owner requires format version %s", permission.PermissionID, PolicyFormatVersionV3)
 			}
 			if label != "allow" || permission.Kind != "capacity" || len(permission.Actions) != 1 || permission.Actions[0] != "execute" {

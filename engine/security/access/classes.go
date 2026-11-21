@@ -75,6 +75,7 @@ var engineClasses = map[string]map[string]Class{
 		"read.meaning": ClassRead, "read.document": ClassRead, "read.state": ClassRead,
 		"read.capacity": ClassRead, "edit.get_element_template": ClassRead,
 		"meaning.query": ClassFilteredRead, "read.structure": ClassFilteredRead,
+		"ui.list": ClassFilteredRead, "ui.open": ClassRead,
 		"trace.inspect": ClassAllOrNothing, "vocabulary.get": ClassAllOrNothing, "vocabulary.query": ClassAllOrNothing,
 		"edit.create": ClassDefine, "edit.patch_meaning": ClassDefine, "edit.delete": ClassDefine,
 		"edit.duplicate": ClassDefine, "vocabulary.patch": ClassDefine, "vocabulary.delete": ClassDefine,

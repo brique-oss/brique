@@ -146,6 +146,7 @@ const (
 	KeyExpectedRevision       = "expected_revision"
 	KeyCurrentRevision        = "current_revision"
 	KeyExpectedByteSize       = "expected_byte_size"
+	KeyExpectedSHA256         = "expected_sha256"
 	KeyExpectedLineCount      = "expected_line_count"
 	KeyExpectedSourceRevision = "expected_source_revision"
 	KeyExpectedSourceByteSize = "expected_source_byte_size"

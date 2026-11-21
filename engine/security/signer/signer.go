@@ -32,10 +32,16 @@ import (
 type SigningPurpose string
 
 const (
-	PurposeExternalMessageV1 SigningPurpose = "external-message-v1"
-	AlgorithmEd25519                        = "ed25519"
-	ExternalMessageV1Domain                 = "BRIQUE-EXTERNAL-MESSAGE-SIGNATURE-V1\x00"
-	MaxSigningInputBytes                    = (16 << 10) + len(ExternalMessageV1Domain)
+	PurposeExternalMessageV1               SigningPurpose = "external-message-v1"
+	PurposeInstanceDescriptorV1            SigningPurpose = "instance-descriptor-v1"
+	PurposeBrowserHelloV1                  SigningPurpose = "browser-wss-hello-v1"
+	AlgorithmEd25519                                      = "ed25519"
+	ExternalMessageV1Domain                               = "BRIQUE-EXTERNAL-MESSAGE-SIGNATURE-V1\x00"
+	InstanceDescriptorV1Domain                            = "BRIQUE-INSTANCE-DESCRIPTOR-SIGNATURE-V1\x00"
+	BrowserHelloV1Domain                                  = "BRIQUE-BROWSER-WSS-HELLO-SIGNATURE-V1\x00"
+	MaxSigningInputBytes                                  = (16 << 10) + len(ExternalMessageV1Domain)
+	MaxInstanceDescriptorSigningInputBytes                = (64 << 10) + len(InstanceDescriptorV1Domain)
+	MaxBrowserHelloSigningInputBytes                      = (16 << 10) + len(BrowserHelloV1Domain)
 	// MaxSealedBytes bounds what a provider is asked to open: the largest payload and its overhead.
 	MaxSealedBytes = (4 << 20) + 64
 )
@@ -157,7 +163,8 @@ func New(descriptor Descriptor, backend Backend, options Options) (Signer, error
 func (signer *boundedSigner) Descriptor() Descriptor { return signer.descriptor.clone() }
 
 func (signer *boundedSigner) Sign(ctx context.Context, purpose SigningPurpose, message []byte) ([]byte, error) {
-	if purpose != PurposeExternalMessageV1 || len(message) < len(ExternalMessageV1Domain) || len(message) > MaxSigningInputBytes || string(message[:len(ExternalMessageV1Domain)]) != ExternalMessageV1Domain {
+	domain, maximum, ok := signingRule(purpose)
+	if !ok || len(message) < len(domain) || len(message) > maximum || string(message[:len(domain)]) != domain {
 		return nil, &Error{Kind: ErrorConfiguration}
 	}
 	if err := liveDeadline(ctx); err != nil {
@@ -176,6 +183,19 @@ func (signer *boundedSigner) Sign(ctx context.Context, purpose SigningPurpose, m
 		return nil
 	})
 	return signature, err
+}
+
+func signingRule(purpose SigningPurpose) (string, int, bool) {
+	switch purpose {
+	case PurposeExternalMessageV1:
+		return ExternalMessageV1Domain, MaxSigningInputBytes, true
+	case PurposeInstanceDescriptorV1:
+		return InstanceDescriptorV1Domain, MaxInstanceDescriptorSigningInputBytes, true
+	case PurposeBrowserHelloV1:
+		return BrowserHelloV1Domain, MaxBrowserHelloSigningInputBytes, true
+	default:
+		return "", 0, false
+	}
 }
 
 // Open opens content sealed to this signer's public key. It is bounded exactly like signing.

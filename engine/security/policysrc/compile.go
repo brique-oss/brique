@@ -128,7 +128,9 @@ func Compile(src *Source, cat trust.Catalog, opt Options) (*Result, error) {
 		policy.Scopes = append(policy.Scopes, scope)
 		policy.Scopes = append(policy.Scopes, extra...)
 	}
-	if c.usesOwner {
+	if c.usesPublicWeb {
+		policy.FormatVersion = trust.PolicyFormatVersionV4
+	} else if c.usesOwner {
 		policy.FormatVersion = trust.PolicyFormatVersionV3
 	}
 	if len(src.Peers) > 0 {
@@ -137,6 +139,7 @@ func Compile(src *Source, cat trust.Catalog, opt Options) (*Result, error) {
 			return policy.ExternalPeers[i].PrincipalID < policy.ExternalPeers[j].PrincipalID
 		})
 	}
+	policy.WrapperSecrets = compileSecrets(src.Secrets)
 	encoded, err := json.Marshal(policy)
 	if err != nil {
 		return nil, err
@@ -157,6 +160,9 @@ type compiler struct {
 	// usesOwner is set when a call grant names an as_owner: the policy then needs
 	// format 3, and stays format 2 otherwise.
 	usesOwner bool
+	// usesPublicWeb raises the signed policy to format 4. This makes the
+	// keyless ingress semantic explicit to every runtime that reads it.
+	usesPublicWeb bool
 }
 
 func (c *compiler) warn(format string, args ...any) {
@@ -193,6 +199,9 @@ func (c *compiler) principal(index int, id string, p *Principal) (trust.Principa
 	sb := &scopeBuilder{c: c, principal: id, base: base, counter: map[string]int{}, seen: map[string]bool{}}
 
 	out := trust.Principal{PrincipalID: id, Kind: p.Kind, Status: "active", ScopeIDs: []string{scopeID}, SigningKeys: []trust.SigningKey{}}
+	if p.Kind == trust.PrincipalKindPublic {
+		c.usesPublicWeb = true
+	}
 	if p.Disabled {
 		out.Status = "disabled"
 	}

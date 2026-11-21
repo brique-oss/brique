@@ -1,14 +1,15 @@
 module brique_engine
 
-go 1.26
+go 1.26.0
 
 toolchain go1.26.10
 
 require github.com/gorilla/websocket v1.5.3
 
 require (
+	github.com/Microsoft/go-winio v0.6.4
 	github.com/google/uuid v1.6.0
-	golang.org/x/sys v0.40.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.46.1
 )
 

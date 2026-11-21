@@ -53,6 +53,9 @@ type Source struct {
 	// Peers says where the instance reaches the principals it sends to. They compile
 	// into the signed policy: an address changes only with the policy.
 	Peers []trust.ExternalPeer `json:"peers,omitempty"`
+	// Secrets says which wrappers may be given which secret, by the name of the secret. The
+	// value of a secret is never here: it stays on the machine (secrets.go).
+	Secrets map[string]*SecretGrant `json:"secrets,omitempty"`
 }
 
 // Values of Principal.Encryption.
@@ -65,7 +68,7 @@ const (
 func (p *Principal) Sealed() bool {
 	switch p.Encryption {
 	case EncryptionRequired:
-		return p.Kind != "local"
+		return p.Kind != trust.PrincipalKindLocal && p.Kind != trust.PrincipalKindPublic
 	case EncryptionNone:
 		return false
 	}

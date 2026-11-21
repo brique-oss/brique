@@ -105,7 +105,10 @@ func Validate(src *Source) error {
 	if err := validateOwners(src); err != nil {
 		return err
 	}
-	return validatePeers(src)
+	if err := validatePeers(src); err != nil {
+		return err
+	}
+	return validateSecrets(src)
 }
 
 // validatePeers checks that every peer is a principal of the source that has a key to
@@ -117,8 +120,8 @@ func validatePeers(src *Source) error {
 		switch {
 		case principal == nil:
 			return fmt.Errorf("access source: peer %d: %q is not a principal", index, peer.PrincipalID)
-		case principal.Kind == "local":
-			return fmt.Errorf("access source: peer %d: %q is a local principal and has no remote instance", index, peer.PrincipalID)
+		case principal.Kind == trust.PrincipalKindLocal || principal.Kind == trust.PrincipalKindPublic:
+			return fmt.Errorf("access source: peer %d: %q is a keyless principal and has no remote instance", index, peer.PrincipalID)
 		case seen[peer.PrincipalID]:
 			return fmt.Errorf("access source: peer %d: %q is declared twice", index, peer.PrincipalID)
 		case !identifierPattern.MatchString(peer.AudienceInstanceID) || peer.Interface == "":
@@ -234,15 +237,18 @@ func validatePrincipal(id string, p *Principal, seenKeys map[string]string) erro
 	if p.Encryption != "" && p.Encryption != EncryptionRequired && p.Encryption != EncryptionNone {
 		return fmt.Errorf("%s: encryption is %q or %q", where, EncryptionRequired, EncryptionNone)
 	}
-	if p.Encryption == EncryptionRequired && p.Kind == "local" {
-		return fmt.Errorf("%s: a local principal does not use the network, so it has no encryption", where)
+	if p.Encryption != "" && (p.Kind == trust.PrincipalKindLocal || p.Kind == trust.PrincipalKindPublic) {
+		return fmt.Errorf("%s: a keyless principal does not use peer encryption", where)
+	}
+	if id == trust.PublicWebPrincipalID && p.Kind != trust.PrincipalKindPublic {
+		return fmt.Errorf("%s: the reserved id %q requires kind %q", where, trust.PublicWebPrincipalID, trust.PrincipalKindPublic)
 	}
 	switch p.Kind {
 	case "instance", "service", "user":
 		if strings.HasPrefix(id, "local.") {
 			return fmt.Errorf("%s: the \"local.\" prefix is reserved for kind \"local\"", where)
 		}
-	case "local":
+	case trust.PrincipalKindLocal:
 		// A restricted internal component, authenticated by its channel (the
 		// wrapper secret): named local.<wrapper>, and without any key.
 		if !strings.HasPrefix(id, "local.") || len(id) == len("local.") {
@@ -254,8 +260,18 @@ func validatePrincipal(id string, p *Principal, seenKeys map[string]string) erro
 		if len(p.Actors) != 0 {
 			return fmt.Errorf("%s: a local principal has no actors", where)
 		}
+	case trust.PrincipalKindPublic:
+		if id != trust.PublicWebPrincipalID {
+			return fmt.Errorf("%s: the only public principal is %q", where, trust.PublicWebPrincipalID)
+		}
+		if len(p.Keys) != 0 {
+			return fmt.Errorf("%s: the public web principal has no key", where)
+		}
+		if len(p.Actors) != 0 {
+			return fmt.Errorf("%s: the public web principal has no actors", where)
+		}
 	default:
-		return fmt.Errorf("%s: kind must be instance, service, user or local", where)
+		return fmt.Errorf("%s: kind must be instance, service, user, local or public", where)
 	}
 	if len(p.Actors) > maxActors {
 		return fmt.Errorf("%s: more than %d actors", where, maxActors)
@@ -279,7 +295,7 @@ func validatePrincipal(id string, p *Principal, seenKeys map[string]string) erro
 	if len(p.Keys) > maxKeysPerPrincipal {
 		return fmt.Errorf("%s: more than %d keys", where, maxKeysPerPrincipal)
 	}
-	if len(p.Keys) == 0 && !p.Disabled && p.Kind != "local" {
+	if len(p.Keys) == 0 && !p.Disabled && p.Kind != trust.PrincipalKindLocal && p.Kind != trust.PrincipalKindPublic {
 		return fmt.Errorf("%s: an enabled principal needs at least one key", where)
 	}
 	for i, key := range p.Keys {

@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"brique_engine/security/access"
+	"brique_engine/security/trust"
 )
 
 // The property test: for random sources, the decision of the COMPILED SNAPSHOT
@@ -147,7 +148,7 @@ func randSource(tb testing.TB, r *rand.Rand, principals int) (*Source, map[strin
 }
 
 // propActors: declared actors, one undeclared and the absence of an actor.
-var propActors = []string{"", "alice", "bob", "carol"}
+var propActors = []string{"", "alice", "bob", "carol", trust.ReservedUIActorID}
 
 func TestPropertyCompiledSnapshotMatchesOracle(t *testing.T) {
 	iterations := 150
@@ -278,7 +279,7 @@ func specVerbHeldAs(src *Source, principal, actor, verb, ctx string) bool {
 		return false
 	}
 	if len(p.Actors) == 0 {
-		return true
+		return actor != trust.ReservedUIActorID
 	}
 	entry := actor
 	if entry == "" {

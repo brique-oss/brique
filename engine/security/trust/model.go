@@ -28,6 +28,10 @@ const (
 	// permission (SECURITY.md §3.5, D24). A policy that does
 	// not use as_owner stays format 2, so older engines keep reading it.
 	PolicyFormatVersionV3 = "3"
+	// PolicyFormatVersionV4 is format 3 plus the reserved public.web
+	// principal. Unlike a network peer it has no signing key: the dedicated
+	// public web ingress is the only boundary allowed to create its admission.
+	PolicyFormatVersionV4 = "4"
 	SigningAlgorithm      = "ed25519"
 
 	MaxPolicyBytes   = 1 << 20
@@ -59,6 +63,9 @@ type Policy struct {
 	// principal it sends to. It is part of what the authority signs: an address changes
 	// only with the policy, never alone.
 	ExternalPeers []ExternalPeer `json:"external_peers,omitempty"`
+	// WrapperSecrets says which wrappers may be given which secret (wrapper_secrets.go). Absent
+	// from a policy that grants none, so such a policy is what it was before secrets existed.
+	WrapperSecrets []WrapperSecret `json:"wrapper_secrets,omitempty"`
 }
 
 // ExternalPeer binds a principal to the remote instance it answers for: the audience
@@ -140,16 +147,24 @@ const (
 	ContentModeHPKE  = "hpke"
 )
 
-// A local principal is an internal component the engine itself launched (a
-// wrapper) and authenticates by its channel, not by a key (model §8.2). Its id is
-// always LocalPrincipalPrefix followed by the wrapper name.
+// A local principal is an internal component authenticated by an engine-owned
+// channel, not by a key (model §8.2). Most ids are LocalPrincipalPrefix plus a
+// wrapper name; local.ui is reserved to the authenticated browser bridge.
 const (
 	PrincipalKindLocal   = "local"
 	LocalPrincipalPrefix = "local."
+	PrincipalKindPublic  = "public"
+	PublicWebPrincipalID = "public.web"
+	LocalUIPrincipalID   = "local.ui"
 )
 
 // DefaultActor is the entry that covers requests that carry no actor.
 const DefaultActor = "default"
+
+// ReservedUIActorID is forced by the browser bridge on signed UI traffic. It
+// is fail-closed: unlike ordinary historical actor labels, it always requires
+// an explicit ActorBinding on the remote principal.
+const ReservedUIActorID = "brique.ui"
 
 // ActorBinding gives one actor its own scopes.
 type ActorBinding struct {

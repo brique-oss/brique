@@ -105,6 +105,61 @@ func TestALocalAdmissionIsReevaluatedAgainstTheCurrentPolicy(t *testing.T) {
 	}
 }
 
+func TestLocalUIIsAnExplicitReservedLocalAuthority(t *testing.T) {
+	policy, authority, key := localPolicy(t)
+	snapshot, _ := v2Snapshot(t, policy, authority, key)
+	if _, err := snapshot.AdmitLocalUI(); err != ErrLocalUIUnavailable {
+		t.Fatalf("AdmitLocalUI without configuration = %v", err)
+	}
+	policy.Principals = append(policy.Principals, Principal{
+		PrincipalID: LocalUIPrincipalID, Kind: PrincipalKindLocal, Status: "active",
+		ScopeIDs: []string{"pilot"}, SigningKeys: []SigningKey{},
+	})
+	snapshot, _ = v2Snapshot(t, policy, authority, key)
+	if !snapshot.HasDeclaredLocalPrincipal(LocalUIPrincipalID) {
+		t.Fatal("local.ui declaration is not reserved")
+	}
+	admitted, err := snapshot.AdmitLocalUI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.PrincipalID() != LocalUIPrincipalID || admitted.PrincipalKind() != PrincipalKindLocal || admitted.SigningKeyID() != "" {
+		t.Fatalf("local UI admission = %#v", admitted)
+	}
+	if !snapshot.AuthorizeResource(admitted, "/root/pilot/x", "matter", "m", "read") ||
+		snapshot.AuthorizeResource(admitted, "/root/other", "matter", "m", "read") {
+		t.Fatal("local UI authority does not follow its explicit scopes")
+	}
+}
+
+func TestLocalUIAdmissionIsRevokedByTheCurrentPolicy(t *testing.T) {
+	policy, authority, key := localPolicy(t)
+	policy.Principals = append(policy.Principals, Principal{
+		PrincipalID: LocalUIPrincipalID, Kind: PrincipalKindLocal, Status: "active",
+		ScopeIDs: []string{"pilot"}, SigningKeys: []SigningKey{},
+	})
+	runtime := mustRuntime(t)
+	activatePolicy(t, runtime, policy, authority, key)
+	admitted, err := runtime.AdmitLocalUI()
+	if err != nil || !runtime.AuthorizeResource(admitted, "/root/pilot/x", "matter", "m", "read") {
+		t.Fatalf("initial local UI admission = %v", err)
+	}
+	disabled := clonePolicy(t, policy)
+	disabled.Revision = "2"
+	disabled.PreviousPolicyHash = runtime.Active().PolicyHash()
+	disabled.Principals[2].Status = "disabled"
+	activatePolicy(t, runtime, disabled, authority, key)
+	if runtime.AuthorizeResource(admitted, "/root/pilot/x", "matter", "m", "read") {
+		t.Fatal("disabled local.ui retained authority")
+	}
+	if _, err := runtime.AdmitLocalUI(); err != ErrPrincipalInactive {
+		t.Fatalf("AdmitLocalUI after disable = %v", err)
+	}
+	if !runtime.HasDeclaredLocalPrincipal(LocalUIPrincipalID) {
+		t.Fatal("disabled local.ui stopped reserving its identity from other channel kinds")
+	}
+}
+
 func TestLocalPrincipalDeclarationsAreValidated(t *testing.T) {
 	cases := map[string]func(*Policy){
 		"local in format 1":         func(p *Policy) { p.FormatVersion = PolicyFormatVersion },
