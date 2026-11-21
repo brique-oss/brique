@@ -195,6 +195,7 @@ func main() {
 	localControl, err := localruntime.StartControl(localruntime.ControlOptions{
 		DiscoveryDirectory: runtimeDirectory, RootPath: rootDir,
 		RootObject: rootObject, Generation: runtimeGeneration,
+		Diagnose: ctxCommReg.DiagnoseConnection,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Brique failed to start local control: %s\n", err)

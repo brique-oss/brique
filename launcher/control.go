@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"brique_engine/contracts/connectiondiagnosis"
 	"brique_engine/platform/listener"
 	"brique_engine/platform/protectedfile"
 )
@@ -38,15 +39,19 @@ type LauncherControlRequest struct {
 	RuntimePath     string      `json:"runtime_path,omitempty"`
 	PublicationPath string      `json:"publication_path,omitempty"`
 	WebProfile      *WebProfile `json:"web_profile,omitempty"`
+	// Peer and Endpoint name a declared peer (and one of its endpoints) for diagnose_connection.
+	Peer     string `json:"peer,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type LauncherControlResponse struct {
-	Format   string    `json:"format"`
-	OK       bool      `json:"ok"`
-	Error    string    `json:"error,omitempty"`
-	Status   *Status   `json:"status,omitempty"`
-	Statuses []Status  `json:"statuses,omitempty"`
-	Instance *Instance `json:"instance,omitempty"`
+	Format    string                      `json:"format"`
+	OK        bool                        `json:"ok"`
+	Error     string                      `json:"error,omitempty"`
+	Status    *Status                     `json:"status,omitempty"`
+	Statuses  []Status                    `json:"statuses,omitempty"`
+	Instance  *Instance                   `json:"instance,omitempty"`
+	Diagnosis *connectiondiagnosis.Result `json:"diagnosis,omitempty"`
 }
 
 type LauncherControlServer struct {
@@ -177,6 +182,12 @@ func (server *LauncherControlServer) handle(connection net.Conn) {
 		var status Status
 		status, err = server.supervisor.Restart(ctx, request.Alias)
 		response.Status = &status
+	case "diagnose_connection":
+		var diagnosis connectiondiagnosis.Result
+		diagnosis, err = server.supervisor.DiagnoseConnection(ctx, request.Alias, request.Peer, request.Endpoint)
+		if err == nil {
+			response.Diagnosis = &diagnosis
+		}
 	case "update_engine":
 		var instance Instance
 		instance, err = server.supervisor.UpdateEngine(ctx, request.Alias, request.EnginePath)
@@ -253,12 +264,17 @@ func decodeLauncherControlRequest(raw []byte) (LauncherControlRequest, error) {
 		return LauncherControlRequest{}, errors.New("invalid request")
 	}
 	switch request.Operation {
+	case "diagnose_connection":
+		if !validAlias(request.Alias) || !validDiagnosisName(request.Peer) || request.Endpoint != "" && !validDiagnosisName(request.Endpoint) ||
+			request.EnginePath != "" || request.RuntimePath != "" || request.PublicationPath != "" || request.WebProfile != nil {
+			return LauncherControlRequest{}, errors.New("alias and peer required")
+		}
 	case "list", "shutdown":
-		if request.Alias != "" || request.EnginePath != "" || request.RuntimePath != "" || request.PublicationPath != "" || request.WebProfile != nil {
+		if request.Peer != "" || request.Endpoint != "" || request.Alias != "" || request.EnginePath != "" || request.RuntimePath != "" || request.PublicationPath != "" || request.WebProfile != nil {
 			return LauncherControlRequest{}, errors.New("arguments not allowed")
 		}
 	case "status", "start", "stop", "restart":
-		if !validAlias(request.Alias) || request.EnginePath != "" || request.RuntimePath != "" || request.PublicationPath != "" || request.WebProfile != nil {
+		if request.Peer != "" || request.Endpoint != "" || !validAlias(request.Alias) || request.EnginePath != "" || request.RuntimePath != "" || request.PublicationPath != "" || request.WebProfile != nil {
 			return LauncherControlRequest{}, errors.New("alias required")
 		}
 	case "update_engine":
@@ -281,6 +297,20 @@ func decodeLauncherControlRequest(raw []byte) (LauncherControlRequest, error) {
 		return LauncherControlRequest{}, errors.New("unknown operation")
 	}
 	return request, nil
+}
+
+// validDiagnosisName accepts a peer or endpoint name: printable ASCII without separators
+// that make it look like an address or a path. The engine applies the same rule.
+func validDiagnosisName(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7e || r == '/' || r == '\\' || r == ':' {
+			return false
+		}
+	}
+	return true
 }
 
 func writeLauncherControlResponse(writer io.Writer, response LauncherControlResponse) error {

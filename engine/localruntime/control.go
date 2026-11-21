@@ -3,6 +3,7 @@ package localruntime
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"brique_engine/contracts/buildinfo"
+	"brique_engine/contracts/connectiondiagnosis"
 	"brique_engine/contracts/directoryobject"
 	"brique_engine/engine/browserbridge"
 	"brique_engine/platform/listener"
@@ -20,30 +22,41 @@ const (
 	maxControlMessageBytes = 64 << 10
 	maxControlConnections  = 16
 	controlDeadline        = 5 * time.Second
+	// diagnoseDeadline covers a connection diagnosis, which opens a real connection to a peer.
+	diagnoseDeadline = 30 * time.Second
+	maxDiagnoseName  = 128
 
 	OperationStatus     = "status"
 	OperationVersion    = "version"
 	OperationRoot       = "root"
 	OperationGeneration = "generation"
 	OperationStop       = "stop"
+	// OperationDiagnoseConnection probes one declared peer endpoint. It is reachable only
+	// through this owner-only socket: no message, signed or not, can start it.
+	OperationDiagnoseConnection = "diagnose_connection"
 )
 
 type ControlRequest struct {
 	Format     string `json:"format"`
 	Generation string `json:"generation"`
 	Operation  string `json:"operation"`
+	// Peer and Endpoint name a declared peer and one of its endpoints for a connection
+	// diagnosis. They are names looked up in the signed policy, never addresses.
+	Peer     string `json:"peer,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type ControlResponse struct {
-	Format     string              `json:"format"`
-	Generation string              `json:"generation"`
-	OK         bool                `json:"ok"`
-	ErrorCode  string              `json:"error_code,omitempty"`
-	State      string              `json:"state,omitempty"`
-	PID        int                 `json:"pid,omitempty"`
-	RootPath   string              `json:"root_path,omitempty"`
-	RootObject *directoryobject.ID `json:"root_object,omitempty"`
-	Build      *buildinfo.Info     `json:"build,omitempty"`
+	Format     string                      `json:"format"`
+	Generation string                      `json:"generation"`
+	OK         bool                        `json:"ok"`
+	ErrorCode  string                      `json:"error_code,omitempty"`
+	State      string                      `json:"state,omitempty"`
+	PID        int                         `json:"pid,omitempty"`
+	RootPath   string                      `json:"root_path,omitempty"`
+	RootObject *directoryobject.ID         `json:"root_object,omitempty"`
+	Build      *buildinfo.Info             `json:"build,omitempty"`
+	Diagnosis  *connectiondiagnosis.Result `json:"diagnosis,omitempty"`
 }
 
 type ControlOptions struct {
@@ -52,6 +65,8 @@ type ControlOptions struct {
 	RootObject         directoryobject.ID
 	Generation         string
 	Now                func() time.Time
+	// Diagnose answers OperationDiagnoseConnection; without it the operation is refused.
+	Diagnose func(ctx context.Context, peer, endpoint string) connectiondiagnosis.Result
 }
 
 type ControlServer struct {
@@ -67,6 +82,7 @@ type ControlServer struct {
 	sem        chan struct{}
 	wg         sync.WaitGroup
 	closeErr   error
+	diagnose   func(ctx context.Context, peer, endpoint string) connectiondiagnosis.Result
 }
 
 func StartControl(options ControlOptions) (*ControlServer, error) {
@@ -99,6 +115,7 @@ func StartControl(options ControlOptions) (*ControlServer, error) {
 		descriptor: descriptor, directory: options.DiscoveryDirectory,
 		listener: listener, cleanup: cleanup, stop: make(chan struct{}),
 		closed: make(chan struct{}), sem: make(chan struct{}, maxControlConnections),
+		diagnose: options.Diagnose,
 	}
 	server.wg.Add(1)
 	go server.acceptLoop()
@@ -246,12 +263,40 @@ func (server *ControlServer) handle(connection net.Conn) {
 		response.RootPath, response.RootObject = descriptor.RootPath, &rootObject
 	case OperationGeneration:
 	case OperationStop:
+	case OperationDiagnoseConnection:
+		if server.diagnose == nil {
+			response.OK, response.ErrorCode = false, "unsupported_operation"
+			break
+		}
+		if !validDiagnosisName(request.Peer) || request.Endpoint != "" && !validDiagnosisName(request.Endpoint) {
+			response.OK, response.ErrorCode = false, "invalid_request"
+			break
+		}
+		_ = connection.SetDeadline(time.Now().Add(diagnoseDeadline))
+		ctx, cancel := context.WithTimeout(context.Background(), diagnoseDeadline-2*time.Second)
+		result := server.diagnose(ctx, request.Peer, request.Endpoint)
+		cancel()
+		response.Diagnosis = &result
 	default:
 		response.OK, response.ErrorCode = false, "unknown_operation"
 	}
 	if err := writeControlResponse(connection, response); err == nil && request.Operation == OperationStop && response.OK {
 		server.stopOnce.Do(func() { close(server.stop) })
 	}
+}
+
+// validDiagnosisName accepts a principal or endpoint name: printable ASCII without
+// separators that make it look like an address or a path.
+func validDiagnosisName(value string) bool {
+	if value == "" || len(value) > maxDiagnoseName {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7e || r == '/' || r == '\\' || r == ':' {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeControlRequest(raw []byte) (ControlRequest, error) {
@@ -297,12 +342,16 @@ func CallControl(descriptor EngineRuntimeDescriptor, request ControlRequest) (Co
 	if err := descriptor.Validate(); err != nil {
 		return ControlResponse{}, err
 	}
+	deadline := controlDeadline
+	if request.Operation == OperationDiagnoseConnection {
+		deadline = diagnoseDeadline
+	}
 	connection, err := dialLocalControl(descriptor.Control, controlDeadline)
 	if err != nil {
 		return ControlResponse{}, err
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(controlDeadline))
+	_ = connection.SetDeadline(time.Now().Add(deadline))
 	raw, err := json.Marshal(request)
 	if err != nil || len(raw) >= maxControlMessageBytes {
 		return ControlResponse{}, errors.New("encode local control request")

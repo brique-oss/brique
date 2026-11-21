@@ -1,18 +1,25 @@
 package localruntime
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"brique_engine/contracts/connectiondiagnosis"
 	"brique_engine/engine/browserbridge"
 	"brique_engine/platform/locking"
 	"brique_engine/platform/protectedfile"
 )
 
 func startTestControl(t *testing.T) (*ControlServer, EngineRuntimeDescriptor) {
+	t.Helper()
+	return startTestControlWith(t, nil)
+}
+
+func startTestControlWith(t *testing.T, diagnose func(context.Context, string, string) connectiondiagnosis.Result) (*ControlServer, EngineRuntimeDescriptor) {
 	t.Helper()
 	root := t.TempDir()
 	runtimeDirectory, err := os.MkdirTemp("/tmp", "brique-ctl-")
@@ -30,7 +37,7 @@ func startTestControl(t *testing.T) (*ControlServer, EngineRuntimeDescriptor) {
 	}
 	server, err := StartControl(ControlOptions{
 		DiscoveryDirectory: runtimeDirectory, RootPath: root,
-		RootObject: id, Generation: generation, Now: func() time.Time { return time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC) },
+		RootObject: id, Generation: generation, Diagnose: diagnose, Now: func() time.Time { return time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,5 +182,43 @@ func TestRemoveOwnedDescriptorStillRefusesAnotherGeneration(t *testing.T) {
 	other, _ := NewGeneration()
 	if err := RemoveOwnedDescriptor(server.directory, descriptor.DiscoveryKey, other); !errors.Is(err, ErrDescriptorNotOwned) {
 		t.Fatalf("foreign remove = %v", err)
+	}
+}
+
+func TestControlDiagnosesOnlyANamedPeerThroughTheOwnerSocket(t *testing.T) {
+	var calls []string
+	_, descriptor := startTestControlWith(t, func(_ context.Context, peer, endpoint string) connectiondiagnosis.Result {
+		calls = append(calls, peer+"|"+endpoint)
+		return connectiondiagnosis.Refused(peer, endpoint, connectiondiagnosis.StepTCP, connectiondiagnosis.CodeConnectionRefused, "closed")
+	})
+	call := func(peer, endpoint string) ControlResponse {
+		response, err := CallControl(descriptor, ControlRequest{Format: LocalControlProtocol, Generation: descriptor.Generation,
+			Operation: OperationDiagnoseConnection, Peer: peer, Endpoint: endpoint})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	response := call("peer-a", "paris")
+	if !response.OK || response.Diagnosis == nil || !response.Diagnosis.Valid() || response.Diagnosis.PeerID != "peer-a" ||
+		len(calls) != 1 || calls[0] != "peer-a|paris" {
+		t.Fatalf("diagnose = %#v calls=%v", response, calls)
+	}
+	for _, bad := range [][2]string{{"", ""}, {"https://10.0.0.1/", ""}, {"peer-a", "a/b"}, {"peer:80", ""}, {"peer a", ""}, {string(make([]byte, 200)), ""}} {
+		if response := call(bad[0], bad[1]); response.OK || response.ErrorCode != "invalid_request" {
+			t.Fatalf("name %q/%q accepted: %#v", bad[0], bad[1], response)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("a refused name reached the diagnoser: %v", calls)
+	}
+}
+
+func TestControlRefusesDiagnosisWhenTheEngineHasNone(t *testing.T) {
+	_, descriptor := startTestControl(t)
+	response, err := CallControl(descriptor, ControlRequest{Format: LocalControlProtocol, Generation: descriptor.Generation,
+		Operation: OperationDiagnoseConnection, Peer: "peer-a"})
+	if err != nil || response.OK || response.ErrorCode != "unsupported_operation" {
+		t.Fatalf("response = %#v, %v", response, err)
 	}
 }

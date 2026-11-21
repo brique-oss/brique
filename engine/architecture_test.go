@@ -107,6 +107,11 @@ func TestArchitectureImportRules(t *testing.T) {
 			to:   append([]string{"platform"}, engineAndComponents...),
 		},
 		{
+			rule: "the connection diagnosis core imports only contracts, never a family, the router, security or a component",
+			from: []string{"transport/diagnostic"},
+			to:   append([]string{"platform"}, engineAndComponents...),
+		},
+		{
 			rule: "platform imports only contracts and platform, never shared, an engine package or a component",
 			from: []string{"platform"},
 			to:   engineAndComponents,

@@ -19,14 +19,14 @@ dependency rule is enforced by `engine/architecture_test.go`: `contracts` import
 | `cmd/brique/` | the engine's process entry: flags, security start-up, signals, shutdown |
 | `cmd/brique-sec/` | offline administration of the instance's security |
 | `cmd/brique-launcher/`, `cmd/brique-web/`, `cmd/brique-browser-host/` | the launcher, the public web host and the browser native host (composition only) |
-| `contracts/` | formats shared by several components, standard library only: `directoryobject`, `buildinfo`, `publication`, `webprofile`, `instanceselection` |
+| `contracts/` | formats shared by several components, standard library only: `directoryobject`, `buildinfo`, `publication`, `webprofile`, `instanceselection`, `connectiondiagnosis` |
 | `platform/` | operating-system primitives: `filesystem` (atomic files), `protectedfile`, `locking`, `storage` (free disk), `listener` (accept back-off) |
 | `engine/context/` | the context tree and its loops |
 | `engine/communication/` | routing, interfaces (ws, http, https), signed ingress and egress |
 | `engine/junction/` | `Delivery` and the authority it carries, wrapper secrets and delegation, trace emission |
 | `engine/execution/`, `engine/matter/`, `engine/reflexive/`, `engine/trace/` | the families, each with its own door |
 | `engine/security/` | the security subsystem (package map in SECURITY.md, appendix B) |
-| `engine/transport/` | `networkpolicy`, `signedtransport`, `browsertransport`, `browserclient`: the signed engine-to-engine transport |
+| `engine/transport/` | `networkpolicy`, `signedtransport`, `browsertransport`, `browserclient`: the signed engine-to-engine transport; `diagnostic`: the connection diagnosis of a declared peer |
 | `engine/circulation/`, `engine/configuration/` | the message and trace wire types and the configuration keys and values used by the families |
 | `engine/shared/` | instance files, element names, control plane and the engine's own concepts |
 | `engine/enginebuild/` | the engine's build provenance |

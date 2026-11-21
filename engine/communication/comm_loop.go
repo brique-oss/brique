@@ -581,6 +581,7 @@ func (l *CommLoop) Start() {
 		for _, wrapperName := range l.cfg.WrapperBoundary {
 			_ = l.frame.CtxCommReg.RegisterWrapperBoundary(wrapperName, shared.ContextAddr(l.frame.CtxId))
 		}
+		l.registerDiagnosers()
 	}
 }
 
@@ -698,6 +699,7 @@ func (l *CommLoop) Stop() {
 		for _, wrapperName := range l.cfg.WrapperBoundary {
 			l.frame.CtxCommReg.UnregisterWrapperBoundary(wrapperName)
 		}
+		l.unregisterDiagnosers()
 	}
 
 	// Ask all external interfaces to close after removing routing exposure.

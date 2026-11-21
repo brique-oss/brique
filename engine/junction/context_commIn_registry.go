@@ -74,6 +74,11 @@ type ContextCommRegistry struct {
 	// Comm loop and authenticated duplex adapters. It contains no policy.
 	signedTransport *signedtransport.Hub
 
+	// diagnosisData holds the connection diagnosers registered by the HTTPS interfaces and the
+	// per-peer bounds of the diagnoses; it is created on first use.
+	diagnosisOnce sync.Once
+	diagnosisData *diagnosisState
+
 	// Internal addressing: ctx_id -> entry
 	byID map[shared.ContextAddr]ContextCommEntry
 

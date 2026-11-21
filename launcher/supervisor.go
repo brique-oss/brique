@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"brique_engine/contracts/buildinfo"
+	"brique_engine/contracts/connectiondiagnosis"
 	"brique_engine/contracts/publication"
 	"brique_engine/engine/localruntime"
 	"brique_engine/platform/locking"
@@ -550,6 +551,30 @@ func (supervisor *Supervisor) Status(_ context.Context, alias string) (Status, e
 		return supervisor.status(entry), nil
 	}
 	return Status{Alias: alias, State: StateStopped, Supervision: instance.Supervision}, nil
+}
+
+// DiagnoseConnection asks the running engine of an instance to diagnose its connection to a
+// declared peer. The launcher has no network logic: it finds the engine, forwards two names
+// (a peer and an optional endpoint name of that peer) over the engine's owner-only control
+// socket and returns what the engine answers.
+func (supervisor *Supervisor) DiagnoseConnection(_ context.Context, alias, peer, endpoint string) (connectiondiagnosis.Result, error) {
+	instance, err := supervisor.store.Get(alias)
+	if err != nil {
+		return connectiondiagnosis.Result{}, err
+	}
+	descriptor, err := supervisor.discover(instance)
+	if err != nil {
+		return connectiondiagnosis.Result{}, errors.New("the engine of this instance is not running")
+	}
+	response, err := localruntime.CallControl(descriptor, localruntime.ControlRequest{Format: localruntime.LocalControlProtocol,
+		Generation: descriptor.Generation, Operation: localruntime.OperationDiagnoseConnection, Peer: peer, Endpoint: endpoint})
+	if err != nil {
+		return connectiondiagnosis.Result{}, errors.New("the engine did not answer the diagnosis")
+	}
+	if !response.OK || response.Diagnosis == nil || !response.Diagnosis.Valid() {
+		return connectiondiagnosis.Result{}, errors.New("the engine refused the diagnosis")
+	}
+	return *response.Diagnosis, nil
 }
 
 func (supervisor *Supervisor) Statuses(ctx context.Context) ([]Status, error) {

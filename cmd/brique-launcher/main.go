@@ -32,6 +32,7 @@ Usage :
   brique-launcher [--data-dir <dossier>] instance list [--json]
   brique-launcher [--data-dir <dossier>] instance show <alias> [--json]
   brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance start|stop|restart|status <alias> [--json]
+  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance diagnose <alias> <pair> [--endpoint <nom>] [--json]
   brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-engine <alias> --engine <binaire>
   brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-runtime <alias> --runtime <dossier>
   brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-publication <alias> (--publication <dossier> | --clear)
@@ -253,6 +254,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "\t%s", response.Status.WebURL)
 		}
 		fmt.Fprintln(stdout)
+	case "diagnose":
+		return runDiagnose(*dataDirectory, *controlRuntimeDirectory, remaining[2:], stdout, stderr, fail)
 	case "update-engine":
 		if len(remaining) < 3 {
 			return fail(errors.New("instance update-engine attend un alias"))
@@ -467,6 +470,61 @@ func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlR
 	}
 	fmt.Fprintln(stdout, "Superviseur Brique arrêté.")
 	return 0
+}
+
+// runDiagnose asks the running engine of an instance to diagnose its connection to a declared
+// peer. Only names are sent: the engine finds the address in its signed policy.
+func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, stdout, stderr io.Writer, fail func(error) int) int {
+	if len(args) < 2 {
+		return fail(errors.New("instance diagnose attend un alias et un pair"))
+	}
+	alias, peer := args[0], args[1]
+	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	endpoint := flags.String("endpoint", "", "nom du point d'accès du pair (par défaut le premier)")
+	jsonOutput := flags.Bool("json", false, "sortie JSON")
+	if err := flags.Parse(args[2:]); err != nil || len(flags.Args()) != 0 {
+		return 2
+	}
+	response, err := launcher.CallLauncherControl(dataDirectory, controlRuntimeDirectory, launcher.LauncherControlRequest{
+		Operation: "diagnose_connection", Alias: alias, Peer: peer, Endpoint: *endpoint})
+	if err != nil {
+		return fail(err)
+	}
+	if response.Diagnosis == nil {
+		return fail(errors.New("réponse du superviseur sans diagnostic"))
+	}
+	status := 0
+	if !response.Diagnosis.OK {
+		status = 1
+	}
+	if *jsonOutput {
+		if code := writeJSON(stdout, response.Diagnosis, fail); code != 0 {
+			return code
+		}
+		return status
+	}
+	fmt.Fprintf(stdout, "pair %s", response.Diagnosis.PeerID)
+	if response.Diagnosis.Endpoint != "" {
+		fmt.Fprintf(stdout, "  point d'accès %s", response.Diagnosis.Endpoint)
+	}
+	fmt.Fprintln(stdout)
+	for _, step := range response.Diagnosis.Steps {
+		fmt.Fprintf(stdout, "  %-8s %-15s %5d ms", step.Status, step.Name, step.DurationMillis)
+		if step.Code != "" {
+			fmt.Fprintf(stdout, "  %s", step.Code)
+		}
+		if step.Message != "" && step.Status != "ok" {
+			fmt.Fprintf(stdout, "  %s", step.Message)
+		}
+		fmt.Fprintln(stdout)
+	}
+	if response.Diagnosis.OK {
+		fmt.Fprintln(stdout, "Aucune étape en échec.")
+	} else {
+		fmt.Fprintln(stdout, "Une étape est en échec : voir la ligne « failed » ci-dessus.")
+	}
+	return status
 }
 
 func parseJSONFlag(args []string, stderr io.Writer) (bool, error) {
