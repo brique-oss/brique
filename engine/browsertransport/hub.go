@@ -8,6 +8,7 @@ package browsertransport
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"time"
 
@@ -99,6 +100,12 @@ func (route *HubRoute) Close() error {
 			result = route.wire.Close()
 		}
 	})
+	// The read loop closes the socket itself when the peer goes away, and may do so just before an
+	// explicit Close. Closing a route that is already closed is not a failure: only the first close can
+	// report a real error, and a socket that is already gone is the outcome that was asked for.
+	if errors.Is(result, net.ErrClosed) {
+		return nil
+	}
 	return result
 }
 
