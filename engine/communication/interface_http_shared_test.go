@@ -150,7 +150,7 @@ func TestSendHTTPControlClassifiesPeerRejectionAndNetworkFailure(t *testing.T) {
 func TestSignedExternalIngressHandlerKeepsRawEnvelopeSeparateAndBounded(t *testing.T) {
 	queue := make(chan signedExternalIngressItem, 1)
 	runtime := &InterfaceRuntime{Name: "secure", SignedExternalIngress: queue}
-	handler := signedExternalIngressHandler(runtime, make(chan struct{}), 64)
+	handler := signedExternalIngressHandler(runtime, make(chan struct{}), 64, 0)
 	response := httptest.NewRecorder()
 	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(`{"protected":{}}`)))
 	if response.Code != http.StatusAccepted {
@@ -172,5 +172,41 @@ func TestSignedExternalIngressHandlerKeepsRawEnvelopeSeparateAndBounded(t *testi
 	handler(response, httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(strings.Repeat("x", 65))))
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized status=%d want 413", response.Code)
+	}
+}
+
+// The address budget is a flood guard, not a ceiling on a peer: by default it carries the
+// rate at which an authenticated peer answers this instance's own calls, and a budget that
+// is set is the one that applies. A request over it is refused with 429.
+func TestSignedExternalIngressAddressBudget(t *testing.T) {
+	post := func(handler http.HandlerFunc, count int) (accepted, refused int) {
+		for i := 0; i < count; i++ {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/msg", strings.NewReader(`{}`))
+			request.RemoteAddr = "192.0.2.10:4000"
+			handler(response, request)
+			switch response.Code {
+			case http.StatusAccepted:
+				accepted++
+			case http.StatusTooManyRequests:
+				refused++
+			default:
+				t.Fatalf("status=%d", response.Code)
+			}
+		}
+		return accepted, refused
+	}
+	newHandler := func(rate int) http.HandlerFunc {
+		queue := make(chan signedExternalIngressItem, 20000)
+		return signedExternalIngressHandler(&InterfaceRuntime{Name: "secure", SignedExternalIngress: queue}, make(chan struct{}), 64, rate)
+	}
+
+	// The default carries a burst of 4000 at once: far above the 400 it used to refuse at.
+	if accepted, refused := post(newHandler(0), 1000); accepted != 1000 || refused != 0 {
+		t.Fatalf("default budget: accepted=%d refused=%d, want 1000 and 0", accepted, refused)
+	}
+	// A budget that is set applies: rate 10 means a burst of 20.
+	if accepted, refused := post(newHandler(10), 100); accepted != 20 || refused != 80 {
+		t.Fatalf("budget of 10 a second: accepted=%d refused=%d, want 20 and 80", accepted, refused)
 	}
 }

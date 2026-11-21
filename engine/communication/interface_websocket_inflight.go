@@ -32,6 +32,8 @@ import (
 type inflightEntry struct {
 	connection junction.WrapperConnection
 	request    circulation.Message
+	// external is the admitted external request this message dispatches, when it is one.
+	external *junction.Delivery
 }
 
 type inflightTracker struct {
@@ -44,14 +46,18 @@ func newInflightTracker() *inflightTracker {
 }
 
 // add records an awaited intention written to connection. Anything else is ignored.
-func (t *inflightTracker) add(connection junction.WrapperConnection, msg circulation.Message) {
+func (t *inflightTracker) add(connection junction.WrapperConnection, msg circulation.Message, external ...*junction.Delivery) {
 	if t == nil || msg.Kind != circulation.ValueKindIntention || !msg.Intention.AwaitResponse || msg.Intention.IntentionID == "" {
 		return
 	}
 	stripped := msg
 	stripped.Intention.Params = nil
 	t.mu.Lock()
-	t.entries[msg.Intention.IntentionID] = inflightEntry{connection: connection, request: stripped}
+	entry := inflightEntry{connection: connection, request: stripped}
+	if len(external) == 1 {
+		entry.external = external[0]
+	}
+	t.entries[msg.Intention.IntentionID] = entry
 	t.mu.Unlock()
 }
 
@@ -66,16 +72,16 @@ func (t *inflightTracker) settle(msg circulation.Message) {
 }
 
 // lose removes and returns the intentions recorded for connection.
-func (t *inflightTracker) lose(connection junction.WrapperConnection) []circulation.Message {
+func (t *inflightTracker) lose(connection junction.WrapperConnection) []inflightEntry {
 	if t == nil {
 		return nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var lost []circulation.Message
+	var lost []inflightEntry
 	for id, entry := range t.entries {
 		if entry.connection == connection {
-			lost = append(lost, entry.request)
+			lost = append(lost, entry)
 			delete(t.entries, id)
 		}
 	}

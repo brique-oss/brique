@@ -41,6 +41,17 @@ type CommCfg struct {
 	// IngressBuffer is the number of places of the channel that every interface read loop feeds and a single goroutine empties.
 	// A read loop that finds it full waits for a place (listener setting ingress_wait_ms) before it closes its connection. 0 = default.
 	IngressBuffer int
+
+	// EgressBuffer is the number of places of the queue in front of the writer of each interface. 0 = default (16).
+	// The config of an interface may set its own (key egress_buffer).
+	EgressBuffer int
+	// EgressWaitMs is how long a routing loop waits for a place in a full queue before it gives the interface up as too slow
+	// and closes its connection. 0 = default (5000). The config of an interface may set its own (key egress_wait_ms).
+	EgressWaitMs int
+
+	// ExternalCallSilenceMs is how long a call to a peer that awaits an answer may hear nothing (no answer and no `running`) before
+	// it is ended with an error. Any `running` answer renews it. 0 = default (120000); at most 1800000.
+	ExternalCallSilenceMs int
 }
 
 // defaultIngressBuffer: at the observed rate of a loaded wrapper (about 3000 messages per second) 16 places held 5 ms of traffic.
@@ -128,6 +139,15 @@ func ParseCommCfg(engineCfg map[string]any) CommCfg {
 	}
 	if v := shared.AnyToInt64(engineCfg[configuration.KeyIngressBuffer]); v > 0 {
 		cfg.IngressBuffer = int(v)
+	}
+	if v := shared.AnyToInt64(engineCfg[configuration.KeyEgressBuffer]); v > 0 {
+		cfg.EgressBuffer = int(v)
+	}
+	if v := shared.AnyToInt64(engineCfg[configuration.KeyEgressWaitMs]); v > 0 {
+		cfg.EgressWaitMs = int(v)
+	}
+	if v := shared.AnyToInt64(engineCfg[configuration.KeyExternalCallSilenceMs]); v > 0 {
+		cfg.ExternalCallSilenceMs = int(v)
 	}
 
 	// trust / scope

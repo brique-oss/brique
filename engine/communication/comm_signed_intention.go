@@ -21,9 +21,26 @@ import (
 )
 
 const (
-	pendingExternalSilence = 30 * time.Minute
+	// defaultExternalSilence is how long a call to a peer may hear nothing before it ends with an error. It was 30
+	// minutes: an answer lost on the way (a refusal, a crash of the peer between the work and the reply) kept its
+	// caller waiting that long. A callee that works longer than this without answering must send `running`, which
+	// renews the wait.
+	defaultExternalSilence = 2 * time.Minute
+	// maxExternalSilence is the most the registry of awaited answers accepts.
+	maxExternalSilence     = 30 * time.Minute
 	pendingExternalMaximum = 24 * time.Hour
 )
+
+// externalSilence is the silence a call to a peer tolerates: the setting external_call_silence_ms, or the default.
+func (l *CommLoop) externalSilence() time.Duration {
+	if l == nil || l.cfg.ExternalCallSilenceMs <= 0 {
+		return defaultExternalSilence
+	}
+	if wait := time.Duration(l.cfg.ExternalCallSilenceMs) * time.Millisecond; wait < maxExternalSilence {
+		return wait
+	}
+	return maxExternalSilence
+}
 
 // routeSignedExternalIntention is the protected root egress membrane. The
 // logical remote path remains in the signed payload; only the peer directory
@@ -130,7 +147,7 @@ func (l *CommLoop) routeSignedExternalIntention(message circulation.Message, tag
 			ExpectedKeyIDs:      destination.Endpoint.KeyIDs,
 			Origin:              origin,
 			MinimumContentMode:  responseMode,
-			SilenceTimeout:      pendingExternalSilence,
+			SilenceTimeout:      l.externalSilence(),
 			AbsoluteDeadline:    now.Add(pendingExternalMaximum),
 		}, now)
 		if err != nil {

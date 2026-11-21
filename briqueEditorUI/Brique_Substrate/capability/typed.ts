@@ -331,7 +331,7 @@ export type ReadMeaningParams = { input: ReadMeaningInputItem[] };
 export type ReadMeaningPayload = { result: ReadMeaningResultItem[] };
 
 export type ReadStateParams = {
-  include?: Array<"context" | "trace" | "wrappers" | "families">;
+  include?: Array<"context" | "trace" | "wrappers" | "families" | "interfaces">;
 };
 
 export type WrapperSnapshot = {
@@ -350,6 +350,21 @@ export type WrapperSnapshot = {
   ready_error?: string;
 };
 
+// The queue in front of the writer of one interface, and what the routing loops of the communication family met there.
+// Two goroutines route every message of the family: a queue often found full, or given up, is how a slow consumer shows.
+export type InterfaceQueueSnapshot = {
+  name: string;
+  type: string;
+  status: string;
+  queue_places: number;
+  queue_length: number;
+  offers: number;
+  found_full: number;
+  given_up: number;
+  waited_ms: number;
+  longest_wait_ms: number;
+};
+
 export type ReadStatePayload = {
   context?: {
     context_id: string;
@@ -365,6 +380,7 @@ export type ReadStatePayload = {
   };
   wrappers?: WrapperSnapshot[];
   families?: Record<string, string>;
+  interfaces?: InterfaceQueueSnapshot[];
 };
 
 export type ReadStructureParams = {

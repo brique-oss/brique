@@ -304,6 +304,22 @@ func (ledger *Ledger) appendDurable(record journalRecord) error {
 	return nil
 }
 
+// appendTransition writes the record of a transition after a reservation without
+// synchronizing it. The reservation is what must be durable before anything runs; a
+// later transition that a machine failure loses leaves the entry in an earlier,
+// unfinished state, which recovery turns into outcome_unknown and never into a second
+// execution. A process crash loses nothing: the record is already in the file.
+func (ledger *Ledger) appendTransition(record journalRecord) error {
+	if err := ledger.appendRecord(record); err != nil {
+		if !errors.Is(err, ErrSaturated) {
+			ledger.failed = err
+		}
+		return fmt.Errorf("append replay journal: %w", err)
+	}
+	ledger.unsynced = true
+	return nil
+}
+
 func (ledger *Ledger) appendRecord(record journalRecord) error {
 	framed, err := frameRecord(record)
 	if err != nil {

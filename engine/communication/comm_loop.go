@@ -237,12 +237,14 @@ func NewCommLoop(frame *junction.ContextRegistry, engineCfg map[string]any) *Com
 		if l.signedExternalIngress != nil && rt.Driver == "https" && rt.Type == EndpointOuterCtx {
 			rt.SignedExternalIngress = l.signedExternalIngress
 		}
-		rt.Egress = make(chan circulation.Message, 16)
+		egressPlaces, egressWait := egressSettings(cfg, rt.Cfg)
+		rt.egressWait = egressWait
+		rt.Egress = make(chan circulation.Message, egressPlaces)
 		if rt.Driver == "https" && rt.Impl != nil && rt.Impl.Directions().WriteLoop {
-			rt.SignedExternalEgress = make(chan signedExternalEgressItem, 16)
+			rt.SignedExternalEgress = make(chan signedExternalEgressItem, egressPlaces)
 		}
 		if rt.Type == EndpointWrapper {
-			rt.WrapperEgress = make(chan wrapperInterfaceEgressItem, 16)
+			rt.WrapperEgress = make(chan wrapperInterfaceEgressItem, egressPlaces)
 		}
 		rt.PrepareEgress = l.prepareInterfaceEgress
 		rt.ReportEgressOutcome = l.enqueueInterfaceEgressOutcome

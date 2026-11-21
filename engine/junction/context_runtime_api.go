@@ -18,6 +18,22 @@ package junction
 
 import "brique_engine/shared"
 
+// InterfaceEgress is what the routing loops of the communication family met in front of one interface:
+// the queue that feeds its writer (size and fill now) and how often a message found it full, how long the
+// loops waited for a place, and how often they gave the interface up as too slow. Durations are in nanoseconds.
+type InterfaceEgress struct {
+	Name      string
+	Type      string
+	Status    string
+	Places    int
+	Queued    int
+	Offers    uint64
+	Full      uint64
+	Timeouts  uint64
+	WaitedNs  int64
+	MaxWaitNs int64
+}
+
 // ContextRuntimeAPI = surface minimale exposée aux familles.
 // Implémentée par ContextLoop via closures injectées dans le frame.
 type ContextRuntimeAPI struct {
@@ -27,6 +43,9 @@ type ContextRuntimeAPI struct {
 	// Family states (pas les channels, mais l'état runtime)
 	GetFamilyState  func(name shared.FamilyName) (shared.FamilyState, bool)
 	ListFamilyState func() map[shared.FamilyName]shared.FamilyState
+
+	// ListInterfaceEgress reports the egress queue of each interface of the communication family, by name.
+	ListInterfaceEgress func() []InterfaceEgress
 
 	// Hierarchy
 	ListChildrenNames func() []string // enfants directs (noms)

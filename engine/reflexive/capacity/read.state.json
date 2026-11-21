@@ -18,7 +18,7 @@
           "include": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Explicit allow-list of sections to include. Valid values: 'context', 'trace', 'wrappers', 'families'. When absent, all four sections are included."
+            "description": "Explicit allow-list of sections to include. Valid values: 'context', 'trace', 'wrappers', 'families', 'interfaces'. When absent, all five sections are included."
           }
         }
       },
@@ -83,6 +83,25 @@
             },
             "ordering": "Keys sorted alphabetically.",
             "empty_case": "Empty object when no families are registered in the current context."
+          },
+          "interfaces": {
+            "_include_key": "interfaces",
+            "type": "array",
+            "description": "The queue in front of the writer of each interface of this context's communication family, and what the routing loops met there. Two goroutines route every message of the family, so a queue that is often found full, or that is given up, is how a slow consumer shows. Not returned to an external caller.",
+            "item_fields": {
+              "name": "string — interface name",
+              "type": "string — endpoint kind (ui, wrapper, outerCtx, innerCtx)",
+              "status": "string — interface state (running, failed, closed, ...)",
+              "queue_places": "integer — size of the egress queue (egress_buffer, default 16)",
+              "queue_length": "integer — messages in it now",
+              "offers": "integer — messages offered to it since the start",
+              "found_full": "integer — offers that found it full and had to wait for a place",
+              "given_up": "integer — offers that waited egress_wait_ms for nothing: the interface was given up as too slow and its connection closed",
+              "waited_ms": "number — total time the routing loops waited for a place",
+              "longest_wait_ms": "number — longest single wait for a place"
+            },
+            "ordering": "Sorted by interface name.",
+            "reading": "found_full close to offers on a steady flow means the consumer is slower than the producer (no size helps); found_full only on bursts means the queue is smaller than the burst (egress_buffer); given_up above 0 means a consumer stopped reading."
           }
         }
       },
@@ -90,10 +109,10 @@
         "runtime_snapshot": "Live frame and runtime state are read (read-only)."
       },
       "transformation_contract": {
-        "morphing": "A local state query becomes an explicit runtime snapshot of the current context across four orthogonal facets: identity, trace configuration, wrapper process states, and family lifecycle states.",
+        "morphing": "A local state query becomes an explicit runtime snapshot of the current context across five orthogonal facets: identity, trace configuration, wrapper process states, family lifecycle states, and the egress queues of the interfaces.",
         "invariants": [
           "read.state is strictly scoped to the current context. It does not access child context runtimes.",
-          "When params.include is absent, all four sections are included: context, trace, wrappers, families.",
+          "When params.include is absent, all five sections are included: context, trace, wrappers, families, interfaces.",
           "Unknown include keys are silently ignored.",
           "All sections reflect live frame state at the moment of execution."
         ],

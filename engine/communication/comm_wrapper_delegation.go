@@ -43,7 +43,7 @@ func (l *CommLoop) routeExternalWrapperDispatch(delivery junction.Delivery, wrap
 	}
 	boundary, ok := l.frame.CtxCommReg.ResolveWrapperBoundary(wrapperName)
 	if !ok || boundary == "" {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper boundary not found: %s", wrapperName)))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper boundary not found: %s", wrapperName)))
 		return
 	}
 	if shared.ContextAddr(l.frame.CtxId) != boundary {
@@ -57,46 +57,53 @@ func (l *CommLoop) enqueueExternalWrapperDispatch(delivery junction.Delivery, wr
 	message, _ := delivery.Message()
 	runtime := l.ifaces[wrapperName]
 	if runtime == nil || runtime.Type != EndpointWrapper || runtime.WrapperEgress == nil || runtime.State().Status != InterfaceRunning {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper interface unavailable: %s", wrapperName)))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper interface unavailable: %s", wrapperName)))
 		return
 	}
 	transport, ok := runtime.Impl.(wrapperDelegationTransport)
 	if !ok {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("wrapper interface has no delegation transport")))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("wrapper interface has no delegation transport")))
 		return
 	}
 	connection, ok := transport.currentWrapperConnection()
 	if !ok {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper has no active connection")))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper has no active connection")))
 		return
 	}
 	provider, ok := l.frame.CtxCommReg.(junction.WrapperDelegationProvider)
 	if !ok || provider.WrapperDelegations() == nil {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("wrapper delegation registry unavailable")))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("wrapper delegation registry unavailable")))
 		return
 	}
 	store := provider.WrapperDelegations()
 	handle, err := store.Grant(delivery, wrapperName, connection)
 	if err != nil {
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, err))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryUnavailable, wrapperName, err))
 		return
 	}
 	projected, ok := projectExternalWrapperMessage(message, wrapperName, boundary)
 	if !ok {
 		store.Revoke(handle)
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("invalid wrapper transport projection")))
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryInvalid, wrapperName, fmt.Errorf("invalid wrapper transport projection")))
 		return
 	}
 	item := wrapperInterfaceEgressItem{
 		Connection: connection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: handle},
+		Request:    &delivery,
 	}
-	select {
-	case runtime.WrapperEgress <- item:
+	outcome, waited := offer(runtime.WrapperEgress, item, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	switch outcome {
+	case offerAccepted:
 		return
-	case <-l.done:
+	case offerTimedOut:
 		store.Revoke(handle)
-		l.reportDeliveryFailure(message, newDeliveryResult(deliveryStopped, wrapperName, fmt.Errorf("communication stopped before wrapper dispatch")))
+		l.giveUpSlowInterface(wrapperName, runtime, waited)
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper %s is too slow: no place in its queue for %s", wrapperName, waited.Round(time.Millisecond))))
+	default:
+		store.Revoke(handle)
+		l.failExternalDispatch(delivery, message, newDeliveryResult(deliveryStopped, wrapperName, fmt.Errorf("communication stopped before wrapper dispatch")))
 	}
 }
 
@@ -156,10 +163,16 @@ func (l *CommLoop) enqueueExternalWrapperReturn(delivery junction.Delivery, wrap
 		Connection: connection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: handle},
 	}
-	select {
-	case runtime.WrapperEgress <- item:
+	outcome, waited := offer(runtime.WrapperEgress, item, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	switch outcome {
+	case offerAccepted:
 		return
-	case <-l.done:
+	case offerTimedOut:
+		l.revokeWrapperDelegation(handle)
+		l.giveUpSlowInterface(wrapperName, runtime, waited)
+		l.reportDeliveryFailure(message, newDeliveryResult(deliveryUnavailable, wrapperName, fmt.Errorf("wrapper %s is too slow: no place in its queue for %s", wrapperName, waited.Round(time.Millisecond))))
+	default:
 		l.revokeWrapperDelegation(handle)
 		l.reportDeliveryFailure(message, newDeliveryResult(deliveryStopped, wrapperName, fmt.Errorf("communication stopped before delegated wrapper response")))
 	}
@@ -344,11 +357,12 @@ func (l *CommLoop) refuseDelegatedWrapperCall(item IngressItem, problem *circula
 	if !ok || runtime == nil || runtime.Type != EndpointWrapper || runtime.WrapperEgress == nil || runtime.State().Status != InterfaceRunning {
 		return
 	}
-	select {
-	case runtime.WrapperEgress <- wrapperInterfaceEgressItem{
+	outcome, waited := offer(runtime.WrapperEgress, wrapperInterfaceEgressItem{
 		Connection: item.WrapperConnection,
 		Frame:      junction.WrapperFrame{Message: projected, Delegation: item.WrapperDelegation},
-	}:
-	case <-l.done:
+	}, runtime.egressWait, l.done)
+	runtime.egress.note(outcome, waited)
+	if outcome == offerTimedOut {
+		l.giveUpSlowInterface(item.IfaceName, runtime, waited)
 	}
 }

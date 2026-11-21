@@ -114,3 +114,39 @@ func (l *CommLoop) refuseExternalEgress(msg circulation.Message, source junction
 		Error: refusal.CapabilityDenied(circulation.ValueOriginCommunication),
 	}})
 }
+
+// externalDestinationUnavailable is what an external caller is told when its request could not be handed to its
+// destination inside this instance: not why, as for every refusal of an admitted request.
+const externalDestinationUnavailable = "external destination is unavailable"
+
+// failExternalDispatch reports that an admitted external request could not be handed to a wrapper. Its caller
+// is on another instance. An ordinary failure acknowledgement is addressed to its @ext_ name and the root drops
+// every response to such a name that did not go through the signed boundary, so the caller would hear nothing
+// until its silence timeout. It is answered through its own request instead, as every other refusal of an
+// admitted request is.
+func (l *CommLoop) failExternalDispatch(request junction.Delivery, msg circulation.Message, result deliveryResult) {
+	if l == nil || result.accepted() {
+		return
+	}
+	if result.Status == deliveryStopped || msg.Kind != circulation.ValueKindIntention || !msg.Intention.AwaitResponse {
+		l.reportDeliveryFailure(msg, result)
+		return
+	}
+	detail := fmt.Sprintf("delivery failed: target=%s status=%s", result.Target, result.Status)
+	if result.Err != nil {
+		detail = result.Err.Error()
+	}
+	l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonContextUnreachable, detail)
+	l.rejectAdmittedExternal(request, msg, externalDestinationUnavailable)
+}
+
+// failDelivery reports a message that could not be delivered. When it is a request that an admitted external
+// authority sent in (it is the source), its caller is on another instance and is answered through the request;
+// otherwise the ordinary failure acknowledgement goes back to whoever sent it.
+func (l *CommLoop) failDelivery(msg circulation.Message, result deliveryResult, source ...junction.Delivery) {
+	if hasExternalAuthority(source...) {
+		l.failExternalDispatch(source[0], msg, result)
+		return
+	}
+	l.reportDeliveryFailure(msg, result)
+}

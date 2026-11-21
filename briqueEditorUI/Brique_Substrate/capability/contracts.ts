@@ -153,7 +153,7 @@ const CONTRACTS: CapabilityContract[] = [
   ),
   contract("read.document", ["items"], ["total", "result"]),
   contract("read.meaning", ["input"], ["result"]),
-  contract("read.state", ["include"], ["context", "trace", "wrappers", "families"]),
+  contract("read.state", ["include"], ["context", "trace", "wrappers", "families", "interfaces"]),
   contract("read.structure", ["scope", "depth", "max_per_path"], ["root", "params"]),
   contract(
     "trace.inspect",

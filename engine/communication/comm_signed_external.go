@@ -228,5 +228,7 @@ func (l *CommLoop) reportSignedExternalEgressOutcome(report signedExternalEgress
 		l.failSignedExternalIntention(item.Message, "delivery_rejected", "signed external intention was rejected by the peer")
 		return
 	}
-	l.sendToTrace(item.Message, circulation.ValueTraceCommReject, "delivery_rejected", "signed external response was rejected by the peer")
+	// The peer's answer is part of the detail: a response that never arrives is otherwise
+	// impossible to tell from one that was never sent.
+	l.sendToTrace(item.Message, circulation.ValueTraceCommReject, "delivery_rejected", fmt.Sprintf("signed external response was rejected by the peer: %v", report.Outcome.Err))
 }

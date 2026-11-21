@@ -54,7 +54,7 @@ export function OperationalStateSpace({ selectedContext }: OperationalStateSpace
       const seq = ++seqRef.current;
       try {
         const result = await client.read.state(selectedContext, {
-          include: ["context", "trace", "wrappers", "families"],
+          include: ["context", "trace", "wrappers", "families", "interfaces"],
         });
         if (seq !== seqRef.current) return;
         if (result.ok && result.payload) {

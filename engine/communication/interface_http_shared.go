@@ -74,7 +74,11 @@ func controlIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, readLimit
 	}
 }
 
-func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, readLimit int64) http.HandlerFunc {
+func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, readLimit int64, addressRate int) http.HandlerFunc {
+	if addressRate <= 0 {
+		addressRate = defaultAddressRatePerSecond
+	}
+	budget := limits.Rate{PerSecond: addressRate, Burst: addressRate * addressBurstFactor}
 	if readLimit <= 0 || readLimit > wire.MaxEnvelopeBytes {
 		readLimit = wire.MaxEnvelopeBytes
 	}
@@ -88,7 +92,7 @@ func signedExternalIngressHandler(rt *InterfaceRuntime, done <-chan struct{}, re
 
 		// Before the body is read and before the queue: a stranger with no key can still fill
 		// the queue every peer shares, so each address has a budget of its own.
-		if !byAddress.Allow(remoteBucket(r.RemoteAddr), limits.Rate{PerSecond: addressRatePerSecond, Burst: addressBurst}) {
+		if !byAddress.Allow(remoteBucket(r.RemoteAddr), budget) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -153,11 +157,15 @@ func reportInterfaceEgressOutcome(rt *InterfaceRuntime, msg circulation.Message,
 	}
 }
 
-// The budget of one remote address on the signed listener. It is generous, because several
-// instances can share one address behind a gateway; it only has to stop a flood.
+// The budget of one remote address on the signed listener. It only has to stop a flood, so it
+// is generous: several instances can share one address behind a gateway, and an authenticated
+// peer sends here the answers to the calls this instance made, at the rate it made them. A
+// budget below that rate refuses an answer with 429, the caller is never told, and it waits
+// for ever (measured: one answer in 600 at about 600 calls a second between two instances).
+// The interface key address_rate sets it; the burst is addressBurstFactor times the rate.
 const (
-	addressRatePerSecond = 200
-	addressBurst         = 400
+	defaultAddressRatePerSecond = 2000
+	addressBurstFactor          = 2
 )
 
 // remoteBucket names the budget an address draws from: its host, and for IPv6 its /64, since

@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"brique_engine/circulation"
 	"brique_engine/junction"
@@ -105,6 +107,10 @@ type InterfaceEgressOutcome struct {
 	Err        error
 	// Reason, when set, is the reason the caller's answer carries (default: context_unreachable).
 	Reason string
+	// Request, when set, is the external request this message carries to a wrapper. Its caller is on another
+	// instance: it is answered through that request (see failExternalDispatch), not by an ordinary failure
+	// acknowledgement, which the root refuses to send to an @ext_ name.
+	Request *junction.Delivery
 }
 
 type interfaceEgressReport struct {
@@ -135,6 +141,8 @@ type signedExternalIngressItem struct {
 type wrapperInterfaceEgressItem struct {
 	Connection junction.WrapperConnection
 	Frame      junction.WrapperFrame
+	// Request is the admitted external request this frame dispatches, when it is one.
+	Request *junction.Delivery
 }
 
 type InterfaceRuntime struct {
@@ -176,6 +184,13 @@ type InterfaceRuntime struct {
 	// machineDirectory is the machine's security directory, "" when there is none; an HTTPS
 	// interface looks there for the files its configuration does not name.
 	machineDirectory string
+
+	// egressWait is how long a routing loop waits for a place in a full queue of this interface; 0 = default.
+	egressWait time.Duration
+	// egress counts what the routing loops met in front of this interface (see comm_offer.go).
+	egress egressCounters
+	// disconnecting is set while the connection of a slow consumer is being closed.
+	disconnecting atomic.Bool
 
 	stateMu   sync.RWMutex
 	status    InterfaceStatus

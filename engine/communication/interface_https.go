@@ -37,6 +37,7 @@ package comm
 // - addr: ":8443" (default)
 // - path: "/brique" (default)
 // - read_limit, req_timeout, write_timeout, read_timeout, idle_timeout
+// - address_rate: requests a second one remote address may send to the signed listener (default 2000, burst twice that)
 // - targets: map["ext_<pubkey>"] => "https://host:8443/brique"
 //
 // TLS config keys (suggested; add to configuration package as constants if you want):
@@ -83,6 +84,7 @@ type HttpsInterface struct {
 	path           string // "/brique"
 
 	readLimit    int64
+	addressRate  int
 	writeTimeout time.Duration
 	readTimeout  time.Duration
 	idleTimeout  time.Duration
@@ -287,6 +289,11 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 		readLimit = shared.EffectiveControlMessageLimit(int64(v))
 	}
 
+	addressRate := 0
+	if v, ok := cfg[configuration.KeyIntAddressRate].(float64); ok && v > 0 {
+		addressRate = int(v)
+	}
+
 	reqTimeout := 5 * time.Second
 	if v, ok := cfg[configuration.KeyIntRqTO].(float64); ok && v > 0 {
 		reqTimeout = time.Duration(v) * time.Millisecond
@@ -350,6 +357,7 @@ func newHTTPSInterfaceImpl(rt *InterfaceRuntime, ic InterfaceCfg) (*HttpsInterfa
 		addr:           addr,
 		path:           path,
 		readLimit:      readLimit,
+		addressRate:    addressRate,
 		reqTimeout:     reqTimeout,
 		writeTimeout:   writeTimeout,
 		readTimeout:    readTimeout,
@@ -515,7 +523,7 @@ func (h *HttpsInterface) Start() error {
 
 	msgPath := h.path + "/msg"
 	if h.rt.SignedExternalIngress != nil {
-		mux.HandleFunc(msgPath, signedExternalIngressHandler(h.rt, h.done, h.readLimit))
+		mux.HandleFunc(msgPath, signedExternalIngressHandler(h.rt, h.done, h.readLimit, h.addressRate))
 	} else {
 		mux.HandleFunc(msgPath, controlIngressHandler(h.rt, h.done, h.readLimit))
 	}
@@ -727,7 +735,34 @@ func (h *HttpsInterface) sendSignedExternal(item signedExternalEgressItem) Inter
 	if err := shared.ValidateControlMessageBytes(int64(len(item.Envelope)), h.readLimit); err != nil {
 		return InterfaceEgressOutcome{Definitive: true, Err: err}
 	}
-	return sendHTTPControl(h.ctx, h.httpClient(), strings.TrimRight(item.Endpoint, "/")+"/msg", item.Envelope)
+	target := strings.TrimRight(item.Endpoint, "/") + "/msg"
+	return sendWithRetry(func() InterfaceEgressOutcome {
+		return sendHTTPControl(h.ctx, h.httpClient(), target, item.Envelope)
+	}, signedRetryBackoff, h.done)
+}
+
+// signedRetryBackoff are the pauses before the retries of a signed message the peer refused as
+// overloaded. The peer refuses before it queues anything (429 over its budget, 503 queue full), so a
+// retry cannot run a request twice, and a second answer for the same call is rejected by the registry
+// of awaited answers. Without a retry, an answer refused for a moment is lost and its caller waits for
+// the silence timeout. The loop is sequential: the pauses add up to 375 ms at most.
+var signedRetryBackoff = []time.Duration{25 * time.Millisecond, 100 * time.Millisecond, 250 * time.Millisecond}
+
+// sendWithRetry runs send, and again after each pause while the peer answers 429 or 503.
+func sendWithRetry(send func() InterfaceEgressOutcome, backoff []time.Duration, stop <-chan struct{}) InterfaceEgressOutcome {
+	outcome := send()
+	for _, pause := range backoff {
+		if outcome.Err == nil || (outcome.StatusCode != http.StatusTooManyRequests && outcome.StatusCode != http.StatusServiceUnavailable) {
+			return outcome
+		}
+		select {
+		case <-time.After(pause):
+		case <-stop:
+			return outcome
+		}
+		outcome = send()
+	}
+	return outcome
 }
 
 // Close

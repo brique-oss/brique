@@ -561,6 +561,21 @@ reserved → dispatched → running → completed
   does not count against the ledger for good, and a duplicate is still suppressed;
 * torn tails are truncated on recovery, corruption is refused.
 
+**What is synchronized.** Only the reservation (`reserved`) is synchronized before it is
+acknowledged, in groups. The transitions that follow (`dispatched`, `running`, `completed`,
+`rejected`, `outcome_unknown`) are **written** to the journal but not synchronized at once; the next
+group commit persists them, a flush every 250 ms does when none comes, and so do `Close` and the
+compaction. So a call costs one shared synchronization, not three in series (measured: 60 to 140 calls
+a second in sequence and about 90 to 1 100 a second at 32 in flight between two instances, on APFS).
+A crash of the **process** loses nothing that was written. A failure of the **machine** can lose the
+unsynchronized transitions: the entry then comes back in an earlier unfinished state, which recovery
+turns into `outcome_unknown`; it never comes back before its reservation, so a request is never run a
+second time. The window for a record to be lost is at most 250 ms (before, it was the few
+milliseconds between the write and the synchronization of a batch). A machine failure that leaves a
+hole **inside** that window, with valid records after it, is a corrupted journal and recovery fails
+closed, as it does for any corrupted record: only a record cut at the very end is truncated. This
+was not tested on a real power cut. A write error on a transition poisons the ledger.
+
 **Maintenance.** At startup and every minute the service compacts the journal without the entries
 that are finished and past their retention (default an hour after expiry; an unfinished entry a day
 later). One rewrite and one sync, about 0.2 s at 100 000 entries, only when it is worth it (many
@@ -581,6 +596,25 @@ increasing sequences and refresh the silence deadline, one `final` response cons
 Wrong principal, wrong hash, duplicate, regressing, unsolicited and post-final responses are rejected.
 Shutdown or restart of the waiting instance reports `response_state_lost` and never an automatic
 replacement intention.
+
+**A request that fails inside the instance after it was admitted.** The caller is on another instance, so
+it is answered through its own request, with `unavailable` ("external destination is unavailable"), and
+never with the reason: this holds when the wrapper it was meant for has no connection, is too slow to take
+it, or loses its connection before it answers. An ordinary failure acknowledgement is addressed to the
+caller's `@ext_` name, and the root drops every response to such a name that did not go through the signed
+boundary, so before this the caller heard nothing and waited for its silence timeout (measured: 120 calls
+to a context whose wrapper was stopped, none answered in 25 s; now all 120 answered in a few seconds).
+The same holds when the context it is for is unknown or cannot take it (the hop between contexts); a local
+message that fails there keeps the ordinary acknowledgement, and nothing is signed to a peer for it. When the
+instance is stopping, the ordinary acknowledgement is used and the caller's own silence timeout ends the wait.
+
+**How long a call waits.** A call to a peer that awaits an answer ends with an error after
+`external_call_silence_ms` (default 2 minutes, at most 30) with nothing heard; any `running` response
+renews the wait, and the absolute limit stays 24 hours. It was 30 minutes, which kept a caller waiting that
+long for an answer lost on the way. A capacity that a peer calls and that works longer than the silence
+without answering must call `notify_running`. A signed message the peer refuses as overloaded (429, 503) is
+sent again three times; the peer refuses before it queues anything and a second answer is rejected by the
+registry above, so a retry never runs a request twice.
 
 ### 6.6 Admission sequence
 
@@ -615,9 +649,13 @@ at most 4096 waits, each silent at most 30 minutes and at most 24 hours in all.
 Two budgets bound what a caller makes the instance do, each in memory and bounded in size:
 
 - **By address, before the queue.** The signed listener gives each remote address (an IPv6 address
-  counts by its /64) 200 requests per second with a burst of 400, and answers `429` above it. A
-  stranger with no key therefore cannot fill the queue every peer shares. The budget is generous,
-  because several instances can sit behind one gateway.
+  counts by its /64) 2 000 requests per second with a burst of 4 000, and answers `429` above it. A
+  stranger with no key therefore cannot fill the queue every peer shares. The budget is generous
+  because it is not only a flood guard: several instances can sit behind one gateway, and an
+  authenticated peer sends here the **answers** to the calls this instance made, at the rate it
+  made them. A budget below that rate refuses an answer, nothing retries it, and the caller waits
+  for ever (this was 200 and 400, and lost one answer in 600 at about 600 calls a second between
+  two instances). The interface key `address_rate` sets it; the burst is twice the rate.
 - **By principal, after the signature.** A request over the budget of its authenticated principal
   (§3.8) is not run. A caller that waits for an answer gets the one a saturated instance gives
   (`unavailable`, "request rate exceeded"), through the replay ledger like any admitted request; a
@@ -1122,6 +1160,28 @@ the template runs locally only.
 What she cannot do is refused identically to what does not exist; every refusal is in the journal
 (`brique-sec --root $ROOT denials --principal alice`).
 
+**Give a peer its own outbound interface (when a peer may stop answering).** All the peers named
+`--interface outerCtx` share that one interface, which sends one message after the other with a 5 s
+timeout: a peer that accepts the connection and never answers holds back the sends to every other
+peer. (Measured, one healthy peer and one stopped: the calls to the healthy one waited up to 20 s, and
+with an answer silence of 6 s 3 of 8 failed.) Give each peer that matters an outbound-only HTTPS
+interface in the root `context.json`, and name it in `peer add`:
+
+```json
+{ "name": "to_alice", "type": "outerCtx", "driver": "https",
+  "config": { "ingress_enabled": false, "egress_enabled": true, "path": "/brique" } }
+```
+
+```bash
+brique-sec --root $ROOT peer add alice --audience <alice's instance name> --interface to_alice --target https://alice.example:8443/brique
+```
+
+Each peer then has its own queue, its own sending goroutine and its own timeout (measured: the healthy
+peer at 9 ms with the other one stopped). **Inbound there is still one door:** every peer's signed
+requests and answers arrive through the one `outerCtx` listener, share its queue of 64 places and its
+verification workers (at most 16), and are told apart only by the budget of the remote address (§6.8.1)
+and, after the signature, the budget of the principal. A per-peer inbound interface does not exist.
+
 **Renew or regenerate the certificate.** `brique-sec --root $ROOT tls init --host … --force` makes a new
 pair; the engine serves it within a couple of seconds, with no restart. Peers who trust certificates
 with `tls trust` add the new one the same way, and their engine picks it up as it changes. (A
@@ -1241,7 +1301,7 @@ Apple M4, APFS, single runs.
 |---|---|---|
 | W1 | High for portability | Run the whole suite on windows; the port is written, not run |
 | V2 | Medium | Power loss is not modelled (the campaigns kill the process; they do not drop unsynced writes); the egress commit of a cached answer is not killed mid-way |
-| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst, with the request budget lifted: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A does not retry a 503 automatically; a client that bursts must retry `unavailable` itself |
+| V3 | Medium | Missing measurements: latency percentiles and an end-to-end admission benchmark, a maximum-size policy, saturation behaviour; the constants in code do not yet cite the numbers above. Measured burst, with the request budget lifted: 150 simultaneous calls from one principal give about 80 served and 70 refused at once with `unavailable` (B's signed ingress queue holds 64 and answers 503 when full, by design: it sits before signature verification; A's egress queue holds 16). A sender now retries a signed message the peer refused with 429 or 503 three times (25, 100 and 250 ms) before it reports it; a client that bursts beyond that must still retry `unavailable` itself |
 | V4 | Low | Replay recovery allocates about 280 times per entry (1 GiB at the maximum) |
 | V5 | Low | Fuzz follow-ups: UUID and `@` address parsing, extractor normalization, WebSocket framing; continuous fuzzing in CI |
 | V6 | Low | A published corpus of signed-envelope vectors (only the wrapper frame has one) |

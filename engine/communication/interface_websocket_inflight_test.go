@@ -33,9 +33,9 @@ func TestInflightLosingAConnectionAnswersOnlyItsOwnAwaitedIntentions(t *testing.
 	if len(lost) != 2 || tracker.size() != 1 {
 		t.Fatalf("losing the connection must return its two intentions and keep the other connection's: %d lost, %d left", len(lost), tracker.size())
 	}
-	for _, request := range lost {
-		if request.Intention.Params != nil {
-			t.Fatalf("an entry must not keep the parameters of the request: %v", request.Intention.Params)
+	for _, entry := range lost {
+		if entry.request.Intention.Params != nil {
+			t.Fatalf("an entry must not keep the parameters of the request: %v", entry.request.Intention.Params)
 		}
 	}
 	if again := tracker.lose(a); len(again) != 0 {
@@ -69,5 +69,31 @@ func TestInflightNilTrackerIsHarmless(t *testing.T) {
 	tracker.settle(answer("x", "ok"))
 	if tracker.lose(junction.WrapperConnection{}) != nil {
 		t.Fatal("a nil tracker has nothing to lose")
+	}
+}
+
+// An external request written to a wrapper keeps the delivery it came in on, so that its caller, on another
+// instance, is answered through it when the connection is lost; an ordinary request keeps none.
+func TestInflightTrackerKeepsTheExternalRequest(t *testing.T) {
+	tracker := newInflightTracker()
+	connection := junction.WrapperConnection{}
+	external := junction.Delivery{}
+	tracker.add(connection, awaited("external"), &external)
+	tracker.add(connection, awaited("local"))
+	lost := tracker.lose(connection)
+	if len(lost) != 2 {
+		t.Fatalf("lost %d entries, want 2", len(lost))
+	}
+	for _, entry := range lost {
+		switch entry.request.Intention.IntentionID {
+		case "external":
+			if entry.external != &external {
+				t.Fatal("the external request lost its delivery")
+			}
+		case "local":
+			if entry.external != nil {
+				t.Fatal("an ordinary request must not carry one")
+			}
+		}
 	}
 }

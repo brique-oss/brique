@@ -30,6 +30,7 @@ package comm
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -175,11 +176,12 @@ func (w *wsInterface) onWrapperDisconnect(connection junction.WrapperConnection)
 	if w == nil || w.rt == nil || w.rt.ReportEgressOutcome == nil {
 		return
 	}
-	for _, request := range w.inflight.lose(connection) {
-		w.rt.ReportEgressOutcome(request, InterfaceEgressOutcome{
+	for _, lost := range w.inflight.lose(connection) {
+		w.rt.ReportEgressOutcome(lost.request, InterfaceEgressOutcome{
 			Definitive: true,
 			Err:        errors.New("wrapper connection lost before the response"),
 			Reason:     circulation.ValueReasonConnectionLost,
+			Request:    lost.external,
 		})
 	}
 }
@@ -282,10 +284,14 @@ func (w *wsInterface) WriteLoop() error {
 				rawEgress = nil
 				continue
 			}
-			if err := w.handle.Send(msg); err == nil && w.rt.Type == EndpointWrapper {
+			err := w.handle.Send(msg)
+			if err == nil && w.rt.Type == EndpointWrapper {
 				if connection, ok := w.currentWrapperConnection(); ok {
 					w.inflight.add(connection, msg)
 				}
+			}
+			if err != nil {
+				w.reportUnsentToWrapper(msg, err, nil)
 			}
 		case item, ok := <-wrapperEgress:
 			if !ok {
@@ -294,15 +300,38 @@ func (w *wsInterface) WriteLoop() error {
 			}
 			if err := w.sendWrapperFrame(item.Connection, item.Frame); err != nil {
 				w.revokeWrapperHandle(item.Frame.Delegation)
-				if w.rt.ReportEgressOutcome != nil {
-					w.rt.ReportEgressOutcome(item.Frame.Message, InterfaceEgressOutcome{Err: err})
-				}
+				w.reportUnsentToWrapper(item.Frame.Message, err, item.Request)
 			} else {
-				w.inflight.add(item.Connection, item.Frame.Message)
+				w.inflight.add(item.Connection, item.Frame.Message, item.Request)
 			}
 		}
 	}
 	return nil
+}
+
+// reportUnsentToWrapper tells the caller of a message that could not be written to a wrapper. A
+// WebSocket frame is written whole or not at all, and the connection is dropped on a failed write,
+// so the wrapper certainly did not receive it: the awaited call is answered `connection_lost`
+// instead of waiting for an answer that cannot come. A message nobody awaits is only traced. An
+// interface that is not a wrapper (a UI) keeps its rule: it reconnects and subscribes again.
+func (w *wsInterface) reportUnsentToWrapper(msg circulation.Message, err error, request *junction.Delivery) {
+	if w == nil || w.rt == nil || w.rt.Type != EndpointWrapper || w.rt.ReportEgressOutcome == nil {
+		return
+	}
+	w.rt.ReportEgressOutcome(msg, InterfaceEgressOutcome{
+		Definitive: true,
+		Err:        fmt.Errorf("message not written to the wrapper: %w", err),
+		Reason:     circulation.ValueReasonConnectionLost,
+		Request:    request,
+	})
+}
+
+// Disconnect closes the current connection of the consumer, which answers `connection_lost` to what
+// was awaited on it (see onWrapperDisconnect). Closing is quick: it does not wait for a write in progress.
+func (w *wsInterface) Disconnect(reason string) {
+	if w != nil && w.handle != nil {
+		_ = w.handle.Close()
+	}
 }
 
 func (w *wsInterface) Close() error {
