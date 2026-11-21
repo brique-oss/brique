@@ -84,6 +84,53 @@ func TestCatalogReaderInThreeCommands(t *testing.T) {
 	}
 }
 
+func TestPublicWebRightsAreConfiguredWithoutAnAccountOrKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "security")
+	mustOK(t, dir, "init", "--instance", "prod-a")
+	mustOK(t, dir, "principal", "add", "public.web", "--kind", "public")
+	mustOK(t, dir, "grant", "add", "public.web", "read", "/root/public/**")
+	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Génération g000002 installée") {
+		t.Fatalf("apply public policy:\n%s", out)
+	}
+	if out := mustOK(t, dir, "simulate", "public.web", "read", "/root/public/a#matter:m"); !strings.HasPrefix(out, "PERMIS") {
+		t.Fatalf("public read simulation:\n%s", out)
+	}
+	if _, stderr, code := sec(t, dir, "principal", "add", "visitors", "--kind", "public"); code == 0 || !strings.Contains(stderr, "public.web") {
+		t.Fatalf("non-reserved public principal = code %d, stderr %q", code, stderr)
+	}
+}
+
+func TestReservedBrowserActorNeedsAnExplicitGrant(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "security")
+	public, _, _ := ed25519.GenerateKey(nil)
+	mustOK(t, dir, "init", "--instance", "prod-a")
+	mustOK(t, dir, "principal", "add", "peer-a", "--kind", "service", "--key", base64.RawURLEncoding.EncodeToString(public))
+	mustOK(t, dir, "grant", "add", "peer-a", "read", "/root/public/**")
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "REFUSÉ") || !strings.Contains(out, "déclaré") {
+		t.Fatalf("unbound browser actor:\n%s", out)
+	}
+	mustOK(t, dir, "grant", "add", "peer-a", "read", "/root/public/ui/**", "--actor", "brique.ui")
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/ui/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "PERMIS") {
+		t.Fatalf("bound browser actor:\n%s", out)
+	}
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/other#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "REFUSÉ") {
+		t.Fatalf("browser actor escaped its binding:\n%s", out)
+	}
+}
+
+func TestLocalUIAuthorityIsConfiguredAsAKeylessLocalPrincipal(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "security")
+	mustOK(t, dir, "init", "--instance", "prod-a")
+	mustOK(t, dir, "principal", "add", "local.ui", "--kind", "local")
+	mustOK(t, dir, "grant", "add", "local.ui", "read", "/root/local-ui/**")
+	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Génération g000002 installée") {
+		t.Fatalf("apply local UI policy:\n%s", out)
+	}
+	if out := mustOK(t, dir, "simulate", "local.ui", "read", "/root/local-ui/a#matter:m"); !strings.HasPrefix(out, "PERMIS") {
+		t.Fatalf("local UI simulation:\n%s", out)
+	}
+}
+
 func TestStrictFlowThroughTheCommandLine(t *testing.T) {
 	work := t.TempDir()
 	dir := filepath.Join(work, "security")

@@ -46,6 +46,8 @@ func buildReflexiveAccessRegistry() (*access.Registry, error) {
 		"read.state":     reflexiveContextExtractor("stat"),
 		"read.capacity":  reflexiveReadCapacityExtractor,
 		"read.structure": reflexiveContextExtractor("read_recursive"),
+		"ui.list":        reflexiveNoResourceExtractor,
+		"ui.open":        reflexiveUIOpenExtractor,
 		// Maintenance of the projection is the control verb on the context it
 		// covers (model §5.3): rebuilding or syncing rewrites the projection of the
 		// whole subtree, which reading it does not authorize.
@@ -65,6 +67,14 @@ func buildReflexiveAccessRegistry() (*access.Registry, error) {
 		"edit.get_element_template": reflexiveNoResourceExtractor,
 	}
 	return access.NewFamilyRegistry("reflexive", extractors, access.DefaultMaxAccesses)
+}
+
+func reflexiveUIOpenExtractor(_ shared.ContextAddr, in circulation.Intention) ([]access.ResourceAccess, error) {
+	contextPath, _, err := parseUIOpenParams(in)
+	if err != nil {
+		return nil, err
+	}
+	return []access.ResourceAccess{{Kind: circulation.ValueContext, Context: shared.ContextAddr(contextPath), Action: "read"}}, nil
 }
 
 func reflexiveTraceInspectExtractor(destination shared.ContextAddr, intention circulation.Intention) ([]access.ResourceAccess, error) {

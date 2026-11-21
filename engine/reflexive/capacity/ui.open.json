@@ -1,0 +1,32 @@
+{
+  "brique": {
+    "cap_name": "ui.open",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_ui.go",
+    "function": "capUIOpen"
+  },
+  "objective": {
+    "name": "ui.open",
+    "description": "Resolve one active and authorized browser UI to its publication-relative URL."
+  },
+  "functional": {
+    "#root": {
+      "role": "Resolve a logical UI coordinate without creating a session or triggering a build.",
+      "inputs": {
+        "params": {
+          "contextPath": "canonical logical Context path under /root",
+          "uiName": "exact UI name"
+        }
+      },
+      "outputs": {
+        "payload": "{contextPath, uiName, url}"
+      },
+      "invariants": [
+        "The Context must be active and readable by the admitted caller.",
+        "The URL is relative to the current instance origin.",
+        "No session or build is created."
+      ]
+    }
+  },
+  "subjective": {}
+}

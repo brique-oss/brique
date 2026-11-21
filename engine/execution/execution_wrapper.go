@@ -192,8 +192,10 @@ func (l *ExecutionLoop) ensureWrapperReady(wrapper string, in circulation.Intent
 		return false
 	}
 
-	// If readiness already failed for current process, fail-fast
-	if st.ReadyErr != nil {
+	// If readiness already failed for current process, fail-fast. A failure that came from a
+	// secret is not final: the value or the right may have been added since, so the start is
+	// tried again (the needStart branch below clears it).
+	if st.ReadyErr != nil && !isWrapperSecretError(st.ReadyErr) {
 		unlockState()
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused, map[string]any{circulation.KeyReason: circulation.ValueReasonWrapperFailedReady}, "wrapper failed to be ready"))
 		return true
@@ -705,6 +707,11 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	if len(cfg.Run.Cmd) == 0 {
 		return 0, fmt.Errorf("wrapper %s: empty run cmd", cfg.Name)
 	}
+	// The secrets come first: a wrapper that cannot be given what it declared does not start.
+	secretEnv, err := l.wrapperSecretEnv(cfg)
+	if err != nil {
+		return 0, err
+	}
 	sourceDir, ok := l.wrapperSourceDir(cfg.Name)
 	if !ok {
 		return 0, fmt.Errorf("wrapper %s: missing context dir", cfg.Name)
@@ -751,7 +758,13 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	}
 
 	// environment: inherit current process env + engine/runtime overrides
-	cmd.Env = mergeEnv(os.Environ(), l.wrapperLaunchEnv(cfg.Name, cfg.Run.Env))
+	// A secret wins over an inherited variable of the same name and over run.env (which a
+	// declaration cannot name, see wrapperSecretEnv).
+	launchEnv := l.wrapperLaunchEnv(cfg.Name, cfg.Run.Env)
+	for name, value := range secretEnv {
+		launchEnv[name] = value
+	}
+	cmd.Env = mergeEnv(os.Environ(), launchEnv)
 
 	// Wrapper runtimes are long-lived child processes. Do not inherit the test
 	// process stdout/stderr directly, otherwise lingering wrapper shutdown can

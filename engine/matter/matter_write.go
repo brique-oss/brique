@@ -58,6 +58,12 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	if l.refuseWhenDiskLow(in) {
+		return
+	}
+	if l.refuseWhenHeavyBudgetExceeded(in) {
+		return
+	}
 	params := in.Params
 	if params == nil {
 		params = map[string]any{}
@@ -98,6 +104,12 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 	if openHTTP && hasDataUpdate {
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "data and http_data=true are mutually exclusive"))
+		return
+	}
+	expectedSHA256, shaErr := optionalExpectedSHA256(params)
+	if shaErr != nil || (!openHTTP && expectedSHA256 != "") {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "expected_sha256 requires http_data=true and a hexadecimal SHA-256 digest"))
 		return
 	}
 
@@ -303,6 +315,9 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": inlineLimit}, "inline substance exceeds the configured limit; use http_data=true"))
 			return
 		}
+		if l.refuseWhenByteBudgetExceeded(in, int64(len(payloadBytes))) {
+			return
+		}
 	}
 
 	// Ensure matter root exists (flat layout: shared by all matter ids).
@@ -421,7 +436,8 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			sourceIntentionID = in.Correlation.RootIntentionID
 		}
 
-		h, err := l.subHTTP.OpenWriteLease(
+		h, err := l.subHTTP.OpenWriteLeaseFor(
+			l,
 			l.frame.ContextDir,
 			matterID,
 			subExt,
@@ -430,6 +446,7 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			synMap,
 			stagedMatterBytes,
 			0,
+			expectedSHA256,
 		)
 		if err != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
@@ -442,7 +459,12 @@ func (l *MatterLoop) capMatterWrite(msg circulation.Message) {
 			return
 		}
 
-		if !l.bindLeaseToCaller(h.RID, in, "write") {
+		if failure := l.bindLeaseToCallerResult(h.RID, in, "write"); failure != leaseBindOK {
+			if failure == leaseBindQuota {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonQuotaReached}, "lease quota reached"))
+				return
+			}
 			l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "lease authorization unavailable"))
 			return
@@ -674,6 +696,9 @@ func (l *MatterLoop) finalizeWriteLeaseAfterUpload(lz *lease, nBytes int64) (int
 		return 0, "", fmt.Errorf("finalize: missing staged matter path")
 	}
 
+	if !l.subHTTP.chargeLeaseBytes(lz, nBytes) {
+		return 0, "", fmt.Errorf("finalize: byte budget of the caller is spent")
+	}
 	mu := l.lockFor(matterLockKey(matterID))
 	if mu == nil {
 		return 0, "", fmt.Errorf("finalize: missing matter lock")

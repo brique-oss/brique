@@ -61,9 +61,16 @@ func TestMatterLoop_N1_MLO_00_DataPlaneConfig(t *testing.T) {
 		configuration.KeyMatterInlineMaxBytes: int64(1024),
 		configuration.KeyMatterMaxUploadBytes: int64(2048),
 		configuration.KeyMatterLeaseTTLms:     int64(1500),
+		configuration.KeyMatterPublicURL:      "https://engine.example/brique",
+		configuration.KeyMatterLeaseListen:    "127.0.0.1:9000",
+		configuration.KeyMatterMaxTransfers:   int64(12),
+		configuration.KeyMatterLeaseMaxLifeMS: int64(9000),
+		configuration.KeyMatterReadIdleMS:     int64(7000),
 	})
-	if l.inlineMaxBytes != 1024 || l.subHTTP.maxUploadBytes != 2048 || l.subHTTP.defaultTTL != 1500*time.Millisecond {
-		t.Fatalf("unexpected matter data-plane config: inline=%d upload=%d ttl=%s", l.inlineMaxBytes, l.subHTTP.maxUploadBytes, l.subHTTP.defaultTTL)
+	if l.inlineMaxBytes != 1024 || l.subHTTP.maxUploadBytes != 2048 || l.subHTTP.defaultTTL != 1500*time.Millisecond ||
+		l.subHTTP.publicURL != "https://engine.example/brique" || l.subHTTP.listenAddr != "127.0.0.1:9000" || cap(l.subHTTP.transferSlots) != 12 ||
+		l.subHTTP.leaseMaxLife != 9*time.Second || l.subHTTP.readIdleTimeout != 7*time.Second {
+		t.Fatalf("unexpected matter data-plane config: inline=%d upload=%d ttl=%s public=%q listen=%q", l.inlineMaxBytes, l.subHTTP.maxUploadBytes, l.subHTTP.defaultTTL, l.subHTTP.publicURL, l.subHTTP.listenAddr)
 	}
 }
 
@@ -453,5 +460,27 @@ func TestMatterLoop_N1_MLO_06_LifecycleAndLoopInbox(t *testing.T) {
 	l.Start()
 	if l.State() != shared.FamilyStopped {
 		t.Fatalf("loop must not restart after stop")
+	}
+}
+
+func TestMatterLoopM3ControlPlaneAvailableWhenTransferCapacityFull(t *testing.T) {
+	l, commCh, _ := newMatterLoopHarness(t)
+	l.subHTTP.transferSlots = make(chan struct{}, 2)
+	l.subHTTP.transferSlots <- struct{}{}
+	l.subHTTP.transferSlots <- struct{}{}
+	l.Start()
+	t.Cleanup(l.Stop)
+
+	l.deliveryIn <- localTestDelivery(circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: "m3-control-plane", From: circulation.Address{Context: "/ctx/caller"},
+			To: circulation.Address{Cap: "unknown_cap"}, Correlation: &circulation.Correlation{},
+		},
+	})
+	response := recvMatterLoopMsg(t, commCh, "M3 control-plane response while transfers are full")
+	if response.Response.IntentionID != "m3-control-plane" || response.Response.Error == nil ||
+		response.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonUnknownCap {
+		t.Fatalf("unexpected control-plane response: %#v", response)
 	}
 }

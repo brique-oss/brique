@@ -353,7 +353,8 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 				"missing context dir"
 		}
 
-		h, err := l.subHTTP.OpenReadRangeLease(
+		h, err := l.subHTTP.OpenReadRangeLeaseFor(
+			l,
 			ctxDir,
 			matterID,
 			ext,
@@ -367,7 +368,12 @@ func (l *MatterLoop) capMatterReadData(msg circulation.Message, matterID string,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: err.Error(), circulation.KeyMatterID: matterID},
 				"failed to open substance read lease"
 		}
-		if !l.bindLeaseToCaller(h.RID, msg.Intention, "read") {
+		if failure := l.bindLeaseToCallerResult(h.RID, msg.Intention, "read"); failure != leaseBindOK {
+			if failure == leaseBindQuota {
+				return map[string]any{}, false, circulation.ValueCodeRefused,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonQuotaReached, circulation.KeyMatterID: matterID},
+					"lease quota reached"
+			}
 			return map[string]any{}, false, circulation.ValueCodeUnauthorized,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure, circulation.KeyMatterID: matterID},
 				"lease authorization unavailable"

@@ -1249,6 +1249,8 @@ func checkpointProjection(exec sqlExec) {
 // sqlExec is implemented by *sql.DB and *sql.Tx (and can be adapted).
 type sqlExec interface {
 	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 // createMeaningSchema

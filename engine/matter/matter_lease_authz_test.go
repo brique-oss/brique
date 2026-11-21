@@ -17,6 +17,7 @@
 package matter
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ import (
 	"brique_engine/security/trust"
 	"brique_engine/security/wire"
 	"brique_engine/shared"
+	"brique_engine/signedtransport"
 )
 
 // leaseWorld is a Matter loop with an HTTP getter and a policy that can be
@@ -115,11 +118,17 @@ func (w *leaseWorld) activate(rights map[string][]string, principalStatus string
 		resources = []trust.ResourcePermission{}
 	}
 	policy := trust.Policy{
-		Format: trust.PolicyFormat, FormatVersion: trust.PolicyFormatVersion, PolicyID: "main", InstanceID: "matter-instance",
+		Format: trust.PolicyFormat, FormatVersion: trust.PolicyFormatVersionV4, PolicyID: "main", InstanceID: "matter-instance",
 		Revision: strconv.Itoa(w.revision), PreviousPolicyHash: w.policyHash, IssuedAt: "2026-10-24T12:00:00Z",
 		Principals: []trust.Principal{{
 			PrincipalID: "partner-a", Kind: "instance", Status: principalStatus, ScopeIDs: []string{"s"},
 			SigningKeys: []trust.SigningKey{{KeyID: w.keyID, Algorithm: trust.SigningAlgorithm, PublicKey: w.messagePub, Status: "active"}},
+		}, {
+			PrincipalID: trust.LocalUIPrincipalID, Kind: trust.PrincipalKindLocal, Status: "active", ScopeIDs: []string{"s"},
+			SigningKeys: []trust.SigningKey{},
+		}, {
+			PrincipalID: trust.PublicWebPrincipalID, Kind: trust.PrincipalKindPublic, Status: "active", ScopeIDs: []string{"s"},
+			SigningKeys: []trust.SigningKey{},
 		}},
 		Scopes: []trust.Scope{{
 			ScopeID: "s", Description: "lease test",
@@ -160,6 +169,10 @@ func (w *leaseWorld) requestFrom(id, from string) (circulation.Intention, func()
 
 // requestAs signs the request with an actor in the protected header.
 func (w *leaseWorld) requestAs(id, from, actor string) (circulation.Intention, func()) {
+	return w.requestAsRoute(id, from, actor, "")
+}
+
+func (w *leaseWorld) requestAsRoute(id, from, actor, routeID string) (circulation.Intention, func()) {
 	t := w.t
 	payload := []byte(`{"kind":"intention","intention":{"intention_id":"` + id + `","await_response":true,"to":{"context":"/root/chat","cap":"matter.read","type":"matter"},"from":{"context":"` + from + `","cap":"","type":"user"},"params":{"matter_id":"allowed"}}}`)
 	protected := wire.Protected{
@@ -176,7 +189,12 @@ func (w *leaseWorld) requestAs(id, from, actor string) (circulation.Intention, f
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := junction.AdmitExternalIntention(verified)
+	var delivery junction.Delivery
+	if routeID == "" {
+		delivery, err = junction.AdmitExternalIntention(verified)
+	} else {
+		delivery, err = junction.AdmitExternalIntentionFromRoute(verified, routeID)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +202,56 @@ func (w *leaseWorld) requestAs(id, from, actor string) (circulation.Intention, f
 	cleanup, err := w.loop.bindExternalRequest(delivery)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return message.Intention, cleanup
+}
+
+func (w *leaseWorld) localUIRequest(id, channel string) (circulation.Intention, func()) {
+	w.t.Helper()
+	admitted, err := w.runtime.AdmitLocalUI()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	delivery, err := junction.AdmitLocalUI(admitted, channel, "root", circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: id,
+			To:          circulation.Address{Context: circulation.ContextID(w.loop.frame.CtxId), Type: "matter", Cap: "matter.read"},
+			Params:      map[string]any{circulation.KeyMatterID: "allowed"},
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	message, _ := delivery.Message()
+	cleanup, err := w.loop.bindExternalRequest(delivery)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return message.Intention, cleanup
+}
+
+func (w *leaseWorld) publicWebRequest(id, channel string) (circulation.Intention, func()) {
+	w.t.Helper()
+	admitted, err := w.runtime.AdmitPublicWeb()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	delivery, err := junction.AdmitPublicWeb(admitted, channel, "root", circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: id,
+			To:          circulation.Address{Context: circulation.ContextID(w.loop.frame.CtxId), Type: "matter", Cap: "matter.read"},
+			Params:      map[string]any{circulation.KeyMatterID: "allowed"},
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	message, _ := delivery.Message()
+	cleanup, err := w.loop.bindExternalRequest(delivery)
+	if err != nil {
+		w.t.Fatal(err)
 	}
 	return message.Intention, cleanup
 }
@@ -280,6 +348,231 @@ func TestBindingAnUnknownLeaseFails(t *testing.T) {
 	}
 }
 
+func TestBrowserLeaseBelongsToItsExactLiveChannel(t *testing.T) {
+	w := newLeaseWorld(t)
+	const channel = "browser-channel"
+	if !w.registry.ActivateUIChannel("local_ui", channel) {
+		t.Fatal("could not activate browser channel")
+	}
+	in, cleanup := w.localUIRequest(leaseTestID1, channel)
+	defer cleanup()
+	w.readLease("browser", "allowed")
+	if !w.loop.bindLeaseToCaller("browser", in, "read") {
+		t.Fatal("browser lease binding failed")
+	}
+	if authz := w.getter.getLease("browser").authz; authz.channel != channel || authz.channelKind != "local_ui" {
+		t.Fatalf("browser lease owner = %+v", authz)
+	}
+
+	// Even without the lifecycle callback, a closed channel cannot use its token.
+	w.registry.DeactivateUIChannel("local_ui", channel)
+	if rr := w.get("browser"); rr.Code != http.StatusForbidden {
+		t.Fatalf("closed browser channel used lease: %d %s", rr.Code, rr.Body.String())
+	}
+	if w.getter.getLease("browser") != nil {
+		t.Fatal("closed browser channel retained lease")
+	}
+
+	// If close wins while a handle is being opened, binding fails closed.
+	w.readLease("late-browser", "allowed")
+	if w.loop.bindLeaseToCaller("late-browser", in, "read") || w.getter.getLease("late-browser") != nil {
+		t.Fatal("closed browser channel obtained a new lease")
+	}
+}
+
+func TestBrowserChannelCloseProactivelyPurgesLeases(t *testing.T) {
+	w := newLeaseWorld(t)
+	const channel = "browser-channel"
+	w.registry.ActivateUIChannel("local_ui", channel)
+	in, cleanup := w.localUIRequest(leaseTestID1, channel)
+	defer cleanup()
+	w.readLease("browser", "allowed")
+	w.loop.bindLeaseToCaller("browser", in, "read")
+	w.registry.DeactivateUIChannel("local_ui", channel)
+	w.loop.EndUIChannel("local_ui", channel)
+	if w.getter.getLease("browser") != nil {
+		t.Fatal("channel close did not proactively purge lease")
+	}
+}
+
+func TestPublicWebLeaseUsesTheSharedChannelLifecycle(t *testing.T) {
+	w := newLeaseWorld(t)
+	const channel = "public-channel"
+	if !w.registry.ActivateUIChannel("public_web", channel) {
+		t.Fatal("could not activate public web channel")
+	}
+	in, cleanup := w.publicWebRequest(leaseTestID1, channel)
+	defer cleanup()
+	w.readLease("public", "allowed")
+	if !w.loop.bindLeaseToCaller("public", in, "read") {
+		t.Fatal("public lease binding failed")
+	}
+	if authz := w.getter.getLease("public").authz; authz.channel != channel || authz.channelKind != "public_web" {
+		t.Fatalf("public lease owner = %+v", authz)
+	}
+	w.registry.DeactivateUIChannel("public_web", channel)
+	w.loop.EndUIChannel("public_web", channel)
+	if w.getter.getLease("public") != nil {
+		t.Fatal("public channel close retained lease")
+	}
+}
+
+func TestPublicWebLeaseQuotaReservationIsAtomic(t *testing.T) {
+	w := newLeaseWorld(t)
+	const channel = "public-channel"
+	w.registry.ActivateUIChannel("public_web", channel)
+	in, cleanup := w.publicWebRequest(leaseTestID1, channel)
+	defer cleanup()
+	w.readLease("seed", "allowed")
+	if failure := w.loop.bindLeaseToCallerResult("seed", in, "read"); failure != leaseBindOK {
+		t.Fatalf("seed bind = %q", failure)
+	}
+	seed := *w.getter.getLease("seed").authz
+
+	const attempts = 63
+	for i := 0; i < attempts; i++ {
+		w.readLease("candidate-"+strconv.Itoa(i), "allowed")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			candidate := seed
+			w.getter.bindAuthzResult("candidate-"+strconv.Itoa(index), &candidate)
+		}(i)
+	}
+	wg.Wait()
+	w.getter.mu.RLock()
+	bound := 0
+	for _, lz := range w.getter.leases {
+		if lz != nil && lz.authz != nil && lz.authz.channelKind == "public_web" && lz.authz.channel == channel {
+			bound++
+		}
+	}
+	w.getter.mu.RUnlock()
+	if bound != maxPublicLeasesPerChannel {
+		t.Fatalf("public channel leases = %d, want %d", bound, maxPublicLeasesPerChannel)
+	}
+}
+
+func TestPublicWebGlobalLeaseQuotaIsAtomic(t *testing.T) {
+	w := newLeaseWorld(t)
+	const attempts = 96
+	for i := 0; i < attempts; i++ {
+		channel := "public-" + strconv.Itoa(i)
+		w.registry.ActivateUIChannel("public_web", channel)
+		w.readLease("global-"+strconv.Itoa(i), "allowed")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			channel := "public-" + strconv.Itoa(index)
+			authz := &leaseAuthz{registry: w.registry, channel: channel, channelKind: "public_web"}
+			w.getter.bindAuthzResult("global-"+strconv.Itoa(index), authz)
+		}(i)
+	}
+	wg.Wait()
+	w.getter.mu.RLock()
+	bound := 0
+	for _, lz := range w.getter.leases {
+		if lz != nil && lz.authz != nil && lz.authz.channelKind == "public_web" {
+			bound++
+		}
+	}
+	w.getter.mu.RUnlock()
+	if bound != maxPublicLeasesGlobal {
+		t.Fatalf("global public leases = %d, want %d", bound, maxPublicLeasesGlobal)
+	}
+}
+
+func TestSignedLeaseBelongsToItsExactRouteGeneration(t *testing.T) {
+	w := newLeaseWorld(t)
+	const routeID = "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	handle, err := w.registry.SignedTransport().Register(signedtransport.Route{
+		ID: routeID, RemoteInstanceID: "partner-a", RemoteKeyID: w.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.registry.SignedTransport().SetRouteClosed(func(route string) { w.loop.EndSignedRoute(route) })
+	in, cleanup := w.requestAsRoute(leaseTestID1, "/root/subscriber", "", routeID)
+	defer cleanup()
+	w.readLease("signed", "allowed")
+	if !w.loop.bindLeaseToCaller("signed", in, "read") {
+		t.Fatal("signed lease binding failed")
+	}
+	if authz := w.getter.getLease("signed").authz; authz.route != routeID {
+		t.Fatalf("signed lease route = %q", authz.route)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if w.getter.getLease("signed") != nil {
+		t.Fatal("route close retained signed lease")
+	}
+
+	w.readLease("late-signed", "allowed")
+	if w.loop.bindLeaseToCaller("late-signed", in, "read") || w.getter.getLease("late-signed") != nil {
+		t.Fatal("closed signed route obtained a new lease")
+	}
+}
+
+func TestLeaseQuotaAlsoCoversLocalUIAndSignedPrincipal(t *testing.T) {
+	t.Run("local ui channel", func(t *testing.T) {
+		w := newLeaseWorld(t)
+		const channel = "local-channel"
+		w.registry.ActivateUIChannel("local_ui", channel)
+		for index := 0; index <= maxExternalLeasesPerOwner; index++ {
+			rid := "local-" + strconv.Itoa(index)
+			w.readLease(rid, "allowed")
+			authz := &leaseAuthz{registry: w.registry, channel: channel, channelKind: "local_ui"}
+			failure := w.getter.bindAuthzResult(rid, authz)
+			if index < maxExternalLeasesPerOwner && failure != leaseBindOK {
+				t.Fatalf("lease %d bind=%q", index, failure)
+			}
+			if index == maxExternalLeasesPerOwner && failure != leaseBindQuota {
+				t.Fatalf("fifth local lease bind=%q want quota", failure)
+			}
+		}
+	})
+
+	t.Run("signed principal", func(t *testing.T) {
+		w := newLeaseWorld(t)
+		const routeID = "bwg1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+		handle, err := w.registry.SignedTransport().Register(signedtransport.Route{
+			ID: routeID, RemoteInstanceID: "partner-a", RemoteKeyID: w.keyID,
+			Send: func(context.Context, []byte) error { return nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer handle.Close()
+		in, cleanup := w.requestAsRoute(leaseTestID1, "/root/subscriber", "", routeID)
+		defer cleanup()
+		w.readLease("signed-seed", "allowed")
+		if failure := w.loop.bindLeaseToCallerResult("signed-seed", in, "read"); failure != leaseBindOK {
+			t.Fatalf("seed bind=%q", failure)
+		}
+		seed := *w.getter.getLease("signed-seed").authz
+		for index := 1; index <= maxExternalLeasesPerOwner; index++ {
+			rid := "signed-" + strconv.Itoa(index)
+			w.readLease(rid, "allowed")
+			candidate := seed
+			failure := w.getter.bindAuthzResult(rid, &candidate)
+			if index < maxExternalLeasesPerOwner && failure != leaseBindOK {
+				t.Fatalf("lease %d bind=%q", index, failure)
+			}
+			if index == maxExternalLeasesPerOwner && failure != leaseBindQuota {
+				t.Fatalf("fifth signed lease bind=%q want quota", failure)
+			}
+		}
+	})
+}
+
 // revokingBody withdraws the right while the body is being read.
 type revokingBody struct {
 	data   io.Reader
@@ -305,7 +598,8 @@ func TestExternalWriteLeaseCommitsNothingIfTheRightIsWithdrawnDuringUpload(t *te
 	tmp := filepath.Join(matterRoot, "allowed.data.rid.tmp")
 	w.getter.mu.Lock()
 	w.getter.leases["w1"] = &lease{rid: "w1", tok: "t", mode: leaseWrite, matter: "allowed", rev: 5, expires: time.Now().Add(time.Minute),
-		matterRoot: matterRoot, tmpSubstancePath: tmp, substancePath: filepath.Join(matterRoot, "allowed.data")}
+		matterRoot: matterRoot, tmpSubstancePath: tmp, substancePath: filepath.Join(matterRoot, "allowed.data"),
+		tmpMatterPath: filepath.Join(matterRoot, "allowed.json.w1.tmp"), stagedMatter: []byte("{}")}
 	w.getter.mu.Unlock()
 	if !w.loop.bindLeaseToCaller("w1", in, "write") {
 		t.Fatal("bind failed")
@@ -324,6 +618,77 @@ func TestExternalWriteLeaseCommitsNothingIfTheRightIsWithdrawnDuringUpload(t *te
 		t.Fatal("the uploaded bytes were left behind")
 	}
 	if w.getter.getLease("w1") != nil {
+		t.Fatal("the lease stayed open")
+	}
+}
+
+func TestExternalWriteLeaseWritesNothingIfRightIsWithdrawnBeforeBody(t *testing.T) {
+	w := newLeaseWorld(t)
+	in, cleanup := w.request(leaseTestID2)
+	defer cleanup()
+	matterRoot := filepath.Join(w.ctxDir, matterDirName)
+	lz := &lease{rid: "prebody", tok: "t", mode: leaseWrite, matter: "allowed", rev: 5,
+		expires: time.Now().Add(time.Minute), matterRoot: matterRoot,
+		tmpSubstancePath: filepath.Join(matterRoot, "allowed.data.prebody.tmp"),
+		tmpMatterPath:    filepath.Join(matterRoot, "allowed.json.prebody.tmp"),
+		substancePath:    filepath.Join(matterRoot, "allowed.data"), stagedMatter: []byte("{}")}
+	w.getter.mu.Lock()
+	w.getter.leases[lz.rid] = lz
+	w.getter.mu.Unlock()
+	if !w.loop.bindLeaseToCaller(lz.rid, in, "write") {
+		t.Fatal("bind failed")
+	}
+	w.activate(map[string][]string{}, "active")
+	body := &readTrackingBody{}
+	request := httptest.NewRequest(http.MethodPut, "/substance/prebody?tok=t", body)
+	response := httptest.NewRecorder()
+	w.getter.handleSubstance(response, request)
+	if response.Code != http.StatusForbidden || body.read {
+		t.Fatalf("pre-body revocation: status=%d body_read=%v payload=%s", response.Code, body.read, response.Body.String())
+	}
+	for _, path := range []string{lz.tmpSubstancePath, lz.tmpMatterPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("pre-body revocation wrote %s: %v", path, err)
+		}
+	}
+}
+
+func TestBrowserWriteLeaseCommitsNothingIfChannelClosesDuringUpload(t *testing.T) {
+	w := newLeaseWorld(t)
+	const channel = "browser-channel"
+	if !w.registry.ActivateUIChannel("local_ui", channel) {
+		t.Fatal("could not activate browser channel")
+	}
+	in, cleanup := w.localUIRequest(leaseTestID2, channel)
+	defer cleanup()
+	matterRoot := filepath.Join(w.ctxDir, matterDirName)
+	tmp := filepath.Join(matterRoot, "allowed.data.browser.tmp")
+	w.getter.mu.Lock()
+	w.getter.leases["browser-write"] = &lease{rid: "browser-write", tok: "t", mode: leaseWrite, matter: "allowed", rev: 5,
+		expires: time.Now().Add(time.Minute), matterRoot: matterRoot, tmpSubstancePath: tmp,
+		substancePath: filepath.Join(matterRoot, "allowed.data"),
+		tmpMatterPath: filepath.Join(matterRoot, "allowed.json.browser.tmp"), stagedMatter: []byte("{}")}
+	w.getter.mu.Unlock()
+	if !w.loop.bindLeaseToCaller("browser-write", in, "write") {
+		t.Fatal("bind failed")
+	}
+	req := httptest.NewRequest(http.MethodPut, "/substance/browser-write?tok=t", nil)
+	req.Body = &revokingBody{data: strings.NewReader("new content"), revoke: func() {
+		w.registry.DeactivateUIChannel("local_ui", channel)
+		w.loop.EndUIChannel("local_ui", channel)
+	}}
+	rr := httptest.NewRecorder()
+	w.getter.handleSubstance(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("write after channel close: %d %s", rr.Code, rr.Body.String())
+	}
+	if content, _ := os.ReadFile(filepath.Join(matterRoot, "allowed.data")); string(content) != "secret-allowed" {
+		t.Fatalf("the matter was modified: %q", content)
+	}
+	if _, err := os.Stat(tmp); err == nil {
+		t.Fatal("the uploaded bytes were left behind")
+	}
+	if w.getter.getLease("browser-write") != nil {
 		t.Fatal("the lease stayed open")
 	}
 }

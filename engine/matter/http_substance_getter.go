@@ -35,17 +35,22 @@ package matter
 // - Resumable uploads and multipart transfers.
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +64,12 @@ const substancePathPrefix = "/substance/"
 const healthzPath = "/healthz"
 
 const defaultMaxUploadBytes = int64(256 << 20) // 256MB
+const defaultUploadIdleTimeout = 15 * time.Second
+const defaultUploadMaxDuration = 10 * time.Minute
+const defaultMaxTransfers = 32
+const defaultLeaseMaxLife = 10 * time.Minute
+const defaultAuthorizationRecheck = 5 * time.Second
+const defaultReadIdleTimeout = 15 * time.Second
 
 const timeToLiveLease = 30 //30s
 const sweeperPeriod = 1    //1s
@@ -93,13 +104,15 @@ const (
 )
 
 type lease struct {
-	rid       string
-	tok       string
-	mode      leaseMode
-	matter    string
-	rev       int64
-	newBrique map[string]any
-	expires   time.Time
+	owner      *MatterLoop
+	rid        string
+	tok        string
+	mode       leaseMode
+	matter     string
+	rev        int64
+	newBrique  map[string]any
+	expires    time.Time
+	maxExpires time.Time
 
 	// Control-plane provenance (best-effort) for notifications.
 	srcIntentionID string
@@ -112,18 +125,25 @@ type lease struct {
 	// For WRITE
 	tmpSubstancePath string
 	tmpMatterPath    string
+	stagedMatter     []byte
+	expectedSHA256   string
 	uploading        bool // guarded by HTTPSubstanceGetter.mu
+	uploadBody       io.Closer
+	uploadDeadline   time.Time
 	baseBytes        int64
 	baseLines        int64
 	framing          string
 	readOffset       int64
 	readLength       int64
 	readRanged       bool
+	readDelivered    []byteInterval
 
 	// authz is set for a lease opened for an external caller; nil otherwise. It is
 	// written once before the handle is returned and read on every use.
 	authz *leaseAuthz
 }
+
+type byteInterval struct{ start, end int64 }
 
 // expired
 //
@@ -187,19 +207,33 @@ func (s *lease) expired(now time.Time) bool {
 // -----------------------------
 
 type HTTPSubstanceGetter struct {
-	ml *MatterLoop
+	ml      *MatterLoop
+	ownerMu sync.Mutex
+	owners  map[*MatterLoop]struct{}
 
 	mu     sync.RWMutex
 	leases map[string]*lease // rid -> lease
 
 	// Server
-	srvMu   sync.Mutex
-	srv     *http.Server
-	ln      net.Listener
-	baseURL string
+	srvMu      sync.Mutex
+	srv        *http.Server
+	ln         net.Listener
+	baseURL    string
+	publicURL  string
+	listenAddr string
 
-	defaultTTL     time.Duration
-	maxUploadBytes int64
+	defaultTTL           time.Duration
+	maxUploadBytes       int64
+	uploadIdleTimeout    time.Duration
+	uploadMaxDuration    time.Duration
+	transferSlots        chan struct{}
+	leaseMaxLife         time.Duration
+	readIdleTimeout      time.Duration
+	byteBudget           *ownerByteBudget
+	heavyBudget          *ownerByteBudget
+	authorizationRecheck time.Duration
+	now                  func() time.Time
+	authorizeLease       func(*lease) bool
 
 	// sweeper lifecycle
 	done  chan struct{}
@@ -264,12 +298,20 @@ type HTTPSubstanceGetter struct {
 
 func NewHTTPSubstanceGetter(ml *MatterLoop) *HTTPSubstanceGetter {
 	return &HTTPSubstanceGetter{
-		ml:             ml,
-		leases:         make(map[string]*lease),
-		defaultTTL:     timeToLiveLease * time.Second,
-		maxUploadBytes: defaultMaxUploadBytes,
-		sweep:          sweeperPeriod * time.Second,
-		done:           make(chan struct{}),
+		ml:                   ml,
+		owners:               make(map[*MatterLoop]struct{}),
+		leases:               make(map[string]*lease),
+		defaultTTL:           timeToLiveLease * time.Second,
+		maxUploadBytes:       defaultMaxUploadBytes,
+		uploadIdleTimeout:    defaultUploadIdleTimeout,
+		uploadMaxDuration:    defaultUploadMaxDuration,
+		transferSlots:        make(chan struct{}, defaultMaxTransfers),
+		leaseMaxLife:         defaultLeaseMaxLife,
+		readIdleTimeout:      defaultReadIdleTimeout,
+		authorizationRecheck: defaultAuthorizationRecheck,
+		listenAddr:           "127.0.0.1:0",
+		sweep:                sweeperPeriod * time.Second,
+		done:                 make(chan struct{}),
 	}
 }
 
@@ -340,24 +382,39 @@ func (g *HTTPSubstanceGetter) Start() error {
 		return nil
 	}
 
-	// Bind to localhost on ephemeral port by default.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	listenAddr := strings.TrimSpace(g.listenAddr)
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:0"
+	}
+	publicURL, err := validateLeasePublicURL(g.publicURL)
+	if err != nil {
+		return err
+	}
+	if !isLoopbackListenAddress(listenAddr) && publicURL == "" {
+		return errors.New("non-loopback lease_listen requires public_url")
+	}
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(substancePathPrefix, g.handleSubstance)
-	mux.HandleFunc(healthzPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	if publicURL == "" {
+		mux.HandleFunc(healthzPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	}
 
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           leaseHTTPHeaders(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	g.ln = ln
 	g.srv = srv
-	g.baseURL = "http://" + ln.Addr().String()
+	g.baseURL = publicURL
+	if g.baseURL == "" {
+		g.baseURL = "http://" + ln.Addr().String()
+	}
 
 	// Background accept loop.
 	g.wg.Add(1)
@@ -374,6 +431,92 @@ func (g *HTTPSubstanceGetter) Start() error {
 	}()
 
 	return nil
+}
+
+// Acquire attaches one Matter family to the instance-wide data plane. The
+// listener starts with the first owner and remains available until the last
+// Context releases it.
+func (g *HTTPSubstanceGetter) Acquire(owner *MatterLoop) error {
+	if g == nil || owner == nil {
+		return errors.New("matter data-plane owner is nil")
+	}
+	g.ownerMu.Lock()
+	defer g.ownerMu.Unlock()
+	if _, exists := g.owners[owner]; exists {
+		return nil
+	}
+	if len(g.owners) == 0 {
+		if err := g.Start(); err != nil {
+			return err
+		}
+	}
+	g.owners[owner] = struct{}{}
+	return nil
+}
+
+// Release detaches a Context, invalidates only its bearer leases, and stops the
+// shared listener only after the final Context has left.
+func (g *HTTPSubstanceGetter) Release(owner *MatterLoop) error {
+	if g == nil || owner == nil {
+		return nil
+	}
+	g.ownerMu.Lock()
+	if _, exists := g.owners[owner]; !exists {
+		g.ownerMu.Unlock()
+		return nil
+	}
+	delete(g.owners, owner)
+	last := len(g.owners) == 0
+	if last {
+		g.closeMatterLoopLeases(owner)
+		defer g.ownerMu.Unlock()
+		return g.Stop()
+	}
+	g.ownerMu.Unlock()
+	g.closeMatterLoopLeases(owner)
+	return nil
+}
+
+func (g *HTTPSubstanceGetter) closeMatterLoopLeases(owner *MatterLoop) int {
+	if g == nil || owner == nil {
+		return 0
+	}
+	g.mu.RLock()
+	rids := make([]string, 0)
+	for rid, lz := range g.leases {
+		if g.ownerOf(lz) == owner {
+			rids = append(rids, rid)
+		}
+	}
+	g.mu.RUnlock()
+	for _, rid := range rids {
+		g.closeLease(rid, "context_stopped")
+	}
+	return len(rids)
+}
+
+func validateLeasePublicURL(raw string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("public_url must be an exact HTTPS base URL without credentials, query or fragment")
+	}
+	return parsed.String(), nil
+}
+
+func isLoopbackListenAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Stop stops the HTTP server and clears leases. Safe to call multiple times.
@@ -536,6 +679,68 @@ func (g *HTTPSubstanceGetter) BaseURL() string {
 	return g.baseURL
 }
 
+func (g *HTTPSubstanceGetter) currentTime() time.Time {
+	if g != nil && g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+func (g *HTTPSubstanceGetter) leaseTimes(ttl time.Duration) (time.Time, time.Time) {
+	now := g.currentTime()
+	maxLife := g.leaseMaxLife
+	if maxLife <= 0 {
+		maxLife = defaultLeaseMaxLife
+	}
+	maximum := now.Add(maxLife)
+	expires := now.Add(ttl)
+	if expires.After(maximum) {
+		expires = maximum
+	}
+	return expires, maximum
+}
+
+func (g *HTTPSubstanceGetter) allowed(lz *lease) bool {
+	if g != nil && g.authorizeLease != nil {
+		return g.authorizeLease(lz)
+	}
+	return lz != nil && lz.authz.allowed(lz.matter)
+}
+
+func (g *HTTPSubstanceGetter) renewLease(lz *lease) bool {
+	if g == nil || lz == nil {
+		return false
+	}
+	now := g.currentTime()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.leases[lz.rid] != lz {
+		return false
+	}
+	maximum := lz.maxExpires
+	if maximum.IsZero() {
+		maxLife := g.leaseMaxLife
+		if maxLife <= 0 {
+			maxLife = defaultLeaseMaxLife
+		}
+		maximum = now.Add(maxLife)
+		lz.maxExpires = maximum
+	}
+	if !now.Before(maximum) {
+		return false
+	}
+	ttl := g.defaultTTL
+	if ttl <= 0 {
+		ttl = timeToLiveLease * time.Second
+	}
+	next := now.Add(ttl)
+	if next.After(maximum) {
+		next = maximum
+	}
+	lz.expires = next
+	return true
+}
+
 // OpenReadLease
 //
 // Functional role (Brique DSL):
@@ -604,7 +809,7 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 	ttl time.Duration,
 	sizeHint int64,
 ) (SubstanceHTTPHandle, error) {
-	handle, err := g.OpenReadRangeLease(ctxDir, matterID, ext, rev, ttl, 0, sizeHint)
+	handle, err := g.OpenReadRangeLeaseFor(g.ml, ctxDir, matterID, ext, rev, ttl, 0, sizeHint)
 	if err == nil {
 		g.mu.Lock()
 		if lz := g.leases[handle.RID]; lz != nil {
@@ -616,6 +821,19 @@ func (g *HTTPSubstanceGetter) OpenReadLease(
 }
 
 func (g *HTTPSubstanceGetter) OpenReadRangeLease(
+	ctxDir string,
+	matterID string,
+	ext string,
+	rev int64,
+	ttl time.Duration,
+	offset int64,
+	length int64,
+) (SubstanceHTTPHandle, error) {
+	return g.OpenReadRangeLeaseFor(g.ml, ctxDir, matterID, ext, rev, ttl, offset, length)
+}
+
+func (g *HTTPSubstanceGetter) OpenReadRangeLeaseFor(
+	owner *MatterLoop,
 	ctxDir string,
 	matterID string,
 	ext string,
@@ -645,13 +863,16 @@ func (g *HTTPSubstanceGetter) OpenReadRangeLease(
 	if err != nil {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenReadLease: create bearer token: %w", err)
 	}
+	expires, maxExpires := g.leaseTimes(ttl)
 	lz := &lease{
+		owner:         owner,
 		rid:           rid,
 		tok:           tok,
 		mode:          leaseRead,
 		matter:        matterID,
 		rev:           rev,
-		expires:       time.Now().Add(ttl),
+		expires:       expires,
+		maxExpires:    maxExpires,
 		ctxDir:        ctxDir,
 		matterRoot:    matterRoot,
 		substancePath: subPath,
@@ -756,6 +977,21 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 	stagedMatter []byte,
 	ttl time.Duration,
 ) (SubstanceHTTPHandle, error) {
+	return g.OpenWriteLeaseFor(g.ml, ctxDir, matterID, ext, expectedRev, srcIntentionID, newBrique, stagedMatter, ttl)
+}
+
+func (g *HTTPSubstanceGetter) OpenWriteLeaseFor(
+	owner *MatterLoop,
+	ctxDir string,
+	matterID string,
+	ext string,
+	expectedRev int64,
+	srcIntentionID string,
+	newBrique map[string]any,
+	stagedMatter []byte,
+	ttl time.Duration,
+	expectedSHA256 ...string,
+) (SubstanceHTTPHandle, error) {
 	if matterID == "" {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: empty matter_id")
 	}
@@ -782,11 +1018,9 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 	if len(stagedMatter) == 0 {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: empty staged matter descriptor")
 	}
-	if err := os.WriteFile(tmpMatter, stagedMatter, 0o644); err != nil {
-		return SubstanceHTTPHandle{}, fmt.Errorf("OpenWriteLease: stage matter descriptor: %w", err)
-	}
-
+	expires, maxExpires := g.leaseTimes(ttl)
 	lz := &lease{
+		owner:            owner,
 		rid:              rid,
 		tok:              tok,
 		mode:             leaseWrite,
@@ -794,12 +1028,15 @@ func (g *HTTPSubstanceGetter) OpenWriteLease(
 		rev:              expectedRev,
 		srcIntentionID:   srcIntentionID,
 		newBrique:        newBrique,
-		expires:          time.Now().Add(ttl),
+		expires:          expires,
+		maxExpires:       maxExpires,
 		ctxDir:           ctxDir,
 		matterRoot:       matterRoot,
 		substancePath:    finalSub,
 		tmpSubstancePath: tmpSub,
 		tmpMatterPath:    tmpMatter,
+		stagedMatter:     append([]byte(nil), stagedMatter...),
+		expectedSHA256:   firstString(expectedSHA256),
 	}
 
 	g.mu.Lock()
@@ -834,6 +1071,18 @@ func (g *HTTPSubstanceGetter) OpenAppendLease(
 	stagedMatter []byte,
 	ttl time.Duration,
 ) (SubstanceHTTPHandle, error) {
+	return g.OpenAppendLeaseFor(g.ml, ctxDir, matterID, ext, expectedRev, baseBytes, baseLines, framing, srcIntentionID, stagedMatter, ttl)
+}
+
+func (g *HTTPSubstanceGetter) OpenAppendLeaseFor(
+	owner *MatterLoop,
+	ctxDir, matterID, ext string,
+	expectedRev, baseBytes, baseLines int64,
+	framing, srcIntentionID string,
+	stagedMatter []byte,
+	ttl time.Duration,
+	expectedSHA256 ...string,
+) (SubstanceHTTPHandle, error) {
 	if matterID == "" || baseBytes < 0 || baseLines < 0 {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: invalid binding")
 	}
@@ -858,14 +1107,14 @@ func (g *HTTPSubstanceGetter) OpenAppendLease(
 	if len(stagedMatter) == 0 {
 		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: empty staged matter descriptor")
 	}
-	if err := os.WriteFile(tmpMatter, stagedMatter, 0o644); err != nil {
-		return SubstanceHTTPHandle{}, fmt.Errorf("OpenAppendLease: stage matter descriptor: %w", err)
-	}
+	expires, maxExpires := g.leaseTimes(ttl)
 	lz := &lease{
-		rid: rid, tok: tok, mode: leaseAppend, matter: matterID, rev: expectedRev,
-		srcIntentionID: srcIntentionID, expires: time.Now().Add(ttl), ctxDir: ctxDir,
+		owner: owner, rid: rid, tok: tok, mode: leaseAppend, matter: matterID, rev: expectedRev,
+		srcIntentionID: srcIntentionID, expires: expires, maxExpires: maxExpires, ctxDir: ctxDir,
 		matterRoot: matterRoot, substancePath: finalSub, tmpSubstancePath: tmpSub,
-		tmpMatterPath: tmpMatter, baseBytes: baseBytes, baseLines: baseLines, framing: framing,
+		tmpMatterPath: tmpMatter, stagedMatter: append([]byte(nil), stagedMatter...),
+		baseBytes: baseBytes, baseLines: baseLines, framing: framing,
+		expectedSHA256: firstString(expectedSHA256),
 	}
 	g.mu.Lock()
 	g.leases[rid] = lz
@@ -878,6 +1127,30 @@ func (g *HTTPSubstanceGetter) OpenAppendLease(
 		Kind: circulation.ValueDataKindHTTP, BaseURL: g.BaseURL(), Path: substancePathPrefix + rid,
 		RID: rid, Tok: tok, ExpiresAt: lz.expires.UnixNano(), Rev: expectedRev, Method: http.MethodPut,
 	}, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func optionalExpectedSHA256(params map[string]any) (string, error) {
+	raw, exists := params[circulation.KeyExpectedSHA256]
+	if !exists {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	value = strings.ToLower(strings.TrimSpace(value))
+	if !ok || len(value) != sha256.Size*2 {
+		return "", errors.New("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", errors.New("expected_sha256 must be a 64-character hexadecimal SHA-256 digest")
+	}
+	return value, nil
 }
 
 // closeLease
@@ -1034,17 +1307,29 @@ func (g *HTTPSubstanceGetter) sweeperLoop() {
 			return
 		case now := <-t.C:
 			expired := make([]string, 0, 8)
+			bodies := make([]io.Closer, 0, 2)
 
-			g.mu.RLock()
+			g.mu.Lock()
 			for rid, lz := range g.leases {
 				if lz == nil {
 					continue
 				}
-				if !lz.uploading && lz.expired(now) {
+				if lz.uploading && !lz.uploadDeadline.IsZero() && now.After(lz.uploadDeadline) {
+					if lz.uploadBody != nil {
+						bodies = append(bodies, lz.uploadBody)
+					}
+					lz.uploadBody = nil
+					lz.uploadDeadline = time.Time{}
+					lz.uploading = false
+					expired = append(expired, rid)
+				} else if !lz.uploading && lz.expired(now) {
 					expired = append(expired, rid)
 				}
 			}
-			g.mu.RUnlock()
+			g.mu.Unlock()
+			for _, body := range bodies {
+				_ = body.Close()
+			}
 
 			if len(expired) == 0 {
 				continue
@@ -1130,9 +1415,18 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// tok is mandatory (query param)
-	tok := r.URL.Query().Get("tok")
+	// During the local transition both forms are accepted. Once a public URL is
+	// configured only the header is accepted, so the token cannot enter proxy
+	// access logs, browser history or Referer.
+	tok := bearerToken(r.Header.Get("Authorization"))
+	if tok == "" && g.publicURL == "" {
+		tok = r.URL.Query().Get("tok")
+	}
 	if tok == "" {
+		if g.publicURL != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeProblem(w, http.StatusUnauthorized, "missing_tok", rid, "", map[string]any{})
 		return
 	}
@@ -1140,26 +1434,55 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 	// Lookup lease
 	lz := g.getLease(rid)
 	if lz == nil {
+		if g.publicURL != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeProblem(w, http.StatusNotFound, "unknown_rid", rid, "", map[string]any{})
 		return
 	}
-	now := time.Now()
+	now := g.currentTime()
 	if lz.expired(now) {
 		g.closeLease(rid, "expired")
+		if g.publicURL != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeProblem(w, http.StatusUnauthorized, "expired", rid, "", map[string]any{})
 		return
 	}
 	if subtleStringNe(tok, lz.tok) {
+		if g.publicURL != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		writeProblem(w, http.StatusUnauthorized, "invalid_tok", rid, "", map[string]any{})
 		return
 	}
 	// The right of an external caller is checked again on every use (phase 4 bis).
-	if !lz.authz.allowed(lz.matter) {
+	if !g.allowed(lz) {
 		g.traceLease(circulation.ValueTraceLeaseFail, lz.srcIntentionID, lz, map[string]any{
 			"status": http.StatusForbidden, "reason": "revoked", "matter_id": lz.matter,
 		})
 		g.closeLease(rid, "revoked")
 		writeProblem(w, http.StatusForbidden, "forbidden", rid, "", map[string]any{})
+		return
+	}
+	if !g.renewLease(lz) {
+		g.closeLease(rid, "max_life")
+		if g.publicURL != "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writeProblem(w, http.StatusUnauthorized, "expired", rid, "", map[string]any{})
+		return
+	}
+	select {
+	case g.transferSlots <- struct{}{}:
+		defer func() { <-g.transferSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeProblem(w, http.StatusServiceUnavailable, "transfer_capacity", rid, "", map[string]any{})
 		return
 	}
 
@@ -1170,19 +1493,29 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 			return
 		}
 		// TOCTOU defense (read): check rev right before serving.
-		if !g.revStillValid(lz.matter, lz.rev) {
+		if !g.revStillValidLease(lz) {
 			g.closeLease(rid, "stale")
 			writeProblem(w, http.StatusConflict, "stale", rid, "", map[string]any{})
 			return
 		}
-		g.serveFile(w, r, lz)
-		// Read lease can be one-shot: close after one successful GET.
-		g.closeLease(rid, "read_done")
+		if g.serveFile(w, r, lz) {
+			g.closeLease(rid, "read_done")
+		}
 		return
 
 	case leaseWrite, leaseAppend:
 		if r.Method != http.MethodPut {
 			writeProblem(w, http.StatusMethodNotAllowed, "method_not_allowed", rid, "PUT", map[string]any{})
+			return
+		}
+		if !g.revStillValidLease(lz) {
+			g.closeLease(rid, "stale")
+			writeProblem(w, http.StatusConflict, "stale", rid, "", map[string]any{})
+			return
+		}
+		if lz.owner.diskLow() {
+			g.closeLease(rid, "disk_space_low")
+			writeProblem(w, http.StatusInsufficientStorage, "disk_space_low", rid, "", map[string]any{})
 			return
 		}
 		if status := g.claimWriteLease(rid, lz); status != "" {
@@ -1204,6 +1537,14 @@ func (g *HTTPSubstanceGetter) handleSubstance(w http.ResponseWriter, r *http.Req
 	}
 }
 
+func bearerToken(header string) string {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
+}
+
 // claimWriteLease marks a write lease as actively uploading. The sweeper does
 // not expire active uploads, and a lease accepts at most one PUT.
 func (g *HTTPSubstanceGetter) claimWriteLease(rid string, expected *lease) string {
@@ -1213,14 +1554,66 @@ func (g *HTTPSubstanceGetter) claimWriteLease(rid string, expected *lease) strin
 	if lz == nil || lz != expected {
 		return "unknown_rid"
 	}
-	if lz.expired(time.Now()) {
+	if lz.expired(g.currentTime()) {
 		return "expired"
 	}
 	if lz.uploading {
 		return "upload_in_progress"
 	}
 	lz.uploading = true
+	maxDuration := g.uploadMaxDuration
+	if maxDuration <= 0 {
+		maxDuration = defaultUploadMaxDuration
+	}
+	now := g.currentTime()
+	deadline := now.Add(maxDuration)
+	if !lz.maxExpires.IsZero() && deadline.After(lz.maxExpires) {
+		deadline = lz.maxExpires
+	}
+	if !deadline.After(now) {
+		lz.uploading = false
+		return "expired"
+	}
+	lz.uploadDeadline = deadline
 	return ""
+}
+
+func (g *HTTPSubstanceGetter) bindUploadBody(lz *lease, body io.Closer) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	current := g.leases[lz.rid]
+	if current != lz || !lz.uploading || lz.uploadDeadline.IsZero() {
+		return false
+	}
+	lz.uploadBody = body
+	return true
+}
+
+func (g *HTTPSubstanceGetter) finishUploadBody(lz *lease) {
+	g.mu.Lock()
+	if g.leases[lz.rid] == lz {
+		lz.uploadBody = nil
+		lz.uploadDeadline = time.Time{}
+	}
+	g.mu.Unlock()
+}
+
+type uploadDeadlineReader struct {
+	reader     io.Reader
+	controller *http.ResponseController
+	idle       time.Duration
+	maximum    time.Time
+}
+
+func (reader *uploadDeadlineReader) Read(buffer []byte) (int, error) {
+	deadline := time.Now().Add(reader.idle)
+	if deadline.After(reader.maximum) {
+		deadline = reader.maximum
+	}
+	if err := reader.controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return 0, err
+	}
+	return reader.reader.Read(buffer)
 }
 
 // getLease
@@ -1337,11 +1730,23 @@ func (g *HTTPSubstanceGetter) getLease(rid string) *lease {
 //
 
 func (g *HTTPSubstanceGetter) revStillValid(matterID string, expected int64) bool {
+	return revStillValidFor(g.ml, matterID, expected)
+}
+
+func (g *HTTPSubstanceGetter) revStillValidLease(lz *lease) bool {
 	// we read rev from catalog brique.rev (projected) to keep O(1).
-	if g.ml == nil || matterID == "" {
+	owner := g.ownerOf(lz)
+	if owner == nil || lz == nil || lz.matter == "" {
 		return false
 	}
-	e, ok := g.ml.catalogGetMatter(matterID)
+	return revStillValidFor(owner, lz.matter, lz.rev)
+}
+
+func revStillValidFor(owner *MatterLoop, matterID string, expected int64) bool {
+	if owner == nil || matterID == "" {
+		return false
+	}
+	e, ok := owner.catalogGetMatter(matterID)
 	if !ok {
 		return false
 	}
@@ -1356,6 +1761,16 @@ func (g *HTTPSubstanceGetter) revStillValid(matterID string, expected int64) boo
 	}
 	cur := shared.AnyToInt64(raw)
 	return cur == expected
+}
+
+func (g *HTTPSubstanceGetter) ownerOf(lz *lease) *MatterLoop {
+	if lz != nil && lz.owner != nil {
+		return lz.owner
+	}
+	if g != nil {
+		return g.ml
+	}
+	return nil
 }
 
 // serveFile
@@ -1414,28 +1829,156 @@ func (g *HTTPSubstanceGetter) revStillValid(matterID string, expected int64) boo
 // - Missing substance file yields HTTP problem response; successful responses expose `Content-Length` when stat is available.
 //
 
-func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, r *http.Request, lz *lease) {
+func (g *HTTPSubstanceGetter) serveFile(w http.ResponseWriter, r *http.Request, lz *lease) bool {
 	// Best-effort open + stream
 	f, err := os.Open(lz.substancePath)
 	if err != nil {
 		writeProblem(w, http.StatusNotFound, "data_missing", lz.rid, "", map[string]any{
 			circulation.KeyFile: filepath.Base(lz.substancePath), circulation.KeyMatterID: lz.matter,
 		})
-		return
+		return false
 	}
 	defer f.Close()
 
 	st, err := f.Stat()
 	if err != nil {
 		writeProblem(w, http.StatusInternalServerError, "stat_failed", lz.rid, "", map[string]any{})
-		return
+		return false
 	}
+	etag := fmt.Sprintf("\"brique-rev-%d\"", lz.rev)
+	w.Header().Set("ETag", etag)
+	if value := strings.TrimSpace(r.Header.Get("If-Range")); value != "" && value != etag {
+		writeProblem(w, http.StatusConflict, "stale", lz.rid, "", map[string]any{})
+		return false
+	}
+	total := st.Size()
+	if lz.readRanged {
+		total = lz.readLength
+	}
+	recheck := g.authorizationRecheck
+	if recheck <= 0 || recheck > defaultAuthorizationRecheck {
+		recheck = defaultAuthorizationRecheck
+	}
+	capture := &leaseResponseCapture{
+		ResponseWriter: w,
+		controller:     http.NewResponseController(w),
+		writeIdle:      g.readIdleTimeout,
+		authorize:      func() bool { return g.allowed(lz) },
+		now:            g.currentTime,
+		nextCheck:      g.currentTime().Add(recheck),
+		recheck:        recheck,
+	}
+	if capture.writeIdle <= 0 {
+		capture.writeIdle = defaultReadIdleTimeout
+	}
+	defer capture.clearWriteDeadline()
 	if lz.readRanged {
 		reader := io.NewSectionReader(f, lz.readOffset, lz.readLength)
-		http.ServeContent(w, r, filepath.Base(lz.substancePath), st.ModTime(), reader)
-		return
+		http.ServeContent(capture, r, filepath.Base(lz.substancePath), time.Time{}, reader)
+	} else {
+		http.ServeContent(capture, r, filepath.Base(lz.substancePath), time.Time{}, f)
 	}
-	http.ServeContent(w, r, filepath.Base(lz.substancePath), st.ModTime(), f)
+	if capture.revoked {
+		g.traceLease(circulation.ValueTraceLeaseFail, lz.srcIntentionID, lz, map[string]any{
+			"status": http.StatusForbidden, "reason": "revoked_during_transfer", "matter_id": lz.matter,
+		})
+		g.closeLease(lz.rid, "revoked")
+		return false
+	}
+	status := capture.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if status == http.StatusOK && capture.written == total {
+		return true
+	}
+	if status != http.StatusPartialContent {
+		return false
+	}
+	start, end, rangedTotal, ok := parseLeaseContentRange(w.Header().Get("Content-Range"))
+	if !ok || rangedTotal != total || capture.written != end-start+1 {
+		return false
+	}
+	return g.recordReadDelivery(lz, start, end+1, total)
+}
+
+type leaseResponseCapture struct {
+	http.ResponseWriter
+	controller *http.ResponseController
+	writeIdle  time.Duration
+	status     int
+	written    int64
+	authorize  func() bool
+	now        func() time.Time
+	nextCheck  time.Time
+	recheck    time.Duration
+	revoked    bool
+}
+
+func (w *leaseResponseCapture) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *leaseResponseCapture) Write(data []byte) (int, error) {
+	if w.authorize != nil && w.now != nil && !w.now().Before(w.nextCheck) {
+		if !w.authorize() {
+			w.revoked = true
+			return 0, errors.New("lease authorization revoked during transfer")
+		}
+		w.nextCheck = w.now().Add(w.recheck)
+	}
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if w.controller != nil && w.writeIdle > 0 {
+		_ = w.controller.SetWriteDeadline(time.Now().Add(w.writeIdle))
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.written += int64(n)
+	return n, err
+}
+
+func (w *leaseResponseCapture) clearWriteDeadline() {
+	if w != nil && w.controller != nil {
+		_ = w.controller.SetWriteDeadline(time.Time{})
+	}
+}
+
+func parseLeaseContentRange(value string) (int64, int64, int64, bool) {
+	var start, end, total int64
+	if _, err := fmt.Sscanf(value, "bytes %d-%d/%d", &start, &end, &total); err != nil || start < 0 || end < start || total <= end {
+		return 0, 0, 0, false
+	}
+	return start, end, total, true
+}
+
+func (g *HTTPSubstanceGetter) recordReadDelivery(lz *lease, start, end, total int64) bool {
+	if g == nil || lz == nil || start < 0 || end <= start || end > total {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	current := g.leases[lz.rid]
+	if current != lz {
+		return false
+	}
+	intervals := append(append([]byteInterval(nil), lz.readDelivered...), byteInterval{start: start, end: end})
+	slices.SortFunc(intervals, func(a, b byteInterval) int { return cmp.Compare(a.start, b.start) })
+	merged := intervals[:0]
+	for _, interval := range intervals {
+		if len(merged) == 0 || interval.start > merged[len(merged)-1].end {
+			merged = append(merged, interval)
+			continue
+		}
+		if interval.end > merged[len(merged)-1].end {
+			merged[len(merged)-1].end = interval.end
+		}
+	}
+	lz.readDelivered = merged
+	return len(merged) == 1 && merged[0].start == 0 && merged[0].end == total
 }
 
 // receiveAndCommit
@@ -1512,6 +2055,16 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		g.failWrite(w, lz, http.StatusInternalServerError, "mkdir", err)
 		return
 	}
+	if len(lz.stagedMatter) != 0 {
+		if err := os.WriteFile(lz.tmpMatterPath, lz.stagedMatter, 0o644); err != nil {
+			g.failWrite(w, lz, http.StatusInternalServerError, "stage_descriptor", err)
+			return
+		}
+		lz.stagedMatter = nil
+	} else if _, err := os.Stat(lz.tmpMatterPath); err != nil {
+		g.failWrite(w, lz, http.StatusInternalServerError, "missing_descriptor", err)
+		return
+	}
 
 	// Write tmp substance file
 	tmpf, err := os.Create(lz.tmpSubstancePath)
@@ -1526,12 +2079,30 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		maxBytes = defaultMaxUploadBytes
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	n, cpErr := io.Copy(tmpf, r.Body)
+	if !g.bindUploadBody(lz, r.Body) {
+		_ = r.Body.Close()
+		_ = tmpf.Close()
+		g.failWrite(w, lz, http.StatusConflict, "upload_expired", nil)
+		return
+	}
+	idleTimeout := g.uploadIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultUploadIdleTimeout
+	}
+	reader := &uploadDeadlineReader{reader: r.Body, controller: http.NewResponseController(w),
+		idle: idleTimeout, maximum: lz.uploadDeadline}
+	digest := sha256.New()
+	n, cpErr := io.Copy(io.MultiWriter(&diskGuardWriter{next: tmpf, owner: lz.owner}, digest), reader)
 	_ = r.Body.Close()
+	g.finishUploadBody(lz)
 	_ = tmpf.Sync()
 	_ = tmpf.Close()
 	if cpErr != nil {
 		_ = os.Remove(lz.tmpSubstancePath)
+		if errors.Is(cpErr, errUploadDiskLow) {
+			g.failWrite(w, lz, http.StatusInsufficientStorage, "disk_space_low", nil)
+			return
+		}
 		// Detect MaxBytesReader overflow reliably.
 		var mbe *http.MaxBytesError
 		if errors.As(cpErr, &mbe) {
@@ -1545,6 +2116,12 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		g.failWrite(w, lz, http.StatusBadRequest, "copy_failed", cpErr)
 		return
 	}
+	actualSHA256 := hex.EncodeToString(digest.Sum(nil))
+	if lz.expectedSHA256 != "" && subtleStringNe(actualSHA256, lz.expectedSHA256) {
+		_ = os.Remove(lz.tmpSubstancePath)
+		g.failWrite(w, lz, http.StatusUnprocessableEntity, "sha256_mismatch", nil)
+		return
+	}
 
 	g.traceLease(circulation.ValueTraceLeaseUpload, lz.srcIntentionID, lz, map[string]any{
 		"bytes":     n,
@@ -1555,7 +2132,8 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 	// We only receive bytes into the lease tmp file.
 	// Finalization (atomic replace + matter.json commit + catalog rev bump) is delegated to
 	// a control-plane function associated with matter.write.
-	if g.ml == nil {
+	owner := g.ownerOf(lz)
+	if owner == nil {
 		_ = os.Remove(lz.tmpSubstancePath)
 		g.failWrite(w, lz, http.StatusInternalServerError, "missing matter loop", nil)
 		return
@@ -1563,7 +2141,7 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 
 	// The right may have been withdrawn while the body was uploading: nothing is
 	// committed for a caller that no longer holds it.
-	if !lz.authz.allowed(lz.matter) {
+	if !g.allowed(lz) {
 		_ = os.Remove(lz.tmpSubstancePath)
 		g.failWrite(w, lz, http.StatusForbidden, "forbidden", nil)
 		return
@@ -1571,14 +2149,14 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 
 	// TOCTOU defense (write): after upload, re-check rev *just before finalize*.
 	// finalizeWriteLeaseAfterUpload also checks, but we do it here to fail fast / cleaner HTTP.
-	if !g.revStillValid(lz.matter, lz.rev) {
+	if !g.revStillValidLease(lz) {
 		_ = os.Remove(lz.tmpSubstancePath)
 		g.failWrite(w, lz, http.StatusConflict, "stale", nil)
 		return
 	}
 
 	if lz.mode == leaseAppend {
-		result, err := g.ml.finalizeAppendLeaseAfterUpload(lz, n)
+		result, err := owner.finalizeAppendLeaseAfterUpload(lz, n)
 		if err != nil {
 			if _, journalErr := os.Stat(matterTransactionPath(lz.matterRoot, lz.matter)); journalErr == nil {
 				g.failWrite(w, lz, http.StatusInternalServerError, "recovery_pending", err)
@@ -1592,13 +2170,14 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 			g.failWrite(w, lz, http.StatusInternalServerError, "finalize_failed", err)
 			return
 		}
+		result[circulation.KeyMessageSHA256] = actualSHA256
 		writeJSON(w, http.StatusOK, result)
 		g.traceLease(circulation.ValueTraceLeaseDone, lz.srcIntentionID, lz, map[string]any{"bytes": n, "matter_id": lz.matter})
 		g.closeLease(lz.rid, "append_done")
 		return
 	}
 
-	newRev, warning, err := g.ml.finalizeWriteLeaseAfterUpload(lz, n)
+	newRev, warning, err := owner.finalizeWriteLeaseAfterUpload(lz, n)
 	if err != nil {
 		// A journal means commit began. Preserve all staged files so startup can
 		// deterministically roll the transaction forward.
@@ -1615,7 +2194,7 @@ func (g *HTTPSubstanceGetter) receiveAndCommit(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	resp := map[string]any{circulation.KeyOK: true, circulation.KeyRevision: newRev}
+	resp := map[string]any{circulation.KeyOK: true, circulation.KeyRevision: newRev, circulation.KeyMessageSHA256: actualSHA256}
 	if warning != "" {
 		resp[circulation.KeyWarning] = warning
 	}
@@ -1692,8 +2271,9 @@ func (g *HTTPSubstanceGetter) failWrite(w http.ResponseWriter, lz *lease, status
 		circulation.KeyMatterID: lz.matter,
 		circulation.KeyRevision: lz.rev,
 	}
+	errorText := ""
 	if err != nil {
-		details[circulation.KeyErrorText] = err.Error()
+		errorText = err.Error()
 	}
 
 	g.traceLease(circulation.ValueTraceLeaseFail, lz.srcIntentionID, lz, map[string]any{
@@ -1701,11 +2281,26 @@ func (g *HTTPSubstanceGetter) failWrite(w http.ResponseWriter, lz *lease, status
 		"reason":    reason,
 		"matter_id": lz.matter,
 		"rev":       lz.rev,
-		"err":       details[circulation.KeyErrorText],
+		"err":       errorText,
 	})
 
 	writeProblem(w, status, reason, lz.rid, "", details)
 	g.closeLease(lz.rid, "fail:"+reason)
+}
+
+func leaseHTTPHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		header := writer.Header()
+		header.Set("Cache-Control", "no-store")
+		header.Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'none'")
+		header.Set("Cross-Origin-Resource-Policy", "same-origin")
+		header.Set("Referrer-Policy", "no-referrer")
+		header.Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(request.URL.Path, substancePathPrefix) {
+			header.Set("Content-Disposition", "attachment")
+		}
+		next.ServeHTTP(writer, request)
+	})
 }
 
 // randTok
@@ -2029,7 +2624,8 @@ func subtleStringNe(a, b string) bool {
 //
 
 func (g *HTTPSubstanceGetter) traceLease(traceKind string, intentionID string, lz *lease, details map[string]any) {
-	if g == nil || g.ml == nil || g.ml.frame == nil {
+	owner := g.ownerOf(lz)
+	if owner == nil || owner.frame == nil {
 		return
 	}
 	if details == nil {
@@ -2059,5 +2655,5 @@ func (g *HTTPSubstanceGetter) traceLease(traceKind string, intentionID string, l
 		ReasonCode:  "",
 		UserText:    string(b),
 	}
-	junction.TraceEmit(g.ml.frame, tw)
+	junction.TraceEmit(owner.frame, tw)
 }

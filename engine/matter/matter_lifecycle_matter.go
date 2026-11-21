@@ -284,6 +284,12 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	if l.refuseWhenDiskLow(in) {
+		return
+	}
+	if l.refuseWhenHeavyBudgetExceeded(in) {
+		return
+	}
 
 	mid := ""
 	if in.Params != nil {
@@ -363,6 +369,9 @@ func (l *MatterLoop) capMatterCreate(msg circulation.Message) {
 		if int64(len(payloadBytes)) > l.matterInlineLimit() {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": l.matterInlineLimit()}, "initial payload exceeds the configured inline limit; create the matter empty, then use matter.write with http_data=true"))
+			return
+		}
+		if l.refuseWhenByteBudgetExceeded(in, int64(len(payloadBytes))) {
 			return
 		}
 	}
@@ -618,6 +627,12 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	if l.refuseWhenDiskLow(in) {
+		return
+	}
+	if l.refuseWhenHeavyBudgetExceeded(in) {
+		return
+	}
 
 	src := readStringParam(in.Params, circulation.KeySourceMatterID)
 	if src == "" {
@@ -757,6 +772,10 @@ func (l *MatterLoop) capMatterClone(msg circulation.Message) {
 				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: statErr.Error()}, "failed to stat source payload"))
 			return
 		}
+	}
+	// A clone writes as many bytes as its source holds: it is metered like a write (D-18).
+	if l.refuseWhenByteBudgetExceeded(in, sourceBytes) {
+		return
 	}
 	if raw, supplied := in.Params[circulation.KeyExpectedSourceByteSize]; supplied {
 		expected, valid := parseNonNegativeInt64(raw)
@@ -920,6 +939,12 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	if l.refuseWhenDiskLow(in) {
+		return
+	}
+	if l.refuseWhenHeavyBudgetExceeded(in) {
+		return
+	}
 
 	dst := readStringParam(in.Params, circulation.KeyTargetMatterID)
 	if dst == "" {
@@ -995,6 +1020,9 @@ func (l *MatterLoop) capMatterDerive(msg circulation.Message) {
 		if int64(len(payloadBytes)) > l.matterInlineLimit() {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(payloadBytes), "max_inline_bytes": l.matterInlineLimit()}, "derived payload exceeds the configured inline limit; create or derive metadata first, then use matter.write with http_data=true"))
+			return
+		}
+		if l.refuseWhenByteBudgetExceeded(in, int64(len(payloadBytes))) {
 			return
 		}
 	}

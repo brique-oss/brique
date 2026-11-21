@@ -14,10 +14,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 
 def build_bindings(runtime):
+    def env_value(params: dict) -> dict:
+        # What the wrapper sees in one variable, as a digest: a test can compare it without the
+        # value travelling in an answer, a log or a trace.
+        value = os.environ.get(str(params.get("name", "")))
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest() if value is not None else ""
+        return {"present": value is not None, "sha256": digest, "wrapper": runtime.wrapper_name}
+
     def reply(params: dict) -> dict:
         return {
             "echo": str(params.get("message", "")),
@@ -50,7 +58,7 @@ def build_bindings(runtime):
         }
 
     return {
-        "capacities": {("", "e2e.echo"): reply, ("", "e2e.relay"): relay},
+        "capacities": {("", "e2e.echo"): reply, ("", "e2e.relay"): relay, ("", "e2e.env"): env_value},
         "matters": {},
         "shutdown": [],
     }

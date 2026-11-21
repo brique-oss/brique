@@ -508,26 +508,125 @@ func createVocabularySchema(exec sqlExec) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_val_text ON vocab_nodes(parent_id, v_text) WHERE kind='val' AND vtype='text';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_val_num  ON vocab_nodes(parent_id, v_num)  WHERE kind='val' AND vtype='num';`,
 		// Root segments have a NULL parent, which UNIQUE(parent_id, kind, seg) does not
-		// deduplicate. Fold existing duplicates onto the oldest root, then enforce it.
-		`UPDATE OR IGNORE vocab_nodes
-   SET parent_id = (
-     SELECT MIN(r.node_id) FROM vocab_nodes r
-      WHERE r.parent_id IS NULL AND r.kind='seg'
-        AND r.seg = (SELECT d.seg FROM vocab_nodes d WHERE d.node_id = vocab_nodes.parent_id))
- WHERE parent_id IN (
-     SELECT d.node_id FROM vocab_nodes d
-      WHERE d.parent_id IS NULL AND d.kind='seg'
-        AND d.node_id NOT IN (
-          SELECT MIN(node_id) FROM vocab_nodes WHERE parent_id IS NULL AND kind='seg' GROUP BY seg));`,
-		`DELETE FROM vocab_nodes
-  WHERE parent_id IS NULL AND kind='seg'
-    AND node_id NOT IN (
-      SELECT MIN(node_id) FROM vocab_nodes WHERE parent_id IS NULL AND kind='seg' GROUP BY seg);`,
+		// deduplicate. Fold existing duplicates onto the oldest root (merging subtrees, losing no word),
+		// then enforce it.
+		foldDuplicateRootsStep,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_root_seg ON vocab_nodes(seg) WHERE parent_id IS NULL AND kind='seg';`,
 	}
 	for _, s := range stmts {
+		if s == foldDuplicateRootsStep {
+			if err := foldDuplicateVocabularyRoots(exec); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := exec.Exec(s); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// foldDuplicateRootsStep marks, in the schema statement list, where duplicate roots are folded.
+const foldDuplicateRootsStep = "\x00fold-duplicate-vocabulary-roots"
+
+// maxVocabularyFoldDepth bounds the recursion that merges two subtrees; a vocabulary is a few levels deep.
+const maxVocabularyFoldDepth = 64
+
+// foldDuplicateVocabularyRoots merges every duplicate root segment into the oldest one. Children that
+// collide under UNIQUE(parent_id, kind, seg) are merged recursively instead of being skipped: skipping
+// them and deleting the duplicate root would delete their whole subtree (the foreign key cascades), and
+// the vocabulary only ever grows. The work is idempotent, so an interruption is finished by the next start.
+func foldDuplicateVocabularyRoots(exec sqlExec) error {
+	rows, err := exec.Query(`SELECT seg, node_id FROM vocab_nodes
+		WHERE parent_id IS NULL AND kind='seg' ORDER BY seg, node_id`)
+	if err != nil {
+		return err
+	}
+	keeper := map[string]int64{}
+	var losers [][2]int64 // loser, winner
+	for rows.Next() {
+		var seg string
+		var id int64
+		if err := rows.Scan(&seg, &id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if winner, seen := keeper[seg]; seen {
+			losers = append(losers, [2]int64{id, winner})
+		} else {
+			keeper[seg] = id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, pair := range losers {
+		if err := mergeVocabularyNode(exec, pair[0], pair[1], 0); err != nil {
+			return err
+		}
+		if _, err := exec.Exec(`DELETE FROM vocab_nodes WHERE node_id = ?`, pair[0]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mergeVocabularyNode moves every child of loser under winner. A child that finds a sibling of the same
+// segment or value under winner is merged into it, depth first, and removed once empty.
+func mergeVocabularyNode(exec sqlExec, loser, winner int64, depth int) error {
+	if depth > maxVocabularyFoldDepth {
+		return fmt.Errorf("vocabulary is deeper than %d levels", maxVocabularyFoldDepth)
+	}
+	type child struct {
+		id                int64
+		kind              string
+		seg, vtype, vText sql.NullString
+		vNum              sql.NullFloat64
+	}
+	rows, err := exec.Query(`SELECT node_id, kind, seg, vtype, v_text, v_num FROM vocab_nodes WHERE parent_id = ? ORDER BY node_id`, loser)
+	if err != nil {
+		return err
+	}
+	var children []child
+	for rows.Next() {
+		var c child
+		if err := rows.Scan(&c.id, &c.kind, &c.seg, &c.vtype, &c.vText, &c.vNum); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		children = append(children, c)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, c := range children {
+		var siblingID int64
+		var lookup *sql.Row
+		if c.kind == "seg" {
+			lookup = exec.QueryRow(`SELECT node_id FROM vocab_nodes WHERE parent_id = ? AND kind='seg' AND seg = ?`, winner, c.seg)
+		} else {
+			lookup = exec.QueryRow(`SELECT node_id FROM vocab_nodes WHERE parent_id = ? AND kind='val' AND vtype IS ?
+				AND v_text IS ? AND v_num IS ?`, winner, c.vtype, c.vText, c.vNum)
+		}
+		switch err := lookup.Scan(&siblingID); {
+		case err == sql.ErrNoRows:
+			if _, err := exec.Exec(`UPDATE vocab_nodes SET parent_id = ? WHERE node_id = ?`, winner, c.id); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		default:
+			if err := mergeVocabularyNode(exec, c.id, siblingID, depth+1); err != nil {
+				return err
+			}
+			if _, err := exec.Exec(`DELETE FROM vocab_nodes WHERE node_id = ?`, c.id); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

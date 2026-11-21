@@ -46,6 +46,10 @@
           "http_data": {
             "type": "boolean",
             "_comment": "Optional. Set to true for binary or voluminous substance data. The engine returns a one-shot HTTP PUT handle; the caller must begin the PUT before expires_at. The upload uses lease-unique temporary files, does not hold the matter lock while streaming, and acquires that lock only to verify the bound revision and finalize the commit. Accepted values: true (bool), 'true' or '1' (string), non-zero number."
+          },
+          "expected_sha256": {
+            "type": "string",
+            "_comment": "Optional only with http_data=true. Exact hexadecimal SHA-256 of the uploaded bytes, bound by the signed intention; the PUT cannot replace it. A mismatch commits nothing."
           }
         }
       },
@@ -63,7 +67,7 @@
           },
           "http_data": {
             "type": "object",
-            "_comment": "Present only when params.http_data was true. HTTP write lease handle: { kind: 'http', base_url: string, path: string (e.g. '/substance/<rid>'), rid: string, tok: string, expires_at: integer (unix nanoseconds), revision: integer, method: 'PUT' }. The caller must begin the one-shot PUT to <base_url><path>?tok=<tok> before expires_at; an active upload may finish afterward. When present, revision is not included in the intention response because it is committed by the PUT response after upload finalization."
+            "_comment": "Present only when params.http_data was true. HTTP write lease handle: { kind: 'http', base_url, path, rid, tok, expires_at, revision, method:'PUT' }. The caller sends tok as Authorization: Bearer; public mode refuses query tokens. The PUT response returns message_sha256 and the committed revision."
           }
         }
       },

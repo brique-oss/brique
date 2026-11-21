@@ -94,6 +94,12 @@ func (l *MatterLoop) capMatterAppend(msg circulation.Message) {
 		return
 	}
 	in := msg.Intention
+	if l.refuseWhenDiskLow(in) {
+		return
+	}
+	if l.refuseWhenHeavyBudgetExceeded(in) {
+		return
+	}
 	params := in.Params
 	if params == nil {
 		params = map[string]any{}
@@ -120,6 +126,12 @@ func (l *MatterLoop) capMatterAppend(msg circulation.Message) {
 			return
 		}
 	}
+	expectedSHA256, shaErr := optionalExpectedSHA256(params)
+	if shaErr != nil || (!openHTTP && expectedSHA256 != "") {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "expected_sha256 requires http_data=true and a hexadecimal SHA-256 digest"))
+		return
+	}
 	var block []byte
 	var err error
 	if !openHTTP {
@@ -138,6 +150,9 @@ func (l *MatterLoop) capMatterAppend(msg circulation.Message) {
 		if int64(len(block)) > inlineLimit {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonPayloadTooLarge, circulation.KeySize: len(block), "max_inline_bytes": inlineLimit}, "inline append exceeds the configured limit; use http_data=true"))
+			return
+		}
+		if l.refuseWhenByteBudgetExceeded(in, int64(len(block))) {
 			return
 		}
 	}
@@ -289,13 +304,18 @@ func (l *MatterLoop) capMatterAppend(msg circulation.Message) {
 		if in.Correlation != nil {
 			sourceIntentionID = in.Correlation.RootIntentionID
 		}
-		handle, leaseErr := l.subHTTP.OpenAppendLease(l.frame.ContextDir, matterID, ext, currentRev, baseBytes, baseLines, framing, sourceIntentionID, stagedDescriptor, 0)
+		handle, leaseErr := l.subHTTP.OpenAppendLeaseFor(l, l.frame.ContextDir, matterID, ext, currentRev, baseBytes, baseLines, framing, sourceIntentionID, stagedDescriptor, 0, expectedSHA256)
 		if leaseErr != nil {
 			l.emitResponseError(errorResp(in, circulation.ValueCodeInternal,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonIOFailure, circulation.KeyErrorText: leaseErr.Error()}, "failed to open append lease"))
 			return
 		}
-		if !l.bindLeaseToCaller(handle.RID, in, "append") {
+		if failure := l.bindLeaseToCallerResult(handle.RID, in, "append"); failure != leaseBindOK {
+			if failure == leaseBindQuota {
+				l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonQuotaReached}, "lease quota reached"))
+				return
+			}
 			l.emitResponseError(errorResp(in, circulation.ValueCodeUnauthorized,
 				map[string]any{circulation.KeyReason: circulation.ValueReasonAlgoFailure}, "lease authorization unavailable"))
 			return
@@ -375,6 +395,9 @@ func (l *MatterLoop) finalizeAppendLeaseAfterUpload(lz *lease, nBytes int64) (ma
 	}
 	if nBytes <= 0 {
 		return nil, fmt.Errorf("finalize append: uploaded block must not be empty")
+	}
+	if !l.subHTTP.chargeLeaseBytes(lz, nBytes) {
+		return nil, fmt.Errorf("finalize append: byte budget of the caller is spent")
 	}
 	blockState, err := stateForPayloadFile(lz.tmpSubstancePath, lz.framing)
 	if err != nil {

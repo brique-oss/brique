@@ -103,6 +103,16 @@ type RunCfg struct {
 	Shell   bool
 	EnvName string // optional: name of the shared envs/<env_name> virtualenv to run under
 	Log     WrapperLogCfg
+	// Secrets are the secrets the wrapper needs, each given in one environment variable at launch
+	// if the policy grants it (execution_wrapper_secrets.go).
+	Secrets []WrapperSecretNeed
+}
+
+// WrapperSecretNeed is one secret a wrapper declares it needs: the name of the secret the machine
+// holds, and the environment variable the wrapper reads it from. It never carries a value.
+type WrapperSecretNeed struct {
+	Name string
+	Env  string
 }
 
 // CtxRegistry binds capName => CapEntry.
@@ -283,6 +293,16 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 						if s, ok := vv.(string); ok {
 							r.Env[k] = s
 						}
+					}
+				}
+				// A declaration that is not well formed is kept as it is, empty fields included, so
+				// that the launch refuses it by name instead of silently dropping it.
+				if secrets, ok := rm[configuration.KeyWrpSecrets].([]any); ok {
+					for _, item := range secrets {
+						entry, _ := item.(map[string]any)
+						name, _ := entry[configuration.KeyWrpSecretName].(string)
+						env, _ := entry[configuration.KeyWrpSecretEnv].(string)
+						r.Secrets = append(r.Secrets, WrapperSecretNeed{Name: name, Env: env})
 					}
 				}
 				w.Run = r

@@ -381,6 +381,12 @@ type MatterLoop struct {
 	deliveryIn     chan junction.Delivery
 	inlineMaxBytes int64
 
+	// minFreeDiskBytes is the free-space floor under which every mutation is refused (0 disables).
+	minFreeDiskBytes int64
+
+	// outboxTTL is the age after which an undelivered durable event is dropped (0 keeps them forever).
+	outboxTTL time.Duration
+
 	// static dispatch
 	caps           map[string]capHandler
 	accessRegistry *access.Registry
@@ -403,6 +409,13 @@ type MatterLoop struct {
 	subs     map[string]map[string]MatterSubscription // matter_id -> sub_id -> subscription
 	outboxMu sync.Mutex
 	outbox   []MatterPendingEvent
+	// outboxNextSeq is the position the next event file will take; outboxManifested is true once
+	// the /3 manifest is on disk. Both are guarded by outboxMu.
+	outboxNextSeq    int64
+	outboxManifested bool
+	// eventStoreMu serializes snapshots and durable publication across Matters;
+	// otherwise a slower writer could publish an older snapshot after a newer one.
+	eventStoreMu sync.Mutex
 
 	// substance http (data-plane)
 	subHTTP *HTTPSubstanceGetter
@@ -513,6 +526,12 @@ func NewMatterLoop(frame *junction.ContextRegistry) *MatterLoop {
 // NewMatterLoopWithConfig constructs Matter with optional data-plane limits.
 // Non-positive or malformed values retain the defaults.
 func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any) *MatterLoop {
+	return NewMatterLoopWithSharedHTTP(frame, cfg, nil)
+}
+
+// NewMatterLoopWithSharedHTTP joins an instance-wide Matter data plane. The
+// root Context passes nil and creates it; descendants receive that same getter.
+func NewMatterLoopWithSharedHTTP(frame *junction.ContextRegistry, cfg map[string]any, sharedHTTP *HTTPSubstanceGetter) *MatterLoop {
 	l := &MatterLoop{
 		frame:          frame,
 		deliveryIn:     make(chan junction.Delivery, 16),
@@ -539,18 +558,81 @@ func NewMatterLoopWithConfig(frame *junction.ContextRegistry, cfg map[string]any
 		done:  make(chan struct{}),
 	}
 
-	l.subHTTP = NewHTTPSubstanceGetter(l)
+	l.subHTTP = sharedHTTP
+	if l.subHTTP == nil {
+		l.subHTTP = NewHTTPSubstanceGetter(l)
+	}
 	if value := shared.AnyToInt64(cfg[configuration.KeyMatterInlineMaxBytes]); value > 0 {
 		l.inlineMaxBytes = value
 	}
-	if value := shared.AnyToInt64(cfg[configuration.KeyMatterMaxUploadBytes]); value > 0 {
-		l.subHTTP.maxUploadBytes = value
+	l.outboxTTL = defaultOutboxTTL
+	if raw, present := cfg[configuration.KeyMatterOutboxTTLHours]; present {
+		if value := shared.AnyToInt64(raw); value >= 0 {
+			l.outboxTTL = time.Duration(value) * time.Hour
+		}
 	}
-	if value := shared.AnyToInt64(cfg[configuration.KeyMatterLeaseTTLms]); value > 0 {
-		l.subHTTP.defaultTTL = time.Duration(value) * time.Millisecond
+	l.minFreeDiskBytes = defaultMinFreeDiskBytes
+	if raw, present := cfg[configuration.KeyMatterMinFreeDiskMiB]; present {
+		if value := shared.AnyToInt64(raw); value >= 0 {
+			l.minFreeDiskBytes = value << 20
+		}
+	}
+	if sharedHTTP == nil {
+		if value := shared.AnyToInt64(cfg[configuration.KeyMatterMaxUploadBytes]); value > 0 {
+			l.subHTTP.maxUploadBytes = value
+		}
+		if value := shared.AnyToInt64(cfg[configuration.KeyMatterLeaseTTLms]); value > 0 {
+			l.subHTTP.defaultTTL = time.Duration(value) * time.Millisecond
+		}
+		if value, ok := cfg[configuration.KeyMatterPublicURL].(string); ok {
+			l.subHTTP.publicURL = strings.TrimSpace(value)
+		}
+		if value, ok := cfg[configuration.KeyMatterLeaseListen].(string); ok && strings.TrimSpace(value) != "" {
+			l.subHTTP.listenAddr = strings.TrimSpace(value)
+		}
+		if value := shared.AnyToInt64(cfg[configuration.KeyMatterMaxTransfers]); value > 0 {
+			l.subHTTP.transferSlots = make(chan struct{}, int(value))
+		}
+		if value := shared.AnyToInt64(cfg[configuration.KeyMatterLeaseMaxLifeMS]); value > 0 {
+			l.subHTTP.leaseMaxLife = time.Duration(value) * time.Millisecond
+		}
+		if value := shared.AnyToInt64(cfg[configuration.KeyMatterReadIdleMS]); value > 0 {
+			l.subHTTP.readIdleTimeout = time.Duration(value) * time.Millisecond
+		}
+		burst, perMinute := defaultOwnerBytesBurst, defaultOwnerBytesPerMinute
+		if raw, present := cfg[configuration.KeyMatterOwnerBytesBurstMiB]; present {
+			if value := shared.AnyToInt64(raw); value >= 0 {
+				burst = value << 20
+			}
+		}
+		if raw, present := cfg[configuration.KeyMatterOwnerBytesPerMinuteMiB]; present {
+			if value := shared.AnyToInt64(raw); value >= 0 {
+				perMinute = value << 20
+			}
+		}
+		l.subHTTP.byteBudget = newOwnerByteBudget(burst, perMinute)
+		heavyPerSecond, heavyBurst := defaultHeavyPerSecond, defaultHeavyBurst
+		if raw, present := cfg[configuration.KeyMatterHeavyPerSecond]; present {
+			if value := shared.AnyToInt64(raw); value >= 0 {
+				heavyPerSecond = value
+			}
+		}
+		if raw, present := cfg[configuration.KeyMatterHeavyBurst]; present {
+			if value := shared.AnyToInt64(raw); value >= 0 {
+				heavyBurst = value
+			}
+		}
+		l.subHTTP.heavyBudget = newOwnerByteBudget(heavyBurst, heavyPerSecond*60)
 	}
 
 	return l
+}
+
+func (l *MatterLoop) SubstanceHTTP() *HTTPSubstanceGetter {
+	if l == nil {
+		return nil
+	}
+	return l.subHTTP
 }
 
 // InChan
@@ -760,7 +842,7 @@ func (l *MatterLoop) Start() {
 
 	// Start Substance HTTP (best-effort)
 	if l.subHTTP != nil {
-		_ = l.subHTTP.Start()
+		_ = l.subHTTP.Acquire(l)
 	}
 
 	l.wg.Add(1)
@@ -849,7 +931,7 @@ func (l *MatterLoop) Stop() {
 
 	// Stop Substance HTTP (best-effort)
 	if l.subHTTP != nil {
-		_ = l.subHTTP.Stop()
+		_ = l.subHTTP.Release(l)
 	}
 
 	done := make(chan struct{})
@@ -2613,6 +2695,17 @@ func (l *MatterLoop) emitToComm(msg circulation.Message) {
 		return
 	}
 	l.emitDeliveryToComm(l.frame.MustDelivery(msg))
+}
+
+func (l *MatterLoop) emitToCommOnRoute(msg circulation.Message, routeID string) bool {
+	if l.frame == nil {
+		return false
+	}
+	delivery, err := junction.BindSignedRoute(l.frame.MustDelivery(msg), routeID)
+	if err != nil {
+		return false
+	}
+	return l.emitDeliveryToComm(delivery)
 }
 
 func (l *MatterLoop) emitDeliveryToComm(delivery junction.Delivery) bool {

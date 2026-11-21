@@ -49,6 +49,8 @@ Usage : brique-sec [--root <dossier root/ de l'instance>] [--dir <répertoire de
   key show                                                    (clés publiques de cette instance, à transmettre aux pairs)
   principal add <id> --kind <instance|service|user> --key <clé publique>
   principal add local.<wrapper> --kind local        (composant local restreint, sans clé)
+  principal add local.ui --kind local               (autorité navigateur locale restreinte, sans clé)
+  principal add public.web --kind public            (visiteur web public, sans clé)
   principal disable|enable|remove <id>
   principal list
   grant add <principal> <read|write|create|call|define|control> <cible>... [--except <cible>]... [--actor <acteur>]
@@ -56,6 +58,9 @@ Usage : brique-sec [--root <dossier root/ de l'instance>] [--dir <répertoire de
   peer add <principal> --audience <instance> --interface <adaptateur> --target <url https>
   peer remove <principal>
   peer list
+  secret add <nom>                                            (la valeur est lue sur l'entrée standard ; remplace une valeur existante)
+  secret remove <nom>
+  secret list
   grant remove <principal> <rang> [--actor <acteur>]
   grant list <principal> [--actor <acteur>]
   compile [--out <fichier>]
@@ -185,7 +190,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		dir.Carry = hostdir.CarriesGenerations(instanceRoot) || (command == "init" && global.has("strict"))
 	}
 	rest := global.positional[1:]
-	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "apply" || command == "tls" {
+	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "secret" || command == "apply" || command == "tls" {
 		unlock, lockErr := dir.Lock()
 		if lockErr != nil {
 			return fail("verrou administratif indisponible : %v", lockErr)
@@ -226,6 +231,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return grantCommand(dir, rest, global, stdout, fail)
 	case "peer":
 		return peerCommand(dir, rest, global, stdout, fail)
+	case "secret":
+		return secretCommand(dir, rest, stdout, stderr, fail)
 	case "compile":
 		compiled, err := dir.Compile()
 		if err != nil {

@@ -1,0 +1,29 @@
+{
+  "brique": {
+    "cap_name": "ui.list",
+    "family": "reflexive",
+    "file": "engine/reflexive/reflexive_ui.go",
+    "function": "capUIList"
+  },
+  "objective": {
+    "name": "ui.list",
+    "description": "List active browser-compatible UIs readable by the admitted caller."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return only active React UIs whose Context is readable by the current admission.",
+      "inputs": { "params": {} },
+      "outputs": {
+        "payload": {
+          "result": "array of {contextPath, uiName, url}, sorted by logical coordinate"
+        }
+      },
+      "invariants": [
+        "The static Spark catalog grants no access.",
+        "Internal editor UIs and inactive Contexts are absent.",
+        "No filesystem path is returned."
+      ]
+    }
+  },
+  "subjective": {}
+}

@@ -105,6 +105,8 @@ func TestReflexiveLoop_N1_RLO_01_HelpersAndBuilders(t *testing.T) {
 		"read.state",
 		"read.structure",
 		"trace.inspect",
+		"ui.list",
+		"ui.open",
 		"vocabulary.delete",
 		"vocabulary.get",
 		"vocabulary.patch",

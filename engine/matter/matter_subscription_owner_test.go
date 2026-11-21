@@ -17,14 +17,20 @@
 package matter
 
 import (
+	"context"
+	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"brique_engine/circulation"
+	"brique_engine/configuration"
 	"brique_engine/junction"
+	"brique_engine/security/trust"
 	"brique_engine/shared"
+	"brique_engine/signedtransport"
 )
 
 type subscriptionWorld struct {
@@ -49,17 +55,310 @@ func (w *subscriptionWorld) call(id string, params map[string]any, handler func(
 	return w.next().Response
 }
 
+func (w *subscriptionWorld) callRoute(id, routeID string, params map[string]any, handler func(circulation.Message)) circulation.Response {
+	in, cleanup := w.requestAsRoute(id, "/root/subscriber", "", routeID)
+	defer cleanup()
+	in.Params = params
+	handler(circulation.Message{Kind: circulation.ValueKindIntention, Intention: in})
+	return w.next().Response
+}
+
+func (w *subscriptionWorld) callLocalUI(id, channel string, params map[string]any, handler func(circulation.Message)) circulation.Response {
+	w.t.Helper()
+	admitted, err := w.runtime.AdmitLocalUI()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	request, err := junction.AdmitLocalUI(admitted, channel, "root", circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: id,
+			To:          circulation.Address{Context: circulation.ContextID(w.loop.frame.CtxId), Type: "matter", Cap: "matter.subscribe"},
+			Params:      params,
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	message, _ := request.Message()
+	cleanup, err := w.loop.bindExternalRequest(request)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer cleanup()
+	handler(message)
+	return w.next().Response
+}
+
+func (w *subscriptionWorld) callPublicWeb(id, channel string, params map[string]any, handler func(circulation.Message)) circulation.Response {
+	w.t.Helper()
+	admitted, err := w.runtime.AdmitPublicWeb()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	request, err := junction.AdmitPublicWeb(admitted, channel, "root", circulation.Message{
+		Kind: circulation.ValueKindIntention,
+		Intention: circulation.Intention{
+			IntentionID: id,
+			To:          circulation.Address{Context: circulation.ContextID(w.loop.frame.CtxId), Type: "matter", Cap: "matter.subscribe"},
+			Params:      params,
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	message, _ := request.Message()
+	cleanup, err := w.loop.bindExternalRequest(request)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer cleanup()
+	handler(message)
+	return w.next().Response
+}
+
+func TestLocalUISubscriptionBelongsToItsLiveChannel(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	channels := w.registry
+	if !channels.ActivateUIChannel("local_ui", "channel-a") || !channels.ActivateUIChannel("local_ui", "channel-b") {
+		t.Fatal("could not activate UI channels")
+	}
+	params := map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "ui-sub"}
+	if response := w.callLocalUI(leaseTestID1, "channel-a", params, w.loop.capMatterSubscribe); response.Status != circulation.ValueStatusOK {
+		t.Fatalf("subscribe: %#v", response)
+	}
+	subscription, found := w.loop.getSub("allowed", "ui-sub")
+	if !found || subscription.Owner != trust.LocalUIPrincipalID || subscription.OwnerChannel != "channel-a" ||
+		subscription.OwnerChannelKind != "local_ui" || subscription.Durable ||
+		subscription.Target.Context != "@local_ui:/channel-a/root" {
+		t.Fatalf("subscription = %+v, found=%v", subscription, found)
+	}
+
+	// The same policy principal on another browser connection cannot take over
+	// or remove the channel-owned subscription.
+	if response := w.callLocalUI(leaseTestID2, "channel-b", params, w.loop.capMatterSubscribe); response.Status == circulation.ValueStatusOK {
+		t.Fatalf("another channel replaced the subscription: %#v", response)
+	}
+	unsub := w.callLocalUI("123e4567-e89b-42d3-a456-426614174003", "channel-b", params, w.loop.capMatterUnsubscribe)
+	if scopeMapPayload(t, unsub)[circulation.KeyRemoved] != false {
+		t.Fatalf("another channel removed the subscription: %#v", unsub)
+	}
+	if current, ok := w.loop.getSub("allowed", "ui-sub"); !ok || current.OwnerChannel != "channel-a" {
+		t.Fatalf("subscription changed: %+v, found=%v", current, ok)
+	}
+}
+
+func TestClosedUIChannelCannotLeaveOrRecreateSubscriptions(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	if !w.registry.ActivateUIChannel("local_ui", "channel-a") {
+		t.Fatal("could not activate UI channel")
+	}
+	params := map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "ui-sub"}
+	w.callLocalUI(leaseTestID1, "channel-a", params, w.loop.capMatterSubscribe)
+	w.registry.DeactivateUIChannel("local_ui", "channel-a")
+	if removed := w.loop.EndUIChannel("local_ui", "channel-a"); removed != 1 {
+		t.Fatalf("removed = %d", removed)
+	}
+	if _, found := w.loop.getSub("allowed", "ui-sub"); found {
+		t.Fatal("closed channel subscription survived")
+	}
+	response := w.callLocalUI(leaseTestID2, "channel-a", params, w.loop.capMatterSubscribe)
+	if response.Status == circulation.ValueStatusOK {
+		t.Fatalf("a racing request recreated an orphan: %#v", response)
+	}
+	if _, found := w.loop.getSub("allowed", "ui-sub"); found {
+		t.Fatal("inactive channel recreated a subscription")
+	}
+}
+
+func TestUIChannelSubscriptionCannotBeDurable(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	w.registry.ActivateUIChannel("local_ui", "channel-a")
+	response := w.callLocalUI(leaseTestID1, "channel-a", map[string]any{
+		circulation.KeyMatterID: "allowed", circulation.KeySubID: "durable-ui", circulation.KeyDurable: true,
+	}, w.loop.capMatterSubscribe)
+	if response.Status == circulation.ValueStatusOK {
+		t.Fatalf("durable UI subscription accepted: %#v", response)
+	}
+	if _, found := w.loop.getSub("allowed", "durable-ui"); found {
+		t.Fatal("durable UI subscription was stored")
+	}
+}
+
+func TestPublicWebSubscriptionUsesTheSharedChannelOwnership(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	if !w.registry.ActivateUIChannel("public_web", "public-a") || !w.registry.ActivateUIChannel("public_web", "public-b") {
+		t.Fatal("could not activate public channels")
+	}
+	params := map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "public-sub"}
+	if response := w.callPublicWeb(leaseTestID1, "public-a", params, w.loop.capMatterSubscribe); response.Status != circulation.ValueStatusOK {
+		t.Fatalf("public subscribe: %#v", response)
+	}
+	subscription, found := w.loop.getSub("allowed", "public-sub")
+	if !found || subscription.Owner != trust.PublicWebPrincipalID || subscription.OwnerChannel != "public-a" ||
+		subscription.OwnerChannelKind != "public_web" || subscription.Target.Context != "@public_web:/public-a/root" {
+		t.Fatalf("public subscription = %+v, found=%v", subscription, found)
+	}
+	if response := w.callPublicWeb(leaseTestID2, "public-b", params, w.loop.capMatterSubscribe); response.Status == circulation.ValueStatusOK {
+		t.Fatalf("another public channel replaced the subscription: %#v", response)
+	}
+	w.registry.DeactivateUIChannel("public_web", "public-a")
+	if removed := w.loop.EndUIChannel("public_web", "public-a"); removed != 1 {
+		t.Fatalf("removed public subscriptions = %d", removed)
+	}
+	if _, found := w.loop.getSub("allowed", "public-sub"); found {
+		t.Fatal("closed public channel retained subscription")
+	}
+}
+
+func TestPublicWebSubscriptionQuotasAreReservedAtomically(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	const attempts = 128
+	caller := admittedSubscriptionCaller{principal: trust.PublicWebPrincipalID, channel: "public-a", channelKind: "public_web", admitted: true}
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			w.loop.installSubscription(caller, MatterSubscription{
+				ID: "public-" + strconv.Itoa(index), MatterID: "matter-" + strconv.Itoa(index), Owner: trust.PublicWebPrincipalID,
+				OwnerChannel: "public-a", OwnerChannelKind: "public_web",
+			})
+		}(i)
+	}
+	wg.Wait()
+	if count := w.loop.ownerSubscriptionCount(caller); count != maxPublicSubscriptionsPerChannel {
+		t.Fatalf("public channel subscriptions = %d, want %d", count, maxPublicSubscriptionsPerChannel)
+	}
+
+	w = newSubscriptionWorld(t)
+	const globalAttempts = 640
+	for i := 0; i < globalAttempts; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			channel := "channel-" + strconv.Itoa(index/maxPublicSubscriptionsPerChannel)
+			public := admittedSubscriptionCaller{principal: trust.PublicWebPrincipalID, channel: channel, channelKind: "public_web", admitted: true}
+			w.loop.installSubscription(public, MatterSubscription{
+				ID: "global-" + strconv.Itoa(index), MatterID: "matter-" + strconv.Itoa(index), Owner: trust.PublicWebPrincipalID,
+				OwnerChannel: channel, OwnerChannelKind: "public_web",
+			})
+		}(i)
+	}
+	wg.Wait()
+	w.loop.subsMu.RLock()
+	total := 0
+	for _, subscriptions := range w.loop.subs {
+		for _, subscription := range subscriptions {
+			if subscription.OwnerChannelKind == "public_web" {
+				total++
+			}
+		}
+	}
+	w.loop.subsMu.RUnlock()
+	if total != maxPublicSubscriptionsGlobal {
+		t.Fatalf("global public subscriptions = %d, want %d", total, maxPublicSubscriptionsGlobal)
+	}
+}
+
+func TestInactiveUIChannelCannotReceiveAnEvent(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	w.registry.ActivateUIChannel("local_ui", "channel-a")
+	w.callLocalUI(leaseTestID1, "channel-a", map[string]any{
+		circulation.KeyMatterID: "allowed", circulation.KeySubID: "ui-sub",
+	}, w.loop.capMatterSubscribe)
+	w.registry.DeactivateUIChannel("local_ui", "channel-a")
+	w.loop.notifyBriqueMatterWritten("allowed", 6, "source")
+	if !w.nothingEmitted() {
+		t.Fatal("an event was emitted after channel deactivation")
+	}
+	if _, found := w.loop.getSub("allowed", "ui-sub"); found {
+		t.Fatal("event delivery retained an inactive channel subscription")
+	}
+}
+
 func (w *subscriptionWorld) next() circulation.Message {
+	delivery := w.nextDelivery()
+	m, _ := delivery.Message()
+	if reservation, ok := delivery.ExternalResponse(); ok {
+		_ = reservation.Commit()
+	}
+	return m
+}
+
+func (w *subscriptionWorld) nextDelivery() junction.Delivery {
 	select {
 	case d := <-w.comm:
-		m, _ := d.Message()
-		if reservation, ok := d.ExternalResponse(); ok {
-			_ = reservation.Commit()
-		}
-		return m
+		return d
 	case <-time.After(2 * time.Second):
 		w.t.Fatal("nothing was emitted")
-		return circulation.Message{}
+		return junction.Delivery{}
+	}
+}
+
+func TestSignedRouteOwnsOnlyEphemeralSubscriptions(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	const routeID = "bwg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	handle, err := w.registry.SignedTransport().Register(signedtransport.Route{
+		ID: routeID, RemoteInstanceID: "partner-instance", RemoteKeyID: w.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.registry.SignedTransport().SetRouteClosed(func(route string) { w.loop.EndSignedRoute(route) })
+
+	params := map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "ephemeral"}
+	if response := w.callRoute(leaseTestID1, routeID, params, w.loop.capMatterSubscribe); response.Status != circulation.ValueStatusOK {
+		t.Fatalf("ephemeral subscribe: %#v", response)
+	}
+	subscription, found := w.loop.getSub("allowed", "ephemeral")
+	if !found || subscription.OwnerRoute != routeID || subscription.Durable {
+		t.Fatalf("ephemeral subscription = %+v, found=%v", subscription, found)
+	}
+	w.loop.notifyBriqueMatterWritten("allowed", 6, "source")
+	event := w.nextDelivery()
+	if hint, ok := event.SignedRouteHint(); !ok || hint != routeID {
+		t.Fatalf("event route hint = %q, %v", hint, ok)
+	}
+
+	durable := map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "durable", circulation.KeyDurable: true}
+	if response := w.callRoute(leaseTestID2, routeID, durable, w.loop.capMatterSubscribe); response.Status != circulation.ValueStatusOK {
+		t.Fatalf("durable subscribe: %#v", response)
+	}
+	if subscription, found := w.loop.getSub("allowed", "durable"); !found || subscription.OwnerRoute != "" || !subscription.Durable {
+		t.Fatalf("durable subscription = %+v, found=%v", subscription, found)
+	}
+
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := w.loop.getSub("allowed", "ephemeral"); found {
+		t.Fatal("closed route retained its ephemeral subscription")
+	}
+	if _, found := w.loop.getSub("allowed", "durable"); !found {
+		t.Fatal("closed route removed a durable principal subscription")
+	}
+	const nextRouteID = "bwg1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	nextHandle, err := w.registry.SignedTransport().Register(signedtransport.Route{
+		ID: nextRouteID, RemoteInstanceID: "partner-instance", RemoteKeyID: w.keyID,
+		Send: func(context.Context, []byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsubscribed := w.callRoute("123e4567-e89b-42d3-a456-426614174003", nextRouteID,
+		map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "durable"}, w.loop.capMatterUnsubscribe)
+	if scopeMapPayload(t, unsubscribed)[circulation.KeyRemoved] != true {
+		t.Fatalf("new route could not manage durable subscription: %#v", unsubscribed)
+	}
+	if err := nextHandle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := w.callRoute("123e4567-e89b-42d3-a456-426614174004", routeID,
+		map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "late"}, w.loop.capMatterSubscribe)
+	if response.Status == circulation.ValueStatusOK {
+		t.Fatalf("closed route created a subscription: %#v", response)
 	}
 }
 
@@ -291,7 +590,8 @@ func TestExternalSubscriptionsPerPrincipalAreBounded(t *testing.T) {
 	}
 	// Another principal's count is separate.
 	w.loop.addSub("allowed", MatterSubscription{ID: "b0", MatterID: "allowed", Owner: "partner-b"})
-	if w.loop.ownerSubscriptionCount("partner-b") != 1 || w.loop.ownerSubscriptionCount("partner-a") != maxSubscriptionsPerOwner {
+	if w.loop.ownerSubscriptionCount(admittedSubscriptionCaller{principal: "partner-b", admitted: true}) != 1 ||
+		w.loop.ownerSubscriptionCount(admittedSubscriptionCaller{principal: "partner-a", admitted: true}) != maxSubscriptionsPerOwner {
 		t.Fatal("subscriptions are counted across owners")
 	}
 }
@@ -370,5 +670,95 @@ func TestASubscriptionBelongsToTheActorThatMadeIt(t *testing.T) {
 	}
 	if resp := as("123e4567-e89b-42d3-a456-426614174009", "alice", unsub, w.loop.capMatterUnsubscribe); scopeMapPayload(t, resp)[circulation.KeyRemoved] != true {
 		t.Fatalf("alice could not remove her own subscription: %#v", resp)
+	}
+}
+
+func TestDurableOutboxOfAnUnreachableSubscriberStaysBounded(t *testing.T) {
+	previousPerSubscription, previousTotal := maxOutboxPerSubscription, maxOutboxTotal
+	maxOutboxPerSubscription, maxOutboxTotal = 3, 5
+	t.Cleanup(func() { maxOutboxPerSubscription, maxOutboxTotal = previousPerSubscription, previousTotal })
+
+	w := newSubscriptionWorld(t)
+	w.call(leaseTestID1, map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "d1", circulation.KeyDurable: true}, w.loop.capMatterSubscribe)
+	sub, found := w.loop.getSub("allowed", "d1")
+	if !found {
+		t.Fatal("durable subscription missing")
+	}
+	count := func() int {
+		w.loop.outboxMu.Lock()
+		defer w.loop.outboxMu.Unlock()
+		return len(w.loop.outbox)
+	}
+	for index := 0; index < 10; index++ {
+		if err := w.loop.enqueueDurableEventWithID(sub, map[string]any{"k": index}, fmt.Sprintf("ev-%d", index)); err != nil {
+			t.Fatalf("a full outbox must not fail the writer: %v", err)
+		}
+	}
+	if count() != 3 {
+		t.Fatalf("outbox holds %d events for one unreachable subscription, want the bound 3", count())
+	}
+	w.loop.outboxMu.Lock()
+	head := w.loop.outbox[0].EventID
+	w.loop.outboxMu.Unlock()
+	if head != "ev-0" {
+		t.Fatalf("the event in flight at the head was disturbed: %s", head)
+	}
+	// Acknowledging the head frees a place for a new event.
+	if _, _, err := w.loop.ackOutbox("d1", "ev-0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.loop.enqueueDurableEventWithID(sub, map[string]any{"k": 99}, "ev-99"); err != nil || count() != 3 {
+		t.Fatalf("a freed place was not reused: count=%d err=%v", count(), err)
+	}
+}
+
+func TestDurableOutboxEventsExpireWithAge(t *testing.T) {
+	w := newSubscriptionWorld(t)
+	w.loop.outboxTTL = time.Hour
+	w.call(leaseTestID1, map[string]any{circulation.KeyMatterID: "allowed", circulation.KeySubID: "d1", circulation.KeyDurable: true}, w.loop.capMatterSubscribe)
+	sub, found := w.loop.getSub("allowed", "d1")
+	if !found {
+		t.Fatal("durable subscription missing")
+	}
+	if err := w.loop.enqueueDurableEventWithID(sub, map[string]any{"k": 1}, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.loop.enqueueDurableEventWithID(sub, map[string]any{"k": 2}, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	w.loop.outboxMu.Lock()
+	w.loop.outbox[0].CreatedAt = now.Add(-2 * time.Hour).UnixNano()
+	w.loop.outboxMu.Unlock()
+	if dropped := w.loop.expireOutbox(now); dropped != 1 {
+		t.Fatalf("expired %d events, want 1", dropped)
+	}
+	w.loop.outboxMu.Lock()
+	left := append([]MatterPendingEvent(nil), w.loop.outbox...)
+	w.loop.outboxMu.Unlock()
+	if len(left) != 1 || left[0].EventID != "fresh" {
+		t.Fatalf("outbox after expiry = %+v", left)
+	}
+	if removed, err := w.loop.ackPendingMatterEvent("d1", "old"); err != nil || removed {
+		t.Fatalf("acknowledging an expired event = %v, %v; want not pending", removed, err)
+	}
+	w.loop.outboxTTL = 0
+	w.loop.outboxMu.Lock()
+	w.loop.outbox[0].CreatedAt = now.Add(-1000 * time.Hour).UnixNano()
+	w.loop.outboxMu.Unlock()
+	if dropped := w.loop.expireOutbox(now); dropped != 0 {
+		t.Fatal("a zero TTL must keep events forever")
+	}
+}
+
+func TestOutboxTTLConfiguration(t *testing.T) {
+	if l := NewMatterLoopWithConfig(nil, map[string]any{}); l.outboxTTL != 7*24*time.Hour {
+		t.Fatalf("default TTL = %s", l.outboxTTL)
+	}
+	if l := NewMatterLoopWithConfig(nil, map[string]any{configuration.KeyMatterOutboxTTLHours: int64(0)}); l.outboxTTL != 0 {
+		t.Fatal("explicit zero must keep events forever")
+	}
+	if l := NewMatterLoopWithConfig(nil, map[string]any{configuration.KeyMatterOutboxTTLHours: int64(2)}); l.outboxTTL != 2*time.Hour {
+		t.Fatalf("configured TTL = %s", l.outboxTTL)
 	}
 }

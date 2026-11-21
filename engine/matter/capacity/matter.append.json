@@ -21,7 +21,8 @@
           "http_data": { "type": "boolean", "_comment": "Optional. Request a one-shot HTTP PUT lease for a large append." },
           "expected_revision": { "type": "integer", "_comment": "Optional optimistic revision guard." },
           "expected_byte_size": { "type": "integer", "_comment": "Optional committed byte-size guard. Zero is valid." },
-          "expected_line_count": { "type": "integer", "_comment": "Optional committed line-count guard, valid only for lines framing." }
+          "expected_line_count": { "type": "integer", "_comment": "Optional committed line-count guard, valid only for lines framing." },
+          "expected_sha256": { "type": "string", "_comment": "Optional only with http_data=true. Exact hexadecimal SHA-256 of the appended upload; mismatch commits nothing." }
         }
       },
       "outputs": {

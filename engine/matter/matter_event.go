@@ -156,12 +156,20 @@ type MatterSubscription struct {
 	Target    circulation.Address `json:"target"`
 	CreatedAt int64               `json:"created_at"`
 	Durable   bool                `json:"durable"`
-	// Owner is the durable principal id of an external subscriber; empty for a
-	// local subscription. It is what the read right is re-decided against.
+	// Owner is the policy principal id of an admitted subscriber; empty for an
+	// internal local subscription. It is what the read right is re-decided against.
 	Owner string `json:"owner,omitempty"`
 	// OwnerActor is the actor the owner subscribed as; the read right is
 	// re-decided for that actor, and only that actor manages the subscription.
 	OwnerActor string `json:"owner_actor,omitempty"`
+	// OwnerChannel binds an ephemeral browser subscription to the exact
+	// ingress-created connection that subscribed. It is never page supplied.
+	OwnerChannel string `json:"owner_channel,omitempty"`
+	// OwnerChannelKind distinguishes local.ui from public.web channels.
+	OwnerChannelKind string `json:"owner_channel_kind,omitempty"`
+	// OwnerRoute binds a non-durable signed subscription to the exact
+	// authenticated duplex generation that carried it.
+	OwnerRoute string `json:"owner_route,omitempty"`
 }
 
 // ensureSubsInit
@@ -558,9 +566,9 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 		subID = fmt.Sprintf("sub_%d", time.Now().UnixNano())
 	}
 
-	owner, ownerActor, externalCaller := l.callerIdentity(in)
+	caller := l.subscriptionCaller(in)
 	target := in.From
-	if rawTarget, exists := in.Params[circulation.KeyTarget]; exists && externalCaller {
+	if rawTarget, exists := in.Params[circulation.KeyTarget]; exists && caller.admitted {
 		// An external subscriber's events go to the address it signed as its own;
 		// it cannot redirect them to a third party.
 		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
@@ -589,37 +597,49 @@ func (l *MatterLoop) capMatterSubscribe(msg circulation.Message) {
 	if raw, ok := in.Params[circulation.KeyDurable].(bool); ok {
 		durable = raw
 	}
+	if caller.channel != "" && durable {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "a browser channel subscription cannot be durable"))
+		return
+	}
+	if durable {
+		// Durable principal-to-principal subscriptions intentionally outlive a
+		// transport generation and continue to use their persisted outbox.
+		caller.route = ""
+	}
 
-	previous, hadPrevious := l.getSub(matterID, subID)
-	if externalCaller && hadPrevious && (previous.Owner != owner || previous.OwnerActor != ownerActor) {
+	if caller.admitted {
+		if !l.subscriptionTargetDeliverable(caller, target) {
+			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "no delivery path to this principal"))
+			return
+		}
+	}
+	subscription := MatterSubscription{
+		Owner:            caller.principal,
+		OwnerActor:       caller.actor,
+		OwnerChannel:     caller.channel,
+		OwnerChannelKind: caller.channelKind,
+		OwnerRoute:       caller.route,
+		ID:               subID,
+		MatterID:         matterID,
+		Target:           target,
+		CreatedAt:        time.Now().UnixNano(),
+		Durable:          durable,
+	}
+	previous, hadPrevious, installed := l.installSubscription(caller, subscription)
+	if installed == subscriptionOwnerConflict {
 		// Somebody else's subscription id: indistinguishable from a refusal to
 		// create, and never overwritten.
 		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
 			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "subscription id is not available"))
 		return
 	}
-	if externalCaller {
-		if !l.externalDeliveryPathExists(owner) || !externalTargetDeliverable(owner, target) {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "no delivery path to this principal"))
-			return
-		}
-		if !hadPrevious && l.ownerSubscriptionCount(owner) >= maxSubscriptionsPerOwner {
-			l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
-				map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "subscription limit reached"))
-			return
-		}
+	if installed == subscriptionQuotaReached {
+		l.emitResponseError(errorResp(in, circulation.ValueCodeRefused,
+			map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidRequest}, "subscription limit reached"))
+		return
 	}
-	subscription := MatterSubscription{
-		Owner:      owner,
-		OwnerActor: ownerActor,
-		ID:         subID,
-		MatterID:   matterID,
-		Target:     target,
-		CreatedAt:  time.Now().UnixNano(),
-		Durable:    durable,
-	}
-	l.addSub(matterID, subscription)
 	if durable || (hadPrevious && previous.Durable) {
 		if err := l.persistMatterSubscriptions(); err != nil {
 			if hadPrevious {

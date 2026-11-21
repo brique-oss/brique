@@ -296,6 +296,8 @@ func buildCapTable() map[string]capHandler {
 		"read.document":  (*ReflexiveLoop).capReadDocument,
 		"read.state":     (*ReflexiveLoop).capReadState,
 		"read.capacity":  (*ReflexiveLoop).capReadCapacity,
+		"ui.list":        (*ReflexiveLoop).capUIList,
+		"ui.open":        (*ReflexiveLoop).capUIOpen,
 
 		// -----------------------------
 		// Edition

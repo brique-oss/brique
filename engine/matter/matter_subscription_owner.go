@@ -40,21 +40,48 @@ import (
 // callerPrincipal returns the durable principal id of the external caller being
 // served, or "" and false for a local caller.
 func (l *MatterLoop) callerPrincipal(in circulation.Intention) (string, bool) {
-	principal, _, external := l.callerIdentity(in)
-	return principal, external
+	caller := l.subscriptionCaller(in)
+	return caller.principal, caller.admitted
 }
 
-// callerIdentity adds the actor the sender wrote in the signed header.
-func (l *MatterLoop) callerIdentity(in circulation.Intention) (principal, actor string, external bool) {
+type admittedSubscriptionCaller struct {
+	principal   string
+	actor       string
+	channel     string
+	channelKind string
+	route       string
+	admitted    bool
+}
+
+func (caller admittedSubscriptionCaller) owns(subscription MatterSubscription) bool {
+	if subscription.Owner == "" || subscription.Owner != caller.principal ||
+		subscription.OwnerActor != caller.actor || subscription.OwnerChannel != caller.channel ||
+		subscription.OwnerChannelKind != caller.channelKind {
+		return false
+	}
+	// No route on the stored subscription means durable principal ownership:
+	// any currently admitted transport of the same principal/actor may manage it.
+	return subscription.OwnerRoute == "" || subscription.OwnerRoute == caller.route
+}
+
+// subscriptionCaller reads identity and channel only from the bound admission.
+func (l *MatterLoop) subscriptionCaller(in circulation.Intention) admittedSubscriptionCaller {
 	delivery, bound := l.externalRequest(strings.TrimSpace(in.IntentionID))
 	if !bound {
-		return "", "", false
+		return admittedSubscriptionCaller{}
 	}
 	admitted, isExternal := delivery.ExternalAdmission()
 	if !isExternal || admitted == nil {
-		return "", "", false
+		return admittedSubscriptionCaller{}
 	}
-	return admitted.PrincipalID(), admitted.ActorID(), true
+	caller := admittedSubscriptionCaller{principal: admitted.PrincipalID(), actor: admitted.ActorID(), admitted: true}
+	caller.route, _ = delivery.ExternalRouteID()
+	if admitted.IsLocalUI() {
+		caller.channel, caller.channelKind = admitted.ChannelID(), "local_ui"
+	} else if admitted.IsPublicWeb() {
+		caller.channel, caller.channelKind = admitted.ChannelID(), "public_web"
+	}
+	return caller
 }
 
 // subscriptionStillAuthorized re-decides the read right of a subscription's owner
@@ -65,6 +92,18 @@ func (l *MatterLoop) subscriptionStillAuthorized(subscription MatterSubscription
 	}
 	if l.frame == nil || l.frame.CtxCommReg == nil {
 		return false
+	}
+	if subscription.OwnerChannel != "" {
+		channels, ok := l.frame.CtxCommReg.(junction.UIChannelRegistry)
+		if !ok || !channels.UIChannelActive(subscription.OwnerChannelKind, subscription.OwnerChannel) {
+			return false
+		}
+	}
+	if subscription.OwnerRoute != "" {
+		provider, ok := l.frame.CtxCommReg.(junction.SignedTransportProvider)
+		if !ok || provider.SignedTransport() == nil || !provider.SignedTransport().HasRouteID(subscription.OwnerRoute) {
+			return false
+		}
 	}
 	provider, ok := l.frame.CtxCommReg.(junction.TrustRuntimeProvider)
 	if !ok {
@@ -88,11 +127,11 @@ func (l *MatterLoop) endSubscription(subscription MatterSubscription) {
 // mayManageSubscription: an external caller manages only its own subscriptions;
 // to anyone else the subscription does not exist. A local caller manages any.
 func (l *MatterLoop) mayManageSubscription(in circulation.Intention, subscription MatterSubscription, exists bool) bool {
-	principal, actor, external := l.callerIdentity(in)
-	if !external {
+	caller := l.subscriptionCaller(in)
+	if !caller.admitted {
 		return true
 	}
-	return exists && subscription.Owner != "" && subscription.Owner == principal && subscription.OwnerActor == actor
+	return exists && caller.owns(subscription)
 }
 
 // findSubscription locates a subscription by id alone (acknowledgements carry no
@@ -117,22 +156,160 @@ func (l *MatterLoop) hasSubscriptionTable() bool {
 	return l.subs != nil
 }
 
-// maxSubscriptionsPerOwner bounds what one external principal can hold.
+// maxSubscriptionsPerOwner bounds what one exact admitted owner can hold. For
+// browser callers the channel is part of that owner.
 const maxSubscriptionsPerOwner = 64
 
-func (l *MatterLoop) ownerSubscriptionCount(owner string) int {
+const (
+	maxPublicSubscriptionsPerChannel = 16
+	maxPublicSubscriptionsGlobal     = 512
+)
+
+func (l *MatterLoop) ownerSubscriptionCount(caller admittedSubscriptionCaller) int {
 	l.ensureSubsInit()
 	l.subsMu.RLock()
 	defer l.subsMu.RUnlock()
 	count := 0
 	for _, byID := range l.subs {
 		for _, subscription := range byID {
-			if subscription.Owner == owner {
+			if caller.owns(subscription) {
 				count++
 			}
 		}
 	}
 	return count
+}
+
+type subscriptionInstallResult uint8
+
+const (
+	subscriptionInstalled subscriptionInstallResult = iota
+	subscriptionOwnerConflict
+	subscriptionQuotaReached
+)
+
+// installSubscription performs ownership, quota reservation and publication
+// under one lock. Public channels cannot race on different Matters to exceed a
+// per-channel or instance-wide budget.
+func (l *MatterLoop) installSubscription(caller admittedSubscriptionCaller, subscription MatterSubscription) (MatterSubscription, bool, subscriptionInstallResult) {
+	l.ensureSubsInit()
+	l.subsMu.Lock()
+	defer l.subsMu.Unlock()
+	byID := l.subs[subscription.MatterID]
+	previous, hadPrevious := byID[subscription.ID]
+	if caller.admitted && hadPrevious && !caller.owns(previous) {
+		return previous, true, subscriptionOwnerConflict
+	}
+	if caller.admitted && !hadPrevious {
+		ownerCount, publicCount := 0, 0
+		for _, subscriptions := range l.subs {
+			for _, existing := range subscriptions {
+				if caller.owns(existing) {
+					ownerCount++
+				}
+				if existing.OwnerChannelKind == "public_web" {
+					publicCount++
+				}
+			}
+		}
+		limit := maxSubscriptionsPerOwner
+		if caller.channelKind == "public_web" {
+			limit = maxPublicSubscriptionsPerChannel
+			if publicCount >= maxPublicSubscriptionsGlobal {
+				return MatterSubscription{}, false, subscriptionQuotaReached
+			}
+		}
+		if ownerCount >= limit {
+			return MatterSubscription{}, false, subscriptionQuotaReached
+		}
+	}
+	if byID == nil {
+		byID = make(map[string]MatterSubscription)
+		l.subs[subscription.MatterID] = byID
+	}
+	byID[subscription.ID] = subscription
+	return previous, hadPrevious, subscriptionInstalled
+}
+
+func (l *MatterLoop) subscriptionTargetDeliverable(caller admittedSubscriptionCaller, target circulation.Address) bool {
+	if caller.channel != "" {
+		if l.frame == nil || l.frame.CtxCommReg == nil {
+			return false
+		}
+		provider, ok := l.frame.CtxCommReg.(junction.UIChannelRegistry)
+		if !ok || !provider.UIChannelActive(caller.channelKind, caller.channel) {
+			return false
+		}
+		prefix := "@" + caller.channelKind + ":/" + caller.channel + "/"
+		return strings.HasPrefix(string(target.Context), prefix) && len(string(target.Context)) > len(prefix)
+	}
+	if caller.route != "" {
+		if l.frame == nil || l.frame.CtxCommReg == nil {
+			return false
+		}
+		provider, ok := l.frame.CtxCommReg.(junction.SignedTransportProvider)
+		if !ok || provider.SignedTransport() == nil || !provider.SignedTransport().HasRouteID(caller.route) {
+			return false
+		}
+	}
+	return l.externalDeliveryPathExists(caller.principal) && externalTargetDeliverable(caller.principal, target)
+}
+
+// EndUIChannel removes every ephemeral subscription owned by a closed browser
+// connection. Deactivation happens before this call, so a racing subscribe is
+// refused by subscriptionTargetDeliverable instead of recreating an orphan.
+func (l *MatterLoop) EndUIChannel(kind, channelID string) int {
+	kind, channelID = strings.TrimSpace(kind), strings.TrimSpace(channelID)
+	if l == nil || channelID == "" || (kind != "local_ui" && kind != "public_web") {
+		return 0
+	}
+	l.ensureSubsInit()
+	l.subsMu.Lock()
+	removed := 0
+	for matterID, byID := range l.subs {
+		for subID, subscription := range byID {
+			if subscription.OwnerChannel == channelID && subscription.OwnerChannelKind == kind {
+				delete(byID, subID)
+				removed++
+			}
+		}
+		if len(byID) == 0 {
+			delete(l.subs, matterID)
+		}
+	}
+	l.subsMu.Unlock()
+	if l.subHTTP != nil {
+		l.subHTTP.closeUIChannelLeases(kind, channelID)
+	}
+	return removed
+}
+
+// EndSignedRoute removes non-durable subscriptions owned by one authenticated
+// duplex generation. Durable subscriptions never carry OwnerRoute.
+func (l *MatterLoop) EndSignedRoute(routeID string) int {
+	routeID = strings.TrimSpace(routeID)
+	if l == nil || routeID == "" {
+		return 0
+	}
+	l.ensureSubsInit()
+	l.subsMu.Lock()
+	removed := 0
+	for matterID, byID := range l.subs {
+		for subID, subscription := range byID {
+			if subscription.OwnerRoute == routeID {
+				delete(byID, subID)
+				removed++
+			}
+		}
+		if len(byID) == 0 {
+			delete(l.subs, matterID)
+		}
+	}
+	l.subsMu.Unlock()
+	if l.subHTTP != nil {
+		l.subHTTP.closeSignedRouteLeases(routeID)
+	}
+	return removed
 }
 
 // externalDeliveryPathExists says whether Communication knows where to send
