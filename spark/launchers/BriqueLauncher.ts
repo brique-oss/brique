@@ -23,6 +23,8 @@ export type BriqueProcess = {
 };
 
 export type BriqueLaunchOptions = {
+  runtimeDirectory?: string;
+  websocketAddress?: string;
   securityDirectory?: string;
   securityGeneration?: string;
   auditMaxFileMiB?: number;
@@ -42,6 +44,12 @@ export function launchBrique(
     throw new Error("securityGeneration requires securityDirectory");
   }
   const args = ["-root_path", rootDir];
+  if (options.runtimeDirectory) {
+    args.push("-runtime_dir", path.resolve(options.runtimeDirectory));
+  }
+  if (options.websocketAddress) {
+    args.push("-websocket_addr", options.websocketAddress);
+  }
   if (options.securityDirectory) {
     args.push("-security_dir", path.resolve(options.securityDirectory));
   }

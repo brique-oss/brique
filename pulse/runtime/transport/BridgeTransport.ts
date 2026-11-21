@@ -38,6 +38,7 @@ export class BridgeTransport implements Transport {
   private readonly connectionSubscribers = new Set<(state: TransportConnectionState) => void>();
   private readonly unsubscribeMessage: Unsubscribe;
   private readonly unsubscribeState: Unsubscribe;
+	private connectionState: TransportConnectionState = "disconnected";
   private closed = false;
 
   constructor(bridge: SerializedTransportBridge) {
@@ -51,6 +52,7 @@ export class BridgeTransport implements Transport {
       }
     });
     this.unsubscribeState = bridge.subscribeToConnectionState((state) => {
+		this.connectionState = state;
       for (const subscriber of this.connectionSubscribers) subscriber(state);
     });
     void Promise.resolve(bridge.open()).catch((error) => {
@@ -70,6 +72,7 @@ export class BridgeTransport implements Transport {
 
   subscribeToConnectionState(callback: (state: TransportConnectionState) => void): Unsubscribe {
     this.connectionSubscribers.add(callback);
+	callback(this.connectionState);
     return () => { this.connectionSubscribers.delete(callback); };
   }
 

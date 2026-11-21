@@ -19,6 +19,8 @@
     "spark/ui/**/*.ts",
     "spark/ui/**/*.tsx",
     "spark/util/**/*.ts",
+    "spark/web/**/*.ts",
+    "spark/browser/**/*.ts",
     "pulse/runtime/**/*.ts",
     "pulse/adapters/**/*.ts",
     "briqueEditorUI/**/*.ts",

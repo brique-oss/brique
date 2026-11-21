@@ -1,0 +1,21 @@
+# Replace the hostname and the two loopback ports. Only Caddy listens publicly.
+brique.example.com {
+	# Matter bearer transfers. Keep the default proxy streaming behaviour: do not
+	# use flush_interval -1, because that mode deliberately lets the upstream
+	# continue after a client disconnect and could consume a resumable read lease.
+	handle /substance/* {
+		reverse_proxy 127.0.0.1:19091 {
+			header_up -X-Brique-Client-Address
+			header_up -X-Brique-Observed-Address
+		}
+	}
+
+	# Immutable Spark assets and /__brique/public/* WebSockets. Caddy overwrites
+	# the address header; brique-web trusts it only from 127.0.0.1.
+	handle {
+		reverse_proxy 127.0.0.1:19080 {
+			header_up X-Brique-Client-Address {remote_host}
+			header_up -X-Brique-Observed-Address
+		}
+	}
+}

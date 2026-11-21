@@ -812,11 +812,12 @@ test("PulseRuntime matter.read streams Brique HTTP lease handles", async () => {
     readMode: null,
   };
 
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     assert.equal(
       String(input),
-      "http://127.0.0.1:18204/substance/read-1?tok=secret"
+      "http://127.0.0.1:18204/substance/read-1"
     );
+	assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer secret");
 
     return new Response(new ReadableStream<Uint8Array>({
       start(controller) {
@@ -854,6 +855,85 @@ test("PulseRuntime matter.read streams Brique HTTP lease handles", async () => {
   }
 });
 
+test("PulseRuntime aborts an HTTP lease that exceeds its declared size", async () => {
+  const originalFetch = globalThis.fetch;
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const key = { context: "/root/stream_context", matterId: "bounded", readMode: null };
+  let cancelled = false;
+
+  globalThis.fetch = async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+    },
+    cancel() { cancelled = true; },
+  }));
+
+  try {
+    pulse.matter.registerReader(key);
+    const read = pulse.matter.read(key);
+    transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+      matter_id: "bounded",
+      data: { kind: "http", http: {
+        base_url: "http://127.0.0.1:18204", path: "/substance/bounded", tok: "secret", total_bytes: 2,
+      } },
+    }));
+    const snapshot = await read;
+    assert.equal(snapshot.status, "error");
+    assert.equal(cancelled, true);
+    assert.equal(snapshot.streamBytesReceived, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    pulse.teardown();
+  }
+});
+
+test("PulseRuntime uploads a Matter lease with Bearer and signed digest parameters", async () => {
+  const originalFetch = globalThis.fetch;
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  let uploaded = "";
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "https://engine.example/brique/substance/write-1");
+    assert.equal(init?.method, "PUT");
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer upload-secret");
+    uploaded = String(init?.body);
+    return new Response(JSON.stringify({ ok: true, revision: 4, message_sha256: "ab" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const write = pulse.matter.writeHTTP({
+      context: "/root/files", matterId: "document", body: "new-data",
+      expectedRevision: 3, expectedSHA256: "a".repeat(64),
+    });
+    assert.deepEqual(transport.sent[0].intention.params, {
+      matter_id: "document", http_data: true, expected_revision: 3, expected_sha256: "a".repeat(64),
+    });
+    transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+      ok: true,
+      matter_id: "document",
+      http_data: {
+        base_url: "https://engine.example/brique",
+        path: "/substance/write-1",
+        tok: "upload-secret",
+        method: "PUT",
+      },
+    }));
+    assert.deepEqual(await write, { ok: true, revision: 4, message_sha256: "ab" });
+    assert.equal(uploaded, "new-data");
+  } finally {
+    globalThis.fetch = originalFetch;
+    pulse.teardown();
+  }
+});
+
 test("MatterRegistry resets stream counters when a new read starts", () => {
   const registry = new MatterRegistry();
   const key = {
@@ -868,6 +948,7 @@ test("MatterRegistry resets stream counters when a new read starts", () => {
 
   assert.equal(registry.getSnapshot(key).streamBytesReceived, 3);
   assert.equal(registry.getSnapshot(key).streamChunksReceived, 1);
+  assert.equal(registry.getSnapshot(key).data, null, "partial bytes are not repeatedly concatenated");
 
   registry.setLoading(key);
 
@@ -1725,6 +1806,29 @@ test("PulseRuntime teardown closes selected transport and clears subscribers", (
   assert.equal(calls, 0);
 });
 
+test("PulseRuntime teardown rejects requests in flight without waiting for their timeout", async () => {
+  const transport = new ManualTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({
+    transportManager: manager,
+    transportName: "default",
+    responseTimeoutMs: 60_000,
+  });
+  const pending = pulse.emitIntentionAndWait({
+    await_response: true,
+    to: { context: "/root/ctx", type: "matter", cap: "matter.read" },
+    from: { context: "@ui_main:/matter", type: "user", cap: "ui" },
+    params: { matter_id: "doc" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  pulse.teardown();
+
+  await assert.rejects(pending, (err: unknown) => (err as { code?: string }).code === "runtime_closed");
+  pulse.teardown();
+});
+
 test("MatterRegistry keeps the last complete read while a refresh is loading", () => {
   const registry = new MatterRegistry();
   const key = { context: "/root/ctx", matterId: "doc", readMode: null };
@@ -1791,7 +1895,162 @@ test("PulseRuntime rejects requests in flight when the connection is lost", asyn
   pulse.teardown();
 });
 
-test("PulseRuntime resumes subscriptions and reads under the same sub_id after a reconnection", async () => {
+// T-14: a write that was on the wire when the connection dropped has an unknown outcome.
+// Pulse says so, never resends it on its own, and does not let a late answer turn it into a success.
+test("PulseRuntime never resends a lost write and ignores its late answer", async () => {
+  const transport = new StatefulTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default", responseTimeoutMs: 60_000 });
+  transport.setState("connected");
+
+  const write = pulse.emitIntentionAndWait({
+    await_response: true,
+    to: { context: "/root/ctx", type: "matter", cap: "matter.write" },
+    from: { context: "@ui_main:/matter", type: "user", cap: "ui" },
+    params: { matter_id: "doc", data: "payload" },
+  });
+  const outcome = write.then(() => "answered", (err) => (err as { code?: string }).code);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const lostId = transport.sent[0].intention.intention_id;
+
+  transport.setState("disconnected");
+  assert.equal(await outcome, "connection_lost", "a lost write must report an unknown outcome");
+
+  transport.setState("connected");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const sentOnce = transport.sent.filter((message) => message.kind === "intention" && message.intention.intention_id === lostId);
+  assert.equal(sentOnce.length, 1, "the lost write was sent again without the caller asking");
+  assert.equal(
+    transport.sent.filter((message) => message.kind === "intention" && message.intention.to.cap === "matter.write").length,
+    1,
+    "a business write was retried implicitly"
+  );
+
+  // The engine may have executed it and answered after the cut: that answer must go nowhere.
+  assert.doesNotThrow(() => transport.receive(sampleResponse(lostId)));
+  assert.equal(await outcome, "connection_lost");
+  pulse.teardown();
+});
+
+test("PulseRuntime cancels an active Matter HTTP reader when the connection is lost", async () => {
+  const originalFetch = globalThis.fetch;
+  const transport = new StatefulTransport();
+  const manager = new TransportManager();
+  manager.register("default", transport);
+  const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+  const key = { context: "/root/ctx", matterId: "large", readMode: null };
+  let fetchAborted = false;
+  let readerCancelled = false;
+
+  globalThis.fetch = async (_input, init) => {
+    init?.signal?.addEventListener("abort", () => { fetchAborted = true; });
+    return new Response(new ReadableStream<Uint8Array>({
+      pull() {},
+      cancel() { readerCancelled = true; },
+    }));
+  };
+
+  try {
+    transport.setState("connected");
+    pulse.matter.registerReader(key);
+    const read = pulse.matter.read(key);
+    transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+      matter_id: "large",
+      data: {
+        kind: "http",
+        http: { base_url: "http://127.0.0.1:18204", path: "/substance/large", tok: "secret" },
+      },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    transport.setState("disconnected");
+    await read;
+
+    assert.equal(fetchAborted, true);
+    assert.equal(readerCancelled, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    pulse.teardown();
+  }
+});
+
+// T-17: reading a large Matter by HTTP must cost a number of copies that does not
+// grow with the number of chunks. The size is doubled four times with fixed-size
+// chunks: every byte must be copied the same small number of times each time
+// (once when the chunk is owned, once when the result is assembled), so the
+// copied volume doubles with the size instead of quadrupling.
+test("PulseRuntime copies each streamed byte a constant number of times as sizes double", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSlice = Uint8Array.prototype.slice;
+  const originalSet = Uint8Array.prototype.set;
+  let copied = 0;
+  let counting = false;
+  Uint8Array.prototype.slice = function (this: Uint8Array, ...args: [number?, number?]) {
+    const result = originalSlice.apply(this, args);
+    if (counting) copied += result.length;
+    return result;
+  } as typeof Uint8Array.prototype.slice;
+  Uint8Array.prototype.set = function (this: Uint8Array, source: ArrayLike<number>, offset?: number) {
+    if (counting) copied += source.length;
+    return originalSet.call(this, source, offset);
+  } as typeof Uint8Array.prototype.set;
+
+  const chunkBytes = 64 * 1024;
+  const measurements: Array<{ size: number; copied: number }> = [];
+  try {
+    for (const size of [1, 2, 4, 8].map((mebibytes) => mebibytes * 1024 * 1024)) {
+      const transport = new StatefulTransport();
+      const manager = new TransportManager();
+      manager.register("default", transport);
+      const pulse = new PulseRuntime({ transportManager: manager, transportName: "default" });
+      const key = { context: "/root/ctx", matterId: "stream", readMode: null };
+      globalThis.fetch = async () => {
+        let sent = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (sent >= size) { controller.close(); return; }
+            controller.enqueue(new Uint8Array(chunkBytes).fill(7));
+            sent += chunkBytes;
+          },
+        }));
+      };
+      transport.setState("connected");
+      pulse.matter.registerReader(key);
+      const read = pulse.matter.read(key);
+      transport.receive(matterResponse(transport.sent[0].intention.intention_id, {
+        matter_id: "stream",
+        data: { kind: "http", http: { base_url: "http://127.0.0.1:18204", path: "/substance/stream", tok: "secret" } },
+      }));
+      copied = 0;
+      counting = true;
+      await read;
+      for (let attempt = 0; attempt < 400 && pulse.matter.getSnapshot(key).status !== "ready"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      counting = false;
+      assert.equal(pulse.matter.getSnapshot(key).status, "ready", `a ${size} byte stream did not complete`);
+      measurements.push({ size, copied });
+      pulse.teardown();
+    }
+  } finally {
+    counting = false;
+    Uint8Array.prototype.slice = originalSlice;
+    Uint8Array.prototype.set = originalSet;
+    globalThis.fetch = originalFetch;
+  }
+
+  for (const { size, copied: bytes } of measurements) {
+    assert.ok(bytes >= size, `copied ${bytes} bytes for ${size}: fewer than the payload itself`);
+    assert.ok(bytes <= 2.5 * size, `copied ${bytes} bytes for ${size}: more than the constant two copies per byte`);
+  }
+  for (let index = 1; index < measurements.length; index++) {
+    const growth = measurements[index].copied / measurements[index - 1].copied;
+    assert.ok(growth > 1.8 && growth < 2.2, `doubling the size multiplied the copied volume by ${growth.toFixed(2)}, not 2`);
+  }
+});
+
+test("PulseRuntime creates a fresh subscription and rereads after a reconnection", async () => {
   const transport = new StatefulTransport();
   const manager = new TransportManager();
   manager.register("default", transport);
@@ -1806,14 +2065,20 @@ test("PulseRuntime resumes subscriptions and reads under the same sub_id after a
   pulse.matter.setReady(key, { data: { v: 1 }, revision: 1 });
 
   transport.setState("disconnected");
+  assert.equal(pulse.matter.getSnapshot(key).subId, null, "the lost channel no longer owns the old subscription");
   const before = transport.sent.length;
   transport.setState("connected");
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   const resent = transport.sent.slice(before).map((m) => m.kind === "intention" ? m.intention : null);
   const subscribe = resent.find((i) => i?.to.cap === "matter.subscribe");
-  assert.equal(subscribe?.params?.sub_id, "sub-1");
+  assert.equal(subscribe?.params?.sub_id, undefined, "a sub_id from the lost channel is never reused");
   assert.ok(resent.some((i) => i?.to.cap === "matter.read"), "the held key is read again");
   assert.deepEqual(pulse.matter.getSnapshot(key).data, { v: 1 }, "previous data stays while reading");
+
+  if (!subscribe) throw new Error("missing replacement subscription");
+  transport.receive(matterResponse(subscribe.intention_id, { ok: true, matter_id: "doc", sub_id: "sub-2" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(pulse.matter.getSnapshot(key).subId, "sub-2");
   pulse.teardown();
 });

@@ -39,6 +39,7 @@ export type MatterRuntimeConfig = {
   sourceAddressForPath: (pathUI: UIPath) => string;
   identity?: Identity;
   sourcePathUI?: UIPath;
+  maxHTTPLeaseBytes?: number;
 };
 
 export type MatterReadInput = {
@@ -53,6 +54,14 @@ export type MatterReadBatchInput = {
   matterIds: string[];
   readMode?: string | null;
   dataRange?: MatterDataRange | null;
+};
+
+export type MatterHTTPWriteInput = {
+  context: string;
+  matterId: string;
+  body: BodyInit;
+  expectedRevision?: number;
+  expectedSHA256?: string;
 };
 
 export type MatterSubscribeInput = {
@@ -84,12 +93,13 @@ export class MatterRuntime extends MatterRegistry {
   private readonly sourceAddressForPath: (pathUI: UIPath) => string;
   private readonly identity: Identity;
   private readonly sourcePathUI: UIPath;
+  private readonly maxHTTPLeaseBytes: number;
   private readonly pendingReads: Map<string, Promise<MatterSnapshot>> = new Map();
   private readonly pendingSubscribes: Map<string, Promise<MatterSnapshot>> = new Map();
   private readonly keyVersions: Map<string, number> = new Map();
   private readonly readRequestCounts: Map<string, number> = new Map();
   private readonly subscribeInputs: Map<string, MatterSubscribeInput> = new Map();
-  private readonly activeStreams: Map<string, ReadableStreamDefaultReader<Uint8Array>> = new Map();
+  private readonly activeStreams: Map<string, ActiveHTTPStream> = new Map();
 
   constructor(config: MatterRuntimeConfig) {
     super();
@@ -97,6 +107,9 @@ export class MatterRuntime extends MatterRegistry {
     this.sourceAddressForPath = config.sourceAddressForPath;
     this.identity = config.identity ?? DEFAULT_IDENTITY;
     this.sourcePathUI = config.sourcePathUI ?? DEFAULT_SOURCE_PATH_UI;
+    this.maxHTTPLeaseBytes = Number.isSafeInteger(config.maxHTTPLeaseBytes) && (config.maxHTTPLeaseBytes ?? 0) > 0
+      ? config.maxHTTPLeaseBytes!
+      : 256 * 1024 * 1024;
   }
 
   acquireReader(input: MatterReadInput): MatterSnapshot {
@@ -208,6 +221,34 @@ export class MatterRuntime extends MatterRegistry {
     return response;
   }
 
+  async writeHTTP(input: MatterHTTPWriteInput): Promise<unknown> {
+    const response = await this.emitAndWait(this.buildMatterIntention({
+      context: input.context,
+      cap: "matter.write",
+      params: {
+        matter_id: input.matterId,
+        http_data: true,
+        ...(input.expectedRevision === undefined ? {} : { expected_revision: input.expectedRevision }),
+        ...(input.expectedSHA256 ? { expected_sha256: input.expectedSHA256 } : {}),
+      },
+    }));
+    this.assertOK(response);
+    const lease = extractHTTPWriteLease(response.payload);
+    if (!lease) {
+      throw new Error("Matter write response did not contain an HTTP lease");
+    }
+    const upload = await fetch(lease.url, {
+      method: "PUT",
+      body: input.body,
+      headers: { Authorization: `Bearer ${lease.token}` },
+    });
+    if (!upload.ok) {
+      throw new Error(`HTTP lease upload failed: ${upload.status}`);
+    }
+    const contentType = upload.headers.get("Content-Type") ?? "";
+    return contentType.includes("application/json") ? upload.json() : null;
+  }
+
   async subscribe(input: MatterSubscribeInput): Promise<MatterSnapshot> {
     const key = this.toKey(input);
     this.registerSubscriber(key);
@@ -294,36 +335,34 @@ export class MatterRuntime extends MatterRegistry {
     return subscribe;
   }
 
+  /** Invalidates every operation owned by the transport generation being lost. */
+  handleTransportDisconnect(): void {
+    for (const held of this.listActive()) {
+      const keyString = this.keyToString(held.key);
+      this.invalidatePendingLifecycle(keyString);
+      if (held.subId) this.setSubscription(held.key, null);
+    }
+  }
+
   /**
-   * To call when the transport is connected again after a loss. Requests in
-   * flight at the loss were rejected, and events may have been missed:
-   * - every subscription is asked again under its own sub_id (the engine
-   *   replaces a subscription with the same id, so this is idempotent and the
-   *   id the caller holds stays valid);
-   * - every key held is read again, so what is shown catches up (the previous
-   *   data stays visible while the read runs).
-   * Failures are left on the key as an error; the next event or refresh clears them.
+   * Rebuilds UI state after a new transport generation appears. A previous
+   * sub_id is deliberately not reused: it belonged to the lost channel. Held
+   * subscriptions receive a fresh id and held values are read again.
    */
   resumeAfterReconnect(): void {
     for (const held of this.listActive()) {
       const keyString = this.keyToString(held.key);
-      if (held.subscribers > 0 && held.subId) {
+      if (held.subscribers > 0) {
         const previous = this.subscribeInputs.get(keyString);
-        const subId = held.subId;
-        void this.emitAndWait(this.buildMatterIntention({
+        const freshInput: MatterSubscribeInput = {
           context: held.key.context,
-          cap: "matter.subscribe",
-          params: {
-            matter_id: held.key.matterId,
-            sub_id: subId,
-            ...(previous?.durable === true ? { durable: true } : {}),
-            ...(previous?.target ? { target: previous.target } : {}),
-          },
-        })).then((response) => {
-          this.assertOK(response);
-        }).catch((err) => {
-          if (this.has(held.key)) this.setError(held.key, err);
-        });
+          matterId: held.key.matterId,
+          readMode: held.key.readMode,
+          dataRange: held.key.dataRange,
+          durable: previous?.durable,
+          target: previous?.target,
+        };
+        void this.ensureSubscription(held.key, freshInput).catch(noop);
       }
       if (held.readers > 0 || held.subscribers > 0) {
         void this.refresh(held.key).catch(noop);
@@ -426,9 +465,19 @@ export class MatterRuntime extends MatterRegistry {
     this.pendingSubscribes.delete(keyString);
     const stream = this.activeStreams.get(keyString);
     if (stream) {
-      stream.cancel().catch(noop);
+      stream.controller.abort();
+      stream.reader?.cancel().catch(noop);
       this.activeStreams.delete(keyString);
     }
+  }
+
+  teardown(): void {
+    for (const held of this.listActive()) {
+      this.invalidatePendingLifecycle(this.keyToString(held.key));
+    }
+    this.pendingReads.clear();
+    this.pendingSubscribes.clear();
+    this.subscribeInputs.clear();
   }
 
   private resolveEventKey(event: MatterEventDispatch): MatterKey | null {
@@ -477,19 +526,29 @@ export class MatterRuntime extends MatterRegistry {
     lease: HTTPLease
   ): Promise<void> {
     this.setStreaming(key);
-    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const stream: ActiveHTTPStream = {
+      controller: new AbortController(),
+      reader: null,
+    };
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    this.activeStreams.set(keyString, stream);
 
     try {
+	  if (lease.totalBytes !== undefined && lease.totalBytes > this.maxHTTPLeaseBytes) {
+	    throw new Error("HTTP lease exceeds the configured read limit");
+	  }
       const response = await fetch(lease.url, {
         ...(lease.token ? { headers: { Authorization: `Bearer ${lease.token}` } } : {}),
+        signal: stream.controller.signal,
       });
 
       if (!response.ok || !response.body) {
         throw new Error(`HTTP lease fetch failed: ${response.status}`);
       }
 
-      reader = response.body.getReader();
-      this.activeStreams.set(keyString, reader);
+      const reader = response.body.getReader();
+      stream.reader = reader;
 
       while (true) {
         if (!this.has(key) || this.getKeyVersion(keyString) !== version) {
@@ -501,27 +560,47 @@ export class MatterRuntime extends MatterRegistry {
         if (done) break;
 
         if (this.has(key) && this.getKeyVersion(keyString) === version) {
+          const owned = value.slice();
+          totalBytes += owned.length;
+		  if (totalBytes > this.maxHTTPLeaseBytes || (lease.totalBytes !== undefined && totalBytes > lease.totalBytes)) {
+		    await reader.cancel();
+		    throw new Error("HTTP lease returned more bytes than declared");
+		  }
+		  chunks.push(owned);
           this.appendChunk(key, value);
         }
       }
 
       if (this.has(key) && this.getKeyVersion(keyString) === version) {
-        const current = this.getSnapshot(key);
-        this.setReady(key, current.data);
+        const complete = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          complete.set(chunk, offset);
+          offset += chunk.length;
+        }
+        this.setReady(key, complete);
       }
     } catch (err) {
       if (this.has(key) && this.getKeyVersion(keyString) === version) {
         this.setError(key, err);
       }
     } finally {
-      this.activeStreams.delete(keyString);
+      if (this.activeStreams.get(keyString) === stream) {
+        this.activeStreams.delete(keyString);
+      }
     }
   }
 }
 
+type ActiveHTTPStream = {
+  controller: AbortController;
+  reader: ReadableStreamDefaultReader<Uint8Array> | null;
+};
+
 type HTTPLease = {
   url: string;
   token?: string;
+  totalBytes?: number;
 };
 
 function extractHTTPLease(payload: unknown): HTTPLease | null {
@@ -538,7 +617,7 @@ function extractHTTPLease(payload: unknown): HTTPLease | null {
 
   const h = http as Record<string, unknown>;
   if (typeof h.url === "string" && typeof h.token === "string") {
-    return { url: h.url, token: h.token };
+    return { url: h.url, token: h.token, totalBytes: exactNonNegativeInteger(h.total_bytes) };
   }
 
   if (
@@ -546,17 +625,32 @@ function extractHTTPLease(payload: unknown): HTTPLease | null {
     typeof h.path === "string" &&
     typeof h.tok === "string"
   ) {
-    return { url: buildBriqueHTTPLeaseURL(h.base_url, h.path, h.tok) };
+	const declared = exactNonNegativeInteger(h.total_bytes) ?? exactNonNegativeInteger(h.size_hint);
+    return { url: buildBriqueHTTPLeaseURL(h.base_url, h.path), token: h.tok, ...(declared === undefined ? {} : { totalBytes: declared }) };
   }
 
   return null;
 }
 
-function buildBriqueHTTPLeaseURL(baseURL: string, path: string, token: string): string {
+function extractHTTPWriteLease(payload: unknown): { url: string; token: string } | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const handle = (payload as Record<string, unknown>).http_data;
+  if (typeof handle !== "object" || handle === null) return null;
+  const h = handle as Record<string, unknown>;
+  if (typeof h.base_url !== "string" || typeof h.path !== "string" || typeof h.tok !== "string") {
+    return null;
+  }
+  return { url: buildBriqueHTTPLeaseURL(h.base_url, h.path), token: h.tok };
+}
+
+function buildBriqueHTTPLeaseURL(baseURL: string, path: string): string {
   const trimmedBase = baseURL.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const separator = normalizedPath.includes("?") ? "&" : "?";
-  return `${trimmedBase}${normalizedPath}${separator}tok=${encodeURIComponent(token)}`;
+  return `${trimmedBase}${normalizedPath}`;
+}
+
+function exactNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function extractSubId(response: Response): string | null {

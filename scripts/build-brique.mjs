@@ -28,6 +28,9 @@ const outputDir = path.join(rootDir, "bin");
 const outputBin = path.join(outputDir, process.platform === "win32" ? "brique.exe" : "brique");
 // The administration tool of an instance's security (identity, keys, access rights, HTTPS).
 const securityBin = path.join(outputDir, process.platform === "win32" ? "brique-sec.exe" : "brique-sec");
+const launcherBin = path.join(outputDir, process.platform === "win32" ? "brique-launcher.exe" : "brique-launcher");
+const webHostBin = path.join(outputDir, process.platform === "win32" ? "brique-web.exe" : "brique-web");
+const browserHostBin = path.join(outputDir, process.platform === "win32" ? "brique-browser-host.exe" : "brique-browser-host");
 
 if (spawnSync("go", ["version"], { stdio: "ignore" }).error) {
   console.error("go is required to build Brique");
@@ -62,10 +65,43 @@ if (buildSecurity.status !== 0) {
   process.exit(buildSecurity.status ?? 1);
 }
 
+console.log("Building brique-launcher...");
+const buildLauncher = spawnSync("go", ["build", "-C", engineDir, "-o", launcherBin, "./cmd/brique-launcher"], {
+  stdio: "inherit",
+});
+
+if (buildLauncher.status !== 0) {
+  process.exit(buildLauncher.status ?? 1);
+}
+
+console.log("Building brique-web...");
+const buildWebHost = spawnSync("go", ["build", "-C", engineDir, "-o", webHostBin, "./cmd/brique-web"], {
+  stdio: "inherit",
+});
+
+if (buildWebHost.status !== 0) {
+  process.exit(buildWebHost.status ?? 1);
+}
+
+console.log("Building brique-browser-host...");
+const buildBrowserHost = spawnSync("go", ["build", "-C", engineDir, "-o", browserHostBin, "./cmd/brique-browser-host"], {
+  stdio: "inherit",
+});
+
+if (buildBrowserHost.status !== 0) {
+  process.exit(buildBrowserHost.status ?? 1);
+}
+
 if (process.platform !== "win32") {
   chmodSync(outputBin, 0o755);
   chmodSync(securityBin, 0o755);
+  chmodSync(launcherBin, 0o755);
+  chmodSync(webHostBin, 0o755);
+  chmodSync(browserHostBin, 0o755);
 }
 
 console.log(`Brique binary ready: ${outputBin}`);
 console.log(`brique-sec ready: ${securityBin}`);
+console.log(`brique-launcher ready: ${launcherBin}`);
+console.log(`brique-web ready: ${webHostBin}`);
+console.log(`brique-browser-host ready: ${browserHostBin}`);

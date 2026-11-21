@@ -74,6 +74,33 @@ test("WebSocketTransport receives valid JSON messages", async () => {
   await server.close();
 });
 
+test("WebSocketTransport accepts bounded binary JSON for the public browser protocol", async () => {
+	const server = await createFakeWebSocketServer();
+	const transport = new WebSocketTransport(server.url, { maxMessageBytes: 64 << 10 });
+	const inbound = { kind: "response" as const, response: {
+		intention_id: "i", status: "ok", to: { context: "@ui_main" },
+	} };
+	const received: unknown[] = [];
+	try {
+		transport.subscribe((message) => received.push(message));
+		await server.waitForConnection();
+		server.sendBinary(new TextEncoder().encode(JSON.stringify(inbound)));
+		await waitFor(() => received.length === 1);
+		assert.equal((received[0] as typeof inbound).response.intention_id, "i");
+	} finally {
+		transport.close();
+		await server.close();
+	}
+});
+
+test("WebSocketTransport refuses an outgoing message above its configured boundary", async () => {
+	const server = await createFakeWebSocketServer();
+	const transport = new WebSocketTransport(server.url, { maxMessageBytes: 8 });
+	await assert.rejects(transport.send(sampleResponse("i-too-large")), /transport limit/u);
+	transport.close();
+	await server.close();
+});
+
 test("WebSocketTransport ignores invalid JSON messages", async () => {
   const server = await createFakeWebSocketServer();
   const transport = new WebSocketTransport(server.url);

@@ -34,6 +34,13 @@ type ReactRootViewProps = {
 
 export async function mountPulseRoot(input: AdapterMountInput): Promise<void> {
   const rootViewModule = await import(input.rootViewPath) as AdapterRootViewModule;
+  return mountPulseRootModule(input, rootViewModule);
+}
+
+export async function mountPulseRootModule(
+  input: AdapterMountInput,
+  rootViewModule: AdapterRootViewModule
+): Promise<void> {
   const RootView =
     rootViewModule.default ??
     rootViewModule[input.rootViewName];

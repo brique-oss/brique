@@ -46,6 +46,7 @@ export type SparkUIRuntimeConfig = {
 export type SparkStartOptions = {
   contextPath: string;
   briqueBinaryPath?: string;
+  runtimeDirectory?: string;
   sparkRoot?: string;
   uiConfig?: UIConfig;
   host?: string;

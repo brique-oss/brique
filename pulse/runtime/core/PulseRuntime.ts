@@ -82,6 +82,7 @@ export class PulseRuntime {
   private readonly inFlight: Set<(err: Error) => void> = new Set();
   private connected = false;
   private hadConnection = false;
+  private closed = false;
 
   constructor(config: PulseRuntimeConfig) {
     this.transports = config.transportManager ?? new TransportManager();
@@ -151,6 +152,7 @@ export class PulseRuntime {
         return;
       }
       this.connected = false;
+      this.matter.handleTransportDisconnect();
       const rejects = Array.from(this.inFlight);
       this.inFlight.clear();
       for (const reject of rejects) {
@@ -326,7 +328,12 @@ export class PulseRuntime {
       armTimeout();
 
       this.transports.get(this.transportName).send(message).then(() => {
-        if (!settled) this.inFlight.add(onLoss);
+        if (settled) return;
+        if (this.closed) {
+          settle(() => reject(runtimeClosedError()));
+          return;
+        }
+        this.inFlight.add(onLoss);
       }).catch((err) => {
         settle(() => {
           reject(err);
@@ -434,6 +441,14 @@ export class PulseRuntime {
   }
 
   teardown(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.matter.teardown();
+    const rejects = Array.from(this.inFlight);
+    this.inFlight.clear();
+    for (const reject of rejects) {
+      reject(runtimeClosedError());
+    }
     for (const unsubscribe of this.transportSubscriptions) {
       unsubscribe();
     }
@@ -473,5 +488,11 @@ function normalizeCorrelation(
 function connectionLostError(): Error {
   const err = new Error("Connection lost before the response") as Error & { code?: string };
   err.code = "connection_lost";
+  return err;
+}
+
+function runtimeClosedError(): Error {
+  const err = new Error("Pulse runtime closed before the response") as Error & { code?: string };
+  err.code = "runtime_closed";
   return err;
 }

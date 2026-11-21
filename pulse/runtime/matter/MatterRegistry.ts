@@ -208,15 +208,11 @@ export class MatterRegistry {
     const entry = this.entries.get(matterKeyToString(input));
     if (!entry) return;
 
-    const prevBytes = toUint8Array(entry.snapshot.data) ?? new Uint8Array(0);
     const chunkBytes = toUint8Array(chunk) ?? new Uint8Array(0);
-    const merged = new Uint8Array(prevBytes.length + chunkBytes.length);
-    merged.set(prevBytes);
-    merged.set(chunkBytes, prevBytes.length);
-
+    // MatterRuntime owns the chunk list and assembles it once at EOF. Keeping
+    // only progress here avoids copying every byte again for every chunk.
     this.updateEntry(entry, {
-      data: merged,
-      streamBytesReceived: merged.length,
+      streamBytesReceived: entry.snapshot.streamBytesReceived + chunkBytes.length,
       streamChunksReceived: entry.snapshot.streamChunksReceived + 1,
     });
   }

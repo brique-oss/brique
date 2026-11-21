@@ -26,11 +26,15 @@ export type WebSocketTransportConfig = {
   maxRetries?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  protocols?: string | string[];
+  maxMessageBytes?: number;
+  maxBufferedBytes?: number;
 };
 
 const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_BASE_DELAY_MS = 200;
 const DEFAULT_MAX_DELAY_MS = 30_000;
+const DEFAULT_MAX_BUFFERED_BYTES = 1 << 20;
 /**
  * Application close code of the engine: a newer connection took this route (one
  * client per route). Reconnecting would only displace the other client in turn
@@ -44,6 +48,9 @@ export class WebSocketTransport implements Transport {
   private readonly maxRetries: number;
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
+  private readonly protocols?: string | string[];
+  private readonly maxMessageBytes: number;
+  private readonly maxBufferedBytes: number;
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
@@ -55,21 +62,30 @@ export class WebSocketTransport implements Transport {
     this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.baseDelayMs = config.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
     this.maxDelayMs = config.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+    this.protocols = config.protocols;
+    this.maxMessageBytes = config.maxMessageBytes ?? CONTROL_MESSAGE_LIMIT_BYTES;
+    this.maxBufferedBytes = config.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
     console.info(`[pulse:ws] create url=${this.url}`);
     this.socket = this.createSocket();
   }
 
   async send(message: CirculationMessage): Promise<void> {
     const data = serializeMessage(message);
+	const byteLength = new TextEncoder().encode(data).byteLength;
+	if (byteLength > this.maxMessageBytes) {
+		throw new Error("WebSocket message exceeds its transport limit");
+	}
     console.info(`[pulse:ws] send ${describeMessage(message)} state=${this.socket.readyState}`);
 
     if (this.socket.readyState === WebSocket.OPEN) {
+		this.assertWritable(byteLength);
       this.socket.send(data);
       console.info(`[pulse:ws] sent ${describeMessage(message)}`);
       return;
     }
 
     await this.waitForOpen();
+	this.assertWritable(byteLength);
     this.socket.send(data);
     console.info(`[pulse:ws] sent ${describeMessage(message)}`);
   }
@@ -104,19 +120,20 @@ export class WebSocketTransport implements Transport {
 
   private createSocket(): WebSocket {
     console.info(`[pulse:ws] opening url=${this.url}`);
-    const socket = new WebSocket(this.url);
+    const socket = this.protocols === undefined
+      ? new WebSocket(this.url)
+      : new WebSocket(this.url, this.protocols);
+	socket.binaryType = "arraybuffer";
 
     socket.onmessage = (event) => {
       try {
-        if (typeof event.data !== "string") {
-          throw new Error("WebSocketTransport expects text messages");
-        }
-        if (new TextEncoder().encode(event.data).byteLength > CONTROL_MESSAGE_LIMIT_BYTES) {
+		const serialized = decodeWebSocketData(event.data);
+		if (new TextEncoder().encode(serialized).byteLength > this.maxMessageBytes) {
           socket.close(1009, "control message too large");
-          throw new Error("WebSocketTransport received a message above the 4 MiB limit");
+			throw new Error("WebSocketTransport received a message above its limit");
         }
 
-        const msg = deserializeMessage(event.data);
+		const msg = deserializeMessage(serialized);
         console.info(`[pulse:ws] receive ${describeMessage(msg)}`);
         this.notify(msg);
       } catch (err) {
@@ -125,6 +142,11 @@ export class WebSocketTransport implements Transport {
     };
 
     socket.onopen = () => {
+		const required = typeof this.protocols === "string" ? this.protocols : undefined;
+		if (required !== undefined && socket.protocol !== required) {
+			socket.close(1002, "required subprotocol missing");
+			return;
+		}
       console.info(`[pulse:ws] open url=${this.url}`);
       this.retryCount = 0;
       this.notifyConnectionState("connected");
@@ -232,6 +254,22 @@ export class WebSocketTransport implements Transport {
       this.socket.addEventListener("close", onClose, { once: true });
     });
   }
+
+	private assertWritable(byteLength: number): void {
+		if (this.socket.bufferedAmount + byteLength > this.maxBufferedBytes) {
+			this.socket.close(1009, "outgoing queue limit reached");
+			throw new Error("WebSocket outgoing queue limit reached");
+		}
+	}
+}
+
+function decodeWebSocketData(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (value instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(value));
+	if (ArrayBuffer.isView(value)) {
+		return new TextDecoder().decode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+	}
+	throw new Error("WebSocketTransport received an unsupported frame type");
 }
 
 function describeMessage(message: CirculationMessage): string {

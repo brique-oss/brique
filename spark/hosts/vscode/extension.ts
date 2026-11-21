@@ -23,7 +23,6 @@ import { startSpark } from "../../core/SparkRuntime.js";
 import type { SparkRuntimeHandle } from "../../core/types.js";
 import { launchBrique } from "../../launchers/BriqueLauncher.js";
 import { briqueBinaryName } from "../../util/briqueBinaryName.js";
-import { waitForWebSocket } from "../../util/waitForWebSocket.js";
 import { startVsCodeHost } from "./VsCodeHostRunner.js";
 
 let editorRuntime: SparkRuntimeHandle | null = null;
@@ -104,7 +103,6 @@ async function openSparkContext(
       },
       {
         launchBrique,
-        waitForWebSocket,
         startHost: (input) =>
           startVsCodeHost(input, {
             sparkRoot,

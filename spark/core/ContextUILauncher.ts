@@ -20,10 +20,10 @@ import { fileURLToPath, pathToFileURL } from "url";
 
 import type { SparkHostRunner } from "../hosts/types.js";
 import { resolveUI } from "../ui/UIResolver.js";
+import { defaultRuntimeDirectory, verifyEngineRuntime } from "../util/localDiscovery.js";
 
 import {
   resolveUIRuntime,
-  resolveLocalUIWebSocketUrl,
   type ContextUIBuildInput,
   type ContextUIBuildOutput,
   type ContextUIBuilder,
@@ -39,6 +39,7 @@ export type LaunchSparkContextUIInput = {
   editorContextPath: string;
   editorRootContextId: string;
   sparkRoot: string;
+  runtimeDirectory?: string;
   onHostLog?: (line: string) => void;
 };
 
@@ -79,12 +80,18 @@ export async function launchSparkContextUI(
     rootView: { ...ui.rootView, path: uiBuild.rootViewBuiltUrl },
   };
 
-  const targetBaseUIRuntime = resolveUIRuntime(targetContext);
-  const uiTransportUrl = await resolveContextTransportUrl(
-    uiConfig,
+  const descriptor = await verifyEngineRuntime(
     instanceRootDir,
-    targetBaseUIRuntime.transportUrl
+    path.resolve(input.runtimeDirectory ?? defaultRuntimeDirectory()),
   );
+  if (descriptor.state !== "ready" || !descriptor.ui_websocket_address) {
+    throw new Error(`Brique engine is not ready for ${instanceRootDir}`);
+  }
+  const targetBaseUIRuntime = resolveUIRuntime(targetContext, {
+    ...uiConfig,
+    ws_addr: descriptor.ui_websocket_address,
+  });
+  const uiTransportUrl = targetBaseUIRuntime.transportUrl;
   const targetUiRuntime: SparkUIRuntimeConfig = {
     ...targetBaseUIRuntime,
     rootContextId: resolveProjectedRootContextId(
@@ -234,34 +241,6 @@ function toLocalPath(pathOrUrl: string): string {
   return pathOrUrl.startsWith("file:")
     ? fileURLToPath(pathOrUrl)
     : path.resolve(pathOrUrl);
-}
-
-async function resolveContextTransportUrl(
-  uiConfig: { ws_addr?: string; ws_path?: string },
-  instanceRootDir: string,
-  fallback: string
-): Promise<string> {
-  const wsPath = uiConfig.ws_path ?? "/ws";
-  const addr = (await resolveInstanceSharedWebSocketListenerAddr(instanceRootDir)) ?? uiConfig.ws_addr;
-  if (!addr) return fallback;
-  return resolveLocalUIWebSocketUrl(addr, wsPath);
-}
-
-async function resolveInstanceSharedWebSocketListenerAddr(
-  instanceRootDir: string
-): Promise<string | undefined> {
-  try {
-    const rootContext = JSON.parse(
-      await fs.readFile(path.join(instanceRootDir, "context.json"), "utf-8")
-    ) as SparkContextConfig;
-    const communication = rootContext.brique?.engine_config?.communication as
-      | { websocket_listener?: { addr?: string } }
-      | undefined;
-    const addr = communication?.websocket_listener?.addr;
-    return typeof addr === "string" && addr !== "" ? addr : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function resolveProjectedRootContextId(

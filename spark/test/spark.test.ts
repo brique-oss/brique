@@ -41,6 +41,7 @@ import {
   startVsCodeHost,
 } from "../hosts/vscode/VsCodeHostRunner.js";
 import { resolveProjectedRootContextId } from "../core/ContextUILauncher.js";
+import type { EngineRuntimeDescriptor } from "../util/localDiscovery.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,7 +59,31 @@ function makeHostMock(): StopTracked & { onExit: (cb: () => void) => void } {
   return m;
 }
 
-const noopWait = async (_url: string) => {};
+function makeRuntimeDescriptor(
+  overrides: Partial<EngineRuntimeDescriptor> = {}
+): EngineRuntimeDescriptor {
+  return {
+    format: "brique.engine-runtime/1",
+    discovery_key: "brd1_AAAAAAAAAAAAAAAAAAAAAAAA",
+    root_path: "/tmp/brique-root",
+    root_object: {
+      format: "brique.directory-object/1",
+      platform: "darwin",
+      volume: "1",
+      file: "2",
+    },
+    generation: "brg1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    state: "ready",
+    pid: 123,
+    control: {
+      protocol: "brique.local-control/1",
+      transport: "unix",
+      address: "/tmp/brique-control.sock",
+    },
+    ui_websocket_address: "127.0.0.1:9000",
+    ...overrides,
+  };
+}
 
 async function writeTempContext(content: unknown): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spark-test-"));
@@ -105,8 +130,8 @@ function makeDefaultDeps(overrides: Record<string, unknown> = {}) {
       outputDir: path.dirname(input.rootViewSourcePath),
     }),
     startHost: () => makeHostMock(),
-    waitForWebSocket: noopWait,
-    probeExistingBriqueEngine: async () => ({ kind: "none" as const }),
+    findEngineRuntime: async () => null,
+    waitForEngineRuntime: async () => makeRuntimeDescriptor(),
     ...overrides,
   };
 }
@@ -343,6 +368,8 @@ test("D: forwards host-local security and audit launch options", async () => {
   );
 
   assert.deepEqual(capturedOptions, {
+    runtimeDirectory: path.join("/tmp", `brique-runtime-${process.getuid?.()}`),
+    websocketAddress: "127.0.0.1:0",
     securityDirectory: "/protected/security",
     securityGeneration: "generation-1",
     auditMaxFileMiB: 32,
@@ -362,6 +389,95 @@ test("D: exposes Brique stop handle", async () => {
 
   assert.equal(handle.brique, briqueMock);
   assert.equal(typeof handle.brique.stop, "function");
+  handle.stop();
+});
+
+test("D: attaches to a verified runtime without launching or stopping its engine", async () => {
+  let launchCount = 0;
+  const contextPath = await writeTempContext(validContext);
+  const handle = await startSpark(
+    { contextPath },
+    makeDefaultDeps({
+      findEngineRuntime: async () => makeRuntimeDescriptor({
+        root_path: path.dirname(path.resolve(contextPath)),
+        ui_websocket_address: "127.0.0.1:43127",
+      }),
+      launchBrique: () => {
+        launchCount += 1;
+        return makeBriqueMock();
+      },
+    })
+  );
+
+  assert.equal(launchCount, 0);
+  assert.equal(handle.uiTransportUrl, "ws://127.0.0.1:43127/ws");
+  handle.stop();
+  assert.equal(launchCount, 0);
+});
+
+test("D: launched engines publish readiness through local discovery", async () => {
+  let launchOptions: unknown;
+  let waitedFor: { root: string; runtime: string } | null = null;
+  const contextPath = await writeTempContext(validContext);
+  const runtimeDirectory = path.join(path.dirname(contextPath), "runtime");
+  const handle = await startSpark(
+    { contextPath, runtimeDirectory },
+    makeDefaultDeps({
+      launchBrique: (_binary: string, _context: string, options: unknown) => {
+        launchOptions = options;
+        return makeBriqueMock();
+      },
+      waitForEngineRuntime: async (root: string, runtime: string) => {
+        waitedFor = { root, runtime };
+        return makeRuntimeDescriptor({
+          root_path: root,
+          ui_websocket_address: "127.0.0.1:45219",
+        });
+      },
+    })
+  );
+
+  assert.deepEqual(waitedFor, {
+    root: path.dirname(path.resolve(contextPath)),
+    runtime: runtimeDirectory,
+  });
+  assert.deepEqual(launchOptions, {
+    runtimeDirectory,
+    websocketAddress: "127.0.0.1:0",
+    securityDirectory: undefined,
+    securityGeneration: undefined,
+    auditMaxFileMiB: undefined,
+    auditRetentionDays: undefined,
+  });
+  assert.equal(handle.uiTransportUrl, "ws://127.0.0.1:45219/ws");
+  handle.stop();
+});
+
+test("D: waits for an already starting engine instead of launching a duplicate", async () => {
+  let launchCount = 0;
+  let waitCount = 0;
+  const contextPath = await writeTempContext(validContext);
+  const handle = await startSpark(
+    { contextPath },
+    makeDefaultDeps({
+      findEngineRuntime: async () => makeRuntimeDescriptor({
+        state: "starting",
+        ui_websocket_address: undefined,
+      }),
+      waitForEngineRuntime: async () => {
+        waitCount += 1;
+        return makeRuntimeDescriptor({ ui_websocket_address: "127.0.0.1:46321" });
+      },
+      launchBrique: () => {
+        launchCount += 1;
+        return makeBriqueMock();
+      },
+    })
+  );
+
+  assert.equal(launchCount, 0);
+  assert.equal(waitCount, 1);
+  assert.equal(handle.uiTransportUrl, "ws://127.0.0.1:46321/ws");
   handle.stop();
 });
 
@@ -560,7 +676,7 @@ test("F: passes resolved UI runtime to host", async () => {
     uiName: "panel",
     uiAddressPrefix: "@ui_panel",
     rootContextId: "/root",
-    transportUrl: "ws://127.0.0.1:9091/panel",
+    transportUrl: "ws://127.0.0.1:9000/panel",
   });
   assert.deepEqual(handle.uiRuntime, capturedRuntime);
   handle.stop();
@@ -1032,7 +1148,7 @@ test("I: host startup failure stops Brique", async () => {
   assert.ok(briqueMock.stopCalled);
 });
 
-test("I: websocket readiness failure stops Brique", async () => {
+test("I: local engine readiness failure stops an engine started by Spark", async () => {
   const briqueMock = makeBriqueMock();
   const contextPath = await writeTempContext(validContext);
 
@@ -1042,12 +1158,12 @@ test("I: websocket readiness failure stops Brique", async () => {
         { contextPath },
         makeDefaultDeps({
           launchBrique: () => briqueMock,
-          waitForWebSocket: async () => {
-            throw new Error("websocket unavailable");
+          waitForEngineRuntime: async () => {
+            throw new Error("local engine unavailable");
           },
         })
       ),
-    /websocket unavailable/
+    /local engine unavailable/
   );
 
   assert.ok(briqueMock.stopCalled);

@@ -112,7 +112,7 @@ test("BridgeTransport carries serialized messages across the trusted host bounda
   inbound?.(sent[0]);
   stateInbound?.("connected");
   assert.deepEqual(received, ["response"]);
-  assert.deepEqual(states, ["connected"]);
+	assert.deepEqual(states, ["disconnected", "connected"]);
   transport.close();
   assert.equal(inbound, null);
   assert.equal(stateInbound, null);

@@ -18,14 +18,18 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { isIP } from "net";
-import WebSocket from "ws";
 
 import type { SparkHostHandle, SparkHostInput, SparkHostRunner } from "../hosts/types.js";
 import { launchBrique } from "../launchers/BriqueLauncher.js";
 import type { BriqueLaunchOptions } from "../launchers/BriqueLauncher.js";
 import { resolveUI } from "../ui/UIResolver.js";
 import { briqueBinaryName } from "../util/briqueBinaryName.js";
-import { waitForWebSocket } from "../util/waitForWebSocket.js";
+import {
+  defaultRuntimeDirectory,
+  tryVerifyEngineRuntime,
+  waitForReadyEngineRuntime,
+  type EngineRuntimeDescriptor,
+} from "../util/localDiscovery.js";
 
 import type {
   SparkContextConfig,
@@ -61,11 +65,8 @@ export type SparkDeps = {
   launchBrique?: (binaryPath: string, contextPath: string, options?: BriqueLaunchOptions) => BriqueHandle;
   buildContextUI?: ContextUIBuilder;
   startHost?: (input: SparkHostInput) => SparkHostHandle | Promise<SparkHostHandle>;
-  waitForWebSocket?: (url: string) => Promise<void>;
-  probeExistingBriqueEngine?: (
-    uiTransportUrl: string,
-    expectedContextDir: string
-  ) => Promise<BriqueEngineProbe>;
+  findEngineRuntime?: (rootDir: string, runtimeDirectory: string) => Promise<EngineRuntimeDescriptor | null>;
+  waitForEngineRuntime?: (rootDir: string, runtimeDirectory: string) => Promise<EngineRuntimeDescriptor>;
 };
 
 export async function startSpark(
@@ -75,6 +76,7 @@ export async function startSpark(
   const {
     contextPath,
     briqueBinaryPath = path.join(".", "bin", briqueBinaryName()),
+    runtimeDirectory: runtimeDirectoryInput = defaultRuntimeDirectory(),
     sparkRoot = process.cwd(),
     uiConfig: uiConfigOverride,
     host: hostOverride,
@@ -82,6 +84,7 @@ export async function startSpark(
     security,
   } = options;
   const absContextPath = path.resolve(contextPath);
+  const runtimeDirectory = path.resolve(runtimeDirectoryInput);
   const context = await loadContext(absContextPath);
 
   if (!context.brique) {
@@ -100,7 +103,8 @@ export async function startSpark(
     sparkRoot
   );
   const launch = deps.launchBrique ?? launchBrique;
-  const waitForUI = deps.waitForWebSocket ?? waitForWebSocket;
+  const findRuntime = deps.findEngineRuntime ?? tryVerifyEngineRuntime;
+  const waitForRuntime = deps.waitForEngineRuntime ?? waitForReadyEngineRuntime;
 
   const buildInput = {
     contextPath: absContextPath,
@@ -119,28 +123,38 @@ export async function startSpark(
     selectedHost === resolvedUI.host
       ? resolvedUI
       : { ...resolvedUI, host: selectedHost };
-  const uiRuntime = resolveUIRuntime(context);
-  const uiTransportUrl = uiRuntime.transportUrl;
-
-  const probe = deps.probeExistingBriqueEngine ?? probeExistingBriqueEngine;
-  const attachState = await probe(uiTransportUrl, path.dirname(absContextPath));
-  if (attachState.kind === "mismatch") {
-    throw new Error(
-      `Brique engine already running at ${uiTransportUrl} for ${attachState.actualContextDir}; expected ${attachState.expectedContextDir}`
-    );
-  }
-  const brique = attachState.kind === "matching"
-    ? createAttachedBriqueHandle(uiTransportUrl)
-    : launch(briqueBinaryPath, absContextPath, {
+  const rootDir = path.dirname(absContextPath);
+  let descriptor = await findRuntime(rootDir, runtimeDirectory);
+  let brique: BriqueHandle;
+  if (descriptor) {
+    if (descriptor.state === "failed" || descriptor.state === "stopping") {
+      throw new Error(`Brique engine is ${descriptor.state} for ${rootDir}`);
+    }
+    brique = createAttachedBriqueHandle();
+  } else {
+    brique = launch(briqueBinaryPath, absContextPath, {
+        runtimeDirectory,
+        websocketAddress: "127.0.0.1:0",
         securityDirectory: security?.directory,
         securityGeneration: security?.initialGeneration,
         auditMaxFileMiB: security?.auditMaxFileMiB,
         auditRetentionDays: security?.auditRetentionDays,
       });
+  }
   let host: SparkHostHandle | null = null;
 
   try {
-    await waitForUI(uiTransportUrl);
+    if (!descriptor || descriptor.state !== "ready") {
+      descriptor = await waitForRuntime(rootDir, runtimeDirectory);
+    }
+    if (!descriptor.ui_websocket_address) {
+      throw new Error("ready Brique engine did not publish its UI websocket address");
+    }
+    const uiRuntime = resolveUIRuntime(context, {
+      ...uiConfig,
+      ws_addr: descriptor.ui_websocket_address,
+    });
+    const uiTransportUrl = uiRuntime.transportUrl;
 
     const hostInput: SparkHostInput = {
       contextPath: absContextPath,
@@ -154,136 +168,35 @@ export async function startSpark(
     host = deps.startHost
       ? await deps.startHost(hostInput)
       : await (await loadDefaultHost(selectedHost, sparkRoot)).start(hostInput);
+
+    if (!host) {
+      throw new Error(`Unknown host: ${ui.host}`);
+    }
+
+    let stopped = false;
+    return {
+      contextPath: absContextPath,
+      context,
+      ui: selectedUI,
+      uiRuntime,
+      uiTransportUrl,
+      brique,
+      host,
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        host?.stop();
+        brique.stop();
+      },
+    };
   } catch (err) {
     brique.stop();
     throw err;
   }
-
-  if (!host) {
-    brique.stop();
-    throw new Error(`Unknown host: ${ui.host}`);
-  }
-
-  let stopped = false;
-
-  return {
-    contextPath: absContextPath,
-    context,
-    ui: selectedUI,
-    uiRuntime,
-    uiTransportUrl,
-    brique,
-    host,
-    stop: () => {
-      if (stopped) return;
-      stopped = true;
-      host.stop();
-      brique.stop();
-    },
-  };
 }
 
-export type BriqueEngineProbe =
-  | { kind: "none" }
-  | { kind: "matching"; contextDir: string }
-  | { kind: "mismatch"; expectedContextDir: string; actualContextDir: string };
-
-async function probeExistingBriqueEngine(
-  uiTransportUrl: string,
-  expectedContextDir: string
-): Promise<BriqueEngineProbe> {
-  let state: BriqueEngineState | null = null;
-  try {
-    state = await readBriqueEngineState(uiTransportUrl);
-  } catch {
-    return { kind: "none" };
-  }
-
-  const actualContextDir = state.contextDir ? path.resolve(state.contextDir) : "";
-  const resolvedExpected = path.resolve(expectedContextDir);
-
-  if (actualContextDir === resolvedExpected) {
-    return { kind: "matching", contextDir: actualContextDir };
-  }
-
-  return {
-    kind: "mismatch",
-    expectedContextDir: resolvedExpected,
-    actualContextDir: actualContextDir || "unknown",
-  };
-}
-
-type BriqueEngineState = { contextDir: string | null };
-
-function readBriqueEngineState(uiTransportUrl: string): Promise<BriqueEngineState> {
-  return new Promise((resolve, reject) => {
-    const intentionId = crypto.randomUUID();
-    const ws = new WebSocket(uiTransportUrl);
-    const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error(`Timed out probing Brique engine at ${uiTransportUrl}`));
-    }, 1_500);
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      ws.onopen = null;
-      ws.onerror = null;
-      ws.onclose = null;
-      ws.onmessage = null;
-    };
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        kind: "intention",
-        ts: new Date().toISOString(),
-        intention: {
-          intention_id: intentionId,
-          await_response: true,
-          to: { context: "/root", cap: "read.state", type: "reflexive" },
-          from: { context: "@ui_attach_probe:/", cap: "ui", type: "user" },
-          identity: { id: "brique-attach-probe", kind: "system" },
-          params: { include: ["context"] },
-          correlation: { root_intention_id: intentionId, parent_intention_id: null },
-        },
-      }));
-    };
-    ws.onerror = () => {
-      cleanup();
-      reject(new Error(`Unable to probe Brique engine at ${uiTransportUrl}`));
-    };
-    ws.onclose = () => {
-      cleanup();
-      reject(new Error(`Brique engine probe closed before response at ${uiTransportUrl}`));
-    };
-    ws.onmessage = (event) => {
-      if (typeof event.data !== "string") return;
-      const incoming = JSON.parse(event.data) as { response?: { intention_id?: string; payload?: unknown } };
-      const response = incoming.response;
-      if (response?.intention_id !== intentionId) return;
-      cleanup();
-      ws.close();
-      resolve({ contextDir: extractStateContextDir(response.payload) });
-    };
-  });
-}
-
-function extractStateContextDir(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-  const contextPayload = payload.context;
-  if (!isRecord(contextPayload)) return null;
-  return typeof contextPayload.context_dir === "string" ? contextPayload.context_dir : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function createAttachedBriqueHandle(uiTransportUrl: string): BriqueHandle {
-  return {
-    stop: () => {
-      console.log(`[brique] attached engine left running at ${uiTransportUrl}`);
-    },
-  };
+function createAttachedBriqueHandle(): BriqueHandle {
+  return { stop: () => {} };
 }
 
 async function loadDefaultContextUIBuilder(sparkRoot: string): Promise<ContextUIBuilder> {
@@ -360,7 +273,7 @@ export function resolveUIWebSocketUrl(context: SparkContextConfig): string {
 
 export function resolveUIRuntime(context: SparkContextConfig, uiConfigOverride?: { ws_addr?: string; ws_path?: string; name?: string }): SparkUIRuntimeConfig {
   const uiConfig = uiConfigOverride ?? context.brique.ui_config;
-  const addr = resolveSharedWebSocketListenerAddr(context) ?? uiConfig?.ws_addr ?? "127.0.0.1:8080";
+  const addr = uiConfigOverride?.ws_addr ?? resolveSharedWebSocketListenerAddr(context) ?? uiConfig?.ws_addr ?? "127.0.0.1:8080";
   const wsPath = uiConfig?.ws_path ?? "/ws";
   const uiName = normalizeUIName(uiConfig?.name ?? "main");
 

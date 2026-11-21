@@ -288,11 +288,96 @@ my-instance/
 Without the extension, build the engine and start it on the root Context:
 
 ```bash
-npm run build:brique          # writes bin/brique (the engine) and bin/brique-sec (see below)
+npm run build:brique          # writes the engine, Brique Sec, launcher and browser/web hosts
 ./bin/brique -root_path my-instance/root
 ```
 
 An instance runs locally with no further setup.
+
+To build an integrity-checked runtime directory containing those binaries and the compatible
+Spark/Pulse assets:
+
+```bash
+npm run build:runtime -- --output /path/to/new-runtime
+/path/to/new-runtime/bin/brique-launcher runtime inspect /path/to/new-runtime
+```
+
+The destination must not already exist. Runtime construction never includes an instance or its keys.
+The launcher can register it with `instance add --runtime <directory>` and records both its canonical
+path and `brt1_…` identity. It validates the full package again before every managed engine start.
+The runtime also contains `brique-web`, the native browser host and the Chrome MV3 bridge extension.
+`brique-web` is the small Go process selected to serve an immutable Spark web
+publication without requiring Node in production. Public admission and the same-origin WebSocket proxy
+are implemented on loopback; the remote TLS/server profile remains separate.
+
+To materialize a Context tree as an atomic browser publication, then serve the verified snapshot:
+
+```bash
+npm run publish:web -- --context my-instance/root/context.json --output /path/to/new-publication
+./bin/brique-web -publication /path/to/new-publication -addr 127.0.0.1:0
+```
+
+The destination must be new. The selected Context is the web root; compatible React UIs of its child
+Contexts are compiled under stable opaque `/ui/ui1_…/` routes. Internal editor UIs are excluded. Spark
+emits content-hashed assets, one logical bootstrap per UI, `brique.spark-ui-catalog/1`, and a
+`brique.spark-publication/2` manifest covering every byte. `brique-web` verifies the complete catalog,
+all bootstraps and route/identity relationships before it listens. It still accepts legacy `/1`
+snapshots. Rendering never exposes the privileged engine WebSocket. A launcher-managed host proxies
+the dedicated `public.web` channel; an installed browser bridge can switch the same Pulse UI to the
+identified path after trusted user activation, with teardown between authorities. A manually started
+host needs `-public_web_backend` for that proxy. The static catalog is a build inventory, not an
+authorization decision. The engine's `ui.list`/`ui.open` capacities intersect this verified inventory
+with currently active Contexts and the caller's current read admission; they never build or create a
+session. The launcher passes the exact publication to both processes and the engine revalidates it at
+startup.
+
+For a launcher-managed instance, associate the immutable snapshot instead of starting the host by hand:
+
+```bash
+./bin/brique-launcher instance add --alias demo --root my-instance/root \
+  --runtime /path/to/runtime --publication /path/to/new-publication
+./bin/brique-launcher serve
+./bin/brique-launcher instance start demo
+```
+
+The private launcher registry retains the selected `spub1_…`; runtime status returns web PID and
+loopback URL. The host starts
+after engine readiness and stops before the engine. Replacing or clearing the publication is explicit
+and allowed only while the instance is stopped.
+
+The extension targets are deliberately limited to Chrome, Chromium, Brave and Firefox. Load
+`/path/to/runtime/lib/browser-extension` in a Chromium-family browser, or
+`/path/to/runtime/lib/browser-extension-firefox` in Firefox. Copy the 32-character ID shown by the
+Chromium-family browser; Firefox uses the fixed Gecko ID `brique-browser-bridge@brique.dev`. Then
+install the native manifest for the explicitly selected gateway:
+
+```bash
+./bin/brique-launcher browser gateway set demo
+./bin/brique-launcher browser host install --browser brave --extension-id <extension-id>
+./bin/brique-launcher browser host install --browser chrome --extension-id <extension-id>
+./bin/brique-launcher browser host install --browser chromium --extension-id <extension-id>
+./bin/brique-launcher browser host install --browser firefox --extension-id brique-browser-bridge@brique.dev
+```
+
+The installer takes the host binary only from that instance's verified runtime and writes one exact
+`allowed_origins` or `allowed_extensions` entry. Run this installation against the default launcher data directory; a custom
+`--data-dir` is rejected because Chrome cannot transmit it to the native host. The extension has no
+Brique key; it does not even start the native host until a real user activation releases an open
+request. A remote HTTPS deployment exposes its fresh signed descriptor at the same-origin
+`/.well-known/brique/instance-descriptor` route; a reverse proxy may map that route to the configured
+engine descriptor endpoint.
+
+For a server without Docker, `deploy/Caddyfile.example` gives the same-origin split between the private
+web host and the private Matter data plane. Keep both upstreams on loopback and expose only the proxy.
+After obtaining real read/write lease handles through Brique Intentions, run
+`npm run qualify:matter-proxy -- --read-handle ... --read-expected ... --write-handle ... --write-input ...`
+from a second host. The probe verifies TLS, range resume, ETag binding, Bearer placement and the upload
+digest without printing either bearer token. `npm run test:deployment` tests the probe contract locally.
+
+For the selected instance's own UI, no descriptor is sent. The native host accepts the open only when
+the extension-attested origin exactly matches the `brique-web` URL currently supervised by the
+launcher. The engine still requires explicit `local.ui` rights and rechecks them for every message;
+another loopback page receives no authority.
 
 ### Share a Context as a Git submodule
 

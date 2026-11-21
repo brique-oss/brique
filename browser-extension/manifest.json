@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Brique Browser Bridge",
+  "version": "0.0.1",
+  "description": "Connects a Brique web UI to the user's selected local Brique instance.",
+  "minimum_chrome_version": "111",
+  "permissions": ["nativeMessaging"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-relay.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED"
+    }
+  ]
+}
