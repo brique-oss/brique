@@ -101,7 +101,7 @@ publishes the endpoint in local discovery. `brique-browser-host` resolves only t
 running instance, binds its generation, runs the K2 Session on Chrome native framing and never reads a
 Brique key. The launcher now installs the native manifest for one exact Chromium extension ID from the
 selected instance's verified packaged runtime. The packaged MV3 extension relays opaque payloads,
-derives origin/document/frame from Chrome, and waits for trusted user activation.
+derives origin/document/frame from Chrome; the instance checks that origin against the descriptor's signed `ui_origins`.
 
 The connector is exercised end to end with two mutually configured Brique Sec runtimes, a verified
 TLS 1.3 server certificate, an IP-pinned WSS dial, the signed three-message hello and duplex hub

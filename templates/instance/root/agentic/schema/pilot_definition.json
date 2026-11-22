@@ -1,0 +1,39 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "pilot_definition",
+    "description": "Defines the pilot_definition Matter as an element: a Matter whose substance is the persistent configuration used to instantiate the cognition of a generic pilot, described by the pilot_definition_data schema."
+  },
+  "functional": {
+    "brique": {
+      "kind": [
+        "matter"
+      ],
+      "substance_mode": [
+        "brique"
+      ],
+      "substance_type": [
+        "text"
+      ]
+    },
+    "objective": {
+      "type": [
+        "pilot_definition"
+      ]
+    },
+    "functional": {
+      "_format_note": "Required. The substance is a JSON document.",
+      "_schema_ref_note": "Required. Schema constraining the content (substance) of the Matter.",
+      "format": [
+        "json"
+      ],
+      "schema_ref": [
+        "/root/agentic/schema/pilot_definition_data"
+      ]
+    },
+    "subjective": {}
+  },
+  "subjective": {}
+}

@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794043531858940000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 482,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "objective": {
+    "description": "Pilot of the real-LLM tests whose model does not exist at the provider: it makes the provider answer with an error, which costs no tokens.",
+    "name": "real_mini_broken",
+    "type": "pilot_definition"
+  },
+  "subjective": {}
+}

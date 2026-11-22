@@ -16,6 +16,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,23 +27,24 @@ import (
 const usage = `brique-launcher : gestion locale des instances Brique
 
 Usage :
-  brique-launcher [--data-dir <dossier>] [--runtime-dir <dossier>] [--control-runtime-dir <dossier>] serve
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] shutdown
-  brique-launcher runtime inspect <dossier> [--json]
-  brique-launcher [--data-dir <dossier>] instance add --alias <nom> --root <root> (--runtime <dossier> | --engine <binaire>) [--publication <dossier>] [--security-dir <dossier>] [--supervision managed|external] [--autostart]
-  brique-launcher [--data-dir <dossier>] instance list [--json]
-  brique-launcher [--data-dir <dossier>] instance show <alias> [--json]
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance start|stop|restart|status <alias> [--json]
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance diagnose <alias> <pair> [--endpoint <nom>] [--json]
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-engine <alias> --engine <binaire>
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-runtime <alias> --runtime <dossier>
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-publication <alias> (--publication <dossier> | --clear)
-  brique-launcher [--data-dir <dossier>] [--control-runtime-dir <dossier>] instance update-web-profile <alias> (--web-profile local|server --web-addr <loopback:port> [--allowed-host <hôte>]... [--public-origin <https://hôte>]... [--trusted-proxy <ip>]... | --clear)
-  brique-launcher [--data-dir <dossier>] instance remove <alias>
-  brique-launcher [--data-dir <dossier>] browser gateway set <alias>
-  brique-launcher [--data-dir <dossier>] browser gateway show [--json]
-  brique-launcher [--data-dir <dossier>] browser gateway clear
-  brique-launcher [--data-dir <dossier>] browser host install --browser brave|chrome|chromium|firefox --extension-id <id> [--json]
+  brique-launcher [--data-dir <directory>] [--runtime-dir <directory>] [--control-runtime-dir <directory>] serve [--ui-addr <loopback:port>] [--no-ui]
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] shutdown [--if-idle]
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] ui [--no-open]
+  brique-launcher runtime inspect <directory> [--json]
+  brique-launcher [--data-dir <directory>] instance add --alias <name> --root <root> (--runtime <directory> | --engine <binary>) [--publication <directory>] [--security-dir <directory>] [--supervision managed|external] [--autostart]
+  brique-launcher [--data-dir <directory>] instance list [--json]
+  brique-launcher [--data-dir <directory>] instance show <alias> [--json]
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance start|stop|restart|status <alias> [--json]
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance diagnose <alias> <pair> [--endpoint <name>] [--json]
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance update-engine <alias> --engine <binary>
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance update-runtime <alias> --runtime <directory>
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance update-publication <alias> (--publication <directory> | --clear)
+  brique-launcher [--data-dir <directory>] [--control-runtime-dir <directory>] instance update-web-profile <alias> (--web-profile local|server --web-addr <loopback:port> [--allowed-host <host>]... [--public-origin <https://host>]... [--trusted-proxy <ip>]... | --clear)
+  brique-launcher [--data-dir <directory>] instance autostart <alias> on|off
+  brique-launcher [--data-dir <directory>] instance remove <alias>
+  brique-launcher [--data-dir <directory>] browser associate <chrome|brave|chromium|firefox> <instance>... [--identity <instance>]
+  brique-launcher [--data-dir <directory>] browser dissociate <browser>
+  brique-launcher [--data-dir <directory>] browser list [--json]
 `
 
 type repeatedFlag []string
@@ -59,11 +62,11 @@ type webProfileFlags struct {
 
 func addWebProfileFlags(flags *flag.FlagSet) *webProfileFlags {
 	result := &webProfileFlags{}
-	result.mode = flags.String("web-profile", "", "profil web : local ou server")
-	result.address = flags.String("web-addr", "", "adresse loopback fixe du web host (obligatoire en profil server)")
-	flags.Var(&result.allowedHosts, "allowed-host", "autorité publique exacte acceptée derrière le proxy (répétable)")
-	flags.Var(&result.origins, "public-origin", "origine HTTPS exacte du navigateur (répétable)")
-	flags.Var(&result.trustedProxy, "trusted-proxy", "IP exacte du reverse proxy approuvé (répétable)")
+	result.mode = flags.String("web-profile", "", "web profile: local or server")
+	result.address = flags.String("web-addr", "", "fixed loopback address of the web host (required for the server profile)")
+	flags.Var(&result.allowedHosts, "allowed-host", "exact public authority accepted behind the proxy (repeatable)")
+	flags.Var(&result.origins, "public-origin", "exact HTTPS origin of the browser (repeatable)")
+	flags.Var(&result.trustedProxy, "trusted-proxy", "exact IP of the trusted reverse proxy (repeatable)")
 	return result
 }
 
@@ -83,9 +86,9 @@ var makeStore = func(directory string) launcher.Store { return launcher.Store{Di
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	global := flag.NewFlagSet("brique-launcher", flag.ContinueOnError)
 	global.SetOutput(stderr)
-	dataDirectory := global.String("data-dir", "", "répertoire privé du launcher")
-	runtimeDirectory := global.String("runtime-dir", "", "répertoire de découverte des moteurs")
-	controlRuntimeDirectory := global.String("control-runtime-dir", "", "répertoire du contrôle launcher")
+	dataDirectory := global.String("data-dir", "", "private directory of the launcher")
+	runtimeDirectory := global.String("runtime-dir", "", "engine discovery directory")
+	controlRuntimeDirectory := global.String("control-runtime-dir", "", "launcher control directory")
 	if err := global.Parse(args); err != nil {
 		return 2
 	}
@@ -100,7 +103,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if remaining[0] == "runtime" {
 		if len(remaining) < 3 || remaining[1] != "inspect" {
-			return fail(errors.New("runtime inspect attend un dossier"))
+			return fail(errors.New("runtime inspect expects a directory"))
 		}
 		jsonOutput, err := parseJSONFlag(remaining[3:], stderr)
 		if err != nil {
@@ -124,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		var err error
 		*dataDirectory, err = launcher.DefaultDataDirectory()
 		if err != nil {
-			fmt.Fprintf(stderr, "brique-launcher : répertoire par défaut indisponible : %v\n", err)
+			fmt.Fprintf(stderr, "brique-launcher: default directory unavailable : %v\n", err)
 			return 1
 		}
 	}
@@ -133,20 +136,47 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runBrowser(ctx, store, remaining[1:], stdout, stderr, fail)
 	}
 	if remaining[0] == "serve" {
-		if len(remaining) != 1 {
-			return fail(errors.New("serve n'attend pas d'argument"))
+		serveFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
+		serveFlags.SetOutput(stderr)
+		uiAddress := serveFlags.String("ui-addr", launcher.DefaultWebUIAddress, "loopback address of the management page")
+		noUI := serveFlags.Bool("no-ui", false, "do not serve the management page")
+		if err := serveFlags.Parse(remaining[1:]); err != nil || len(serveFlags.Args()) != 0 {
+			return 2
 		}
-		return serve(ctx, store, *runtimeDirectory, *controlRuntimeDirectory, stdout, fail)
+		page := *uiAddress
+		if *noUI {
+			page = ""
+		}
+		return serve(ctx, store, *runtimeDirectory, *controlRuntimeDirectory, page, stdout, fail)
+	}
+	if remaining[0] == "ui" {
+		return runUI(store, *dataDirectory, *controlRuntimeDirectory, *runtimeDirectory, remaining[1:], stdout, stderr, fail)
 	}
 	if remaining[0] == "shutdown" {
-		if len(remaining) != 1 {
-			return fail(errors.New("shutdown n'attend pas d'argument"))
+		shutdownFlags := flag.NewFlagSet("shutdown", flag.ContinueOnError)
+		shutdownFlags.SetOutput(stderr)
+		ifIdle := shutdownFlags.Bool("if-idle", false, "refuse to stop the supervisor while it manages running engines")
+		if err := shutdownFlags.Parse(remaining[1:]); err != nil || len(shutdownFlags.Args()) != 0 {
+			return 2
+		}
+		if *ifIdle && !supervisorUp(*dataDirectory, *controlRuntimeDirectory) {
+			fmt.Fprintln(stdout, "No supervisor running.")
+			return 0
+		}
+		if *ifIdle {
+			if busy := ownedRunningInstances(*dataDirectory, *controlRuntimeDirectory); len(busy) > 0 {
+				return fail(fmt.Errorf("the supervisor manages running engines (%s): stop them first", strings.Join(busy, ", ")))
+			}
 		}
 		_, err := launcher.CallLauncherControl(*dataDirectory, *controlRuntimeDirectory, launcher.LauncherControlRequest{Operation: "shutdown"})
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintln(stdout, "Arrêt du superviseur demandé.")
+		// Return once the supervisor is really gone, so that a script can start the new one.
+		for deadline := time.Now().Add(30 * time.Second); supervisorUp(*dataDirectory, *controlRuntimeDirectory) && time.Now().Before(deadline); {
+			time.Sleep(200 * time.Millisecond)
+		}
+		fmt.Fprintln(stdout, "Supervisor stopped.")
 		return 0
 	}
 	if len(remaining) < 2 || remaining[0] != "instance" {
@@ -157,27 +187,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "add":
 		flags := flag.NewFlagSet("instance add", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		alias := flags.String("alias", "", "alias local")
-		root := flags.String("root", "", "root de l'instance")
-		engine := flags.String("engine", "", "binaire du moteur")
-		runtimePackage := flags.String("runtime", "", "package runtime Brique")
-		publication := flags.String("publication", "", "publication web Spark vérifiée")
-		security := flags.String("security-dir", "", "répertoire de sécurité machine")
-		supervision := flags.String("supervision", launcher.SupervisionManaged, "managed ou external")
-		autostart := flags.Bool("autostart", false, "démarrage avec le superviseur")
+		alias := flags.String("alias", "", "local alias")
+		root := flags.String("root", "", "root of the instance")
+		engine := flags.String("engine", "", "engine binary")
+		runtimePackage := flags.String("runtime", "", "Brique runtime package")
+		publication := flags.String("publication", "", "verified Spark web publication")
+		security := flags.String("security-dir", "", "machine security directory")
+		supervision := flags.String("supervision", launcher.SupervisionManaged, "managed or external")
+		autostart := flags.Bool("autostart", false, "start with the supervisor")
 		webFlags := addWebProfileFlags(flags)
 		if err := flags.Parse(remaining[2:]); err != nil {
 			return 2
 		}
 		if len(flags.Args()) != 0 {
-			return fail(errors.New("arguments inattendus pour instance add"))
+			return fail(errors.New("unexpected arguments for instance add"))
 		}
 		instance, err := store.Add(ctx, launcher.AddOptions{Alias: *alias, RootPath: *root, EnginePath: *engine,
 			RuntimePath: *runtimePackage, PublicationPath: *publication, SecurityDirectory: *security, Supervision: *supervision, Autostart: *autostart, Web: webFlags.profile()})
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "Instance %s enregistrée (%s, moteur %s).\n", instance.Alias, instance.Supervision, instance.Build.EngineVersion)
+		fmt.Fprintf(stdout, "Instance %s registered (%s, engine %s).\n", instance.Alias, instance.Supervision, instance.Build.EngineVersion)
 	case "list":
 		jsonOutput, err := parseJSONFlag(remaining[2:], stderr)
 		if err != nil {
@@ -195,7 +225,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	case "show":
 		if len(remaining) < 3 {
-			return fail(errors.New("instance show attend un alias"))
+			return fail(errors.New("instance show expects an alias"))
 		}
 		jsonOutput, err := parseJSONFlag(remaining[3:], stderr)
 		if err != nil {
@@ -208,7 +238,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if jsonOutput {
 			return writeJSON(stdout, instance, fail)
 		}
-		fmt.Fprintf(stdout, "%s\n  root: %s\n  moteur: %s (%s)\n", instance.Alias, instance.RootPath, instance.EnginePath, instance.Build.EngineVersion)
+		fmt.Fprintf(stdout, "%s\n  root: %s\n  engine: %s (%s)\n", instance.Alias, instance.RootPath, instance.EnginePath, instance.Build.EngineVersion)
 		if instance.RuntimePath != "" {
 			fmt.Fprintf(stdout, "  runtime: %s (%s)\n", instance.RuntimePath, instance.RuntimeID)
 		}
@@ -219,18 +249,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  web: %s %s\n", instance.Web.Mode, instance.Web.Address)
 		}
 		fmt.Fprintf(stdout, "  supervision: %s\n", instance.Supervision)
+	case "autostart":
+		if len(remaining) != 4 || (remaining[3] != "on" && remaining[3] != "off") {
+			return fail(errors.New("instance autostart expects an alias then on or off"))
+		}
+		instance, err := store.SetAutostart(remaining[2], remaining[3] == "on")
+		if err != nil {
+			return fail(err)
+		}
+		if instance.Autostart {
+			fmt.Fprintf(stdout, "Instance %s: autostart with the launcher enabled.\n", instance.Alias)
+		} else {
+			fmt.Fprintf(stdout, "Instance %s: autostart disabled.\n", instance.Alias)
+		}
 	case "remove":
 		if len(remaining) != 3 {
-			return fail(errors.New("instance remove attend un alias"))
+			return fail(errors.New("instance remove expects an alias"))
 		}
 		instance, err := store.Remove(remaining[2])
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "Instance %s retirée du registre ; aucun fichier n'a été supprimé.\n", instance.Alias)
+		fmt.Fprintf(stdout, "Instance %s removed from the registry; no file was deleted.\n", instance.Alias)
 	case "start", "stop", "restart", "status":
 		if len(remaining) < 3 {
-			return fail(fmt.Errorf("instance %s attend un alias", remaining[1]))
+			return fail(fmt.Errorf("instance %s expects an alias", remaining[1]))
 		}
 		jsonOutput, err := parseJSONFlag(remaining[3:], stderr)
 		if err != nil {
@@ -241,7 +284,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		if response.Status == nil {
-			return fail(errors.New("réponse du superviseur sans état"))
+			return fail(errors.New("supervisor response without state"))
 		}
 		if jsonOutput {
 			return writeJSON(stdout, response.Status, fail)
@@ -258,16 +301,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runDiagnose(*dataDirectory, *controlRuntimeDirectory, remaining[2:], stdout, stderr, fail)
 	case "update-engine":
 		if len(remaining) < 3 {
-			return fail(errors.New("instance update-engine attend un alias"))
+			return fail(errors.New("instance update-engine expects an alias"))
 		}
 		flags := flag.NewFlagSet("instance update-engine", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		engine := flags.String("engine", "", "nouveau binaire moteur")
+		engine := flags.String("engine", "", "new engine binary")
 		if err := flags.Parse(remaining[3:]); err != nil {
 			return 2
 		}
 		if len(flags.Args()) != 0 || *engine == "" {
-			return fail(errors.New("instance update-engine attend --engine <binaire>"))
+			return fail(errors.New("instance update-engine expects --engine <binary>"))
 		}
 		response, err := launcher.CallLauncherControl(*dataDirectory, *controlRuntimeDirectory,
 			launcher.LauncherControlRequest{Operation: "update_engine", Alias: remaining[2], EnginePath: *engine})
@@ -275,22 +318,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		if response.Instance == nil {
-			return fail(errors.New("réponse du superviseur sans instance"))
+			return fail(errors.New("supervisor response without instance"))
 		}
-		fmt.Fprintf(stdout, "Moteur de %s mis à jour : %s (%s).\n", response.Instance.Alias,
+		fmt.Fprintf(stdout, "Engine of %s updated: %s (%s).\n", response.Instance.Alias,
 			response.Instance.EnginePath, response.Instance.Build.EngineVersion)
 	case "update-runtime":
 		if len(remaining) < 3 {
-			return fail(errors.New("instance update-runtime attend un alias"))
+			return fail(errors.New("instance update-runtime expects an alias"))
 		}
 		flags := flag.NewFlagSet("instance update-runtime", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		runtimePackage := flags.String("runtime", "", "nouveau package runtime")
+		runtimePackage := flags.String("runtime", "", "new runtime package")
 		if err := flags.Parse(remaining[3:]); err != nil {
 			return 2
 		}
 		if len(flags.Args()) != 0 || *runtimePackage == "" {
-			return fail(errors.New("instance update-runtime attend --runtime <dossier>"))
+			return fail(errors.New("instance update-runtime expects --runtime <directory>"))
 		}
 		response, err := launcher.CallLauncherControl(*dataDirectory, *controlRuntimeDirectory,
 			launcher.LauncherControlRequest{Operation: "update_runtime", Alias: remaining[2], RuntimePath: *runtimePackage})
@@ -298,23 +341,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		if response.Instance == nil {
-			return fail(errors.New("réponse du superviseur sans instance"))
+			return fail(errors.New("supervisor response without instance"))
 		}
-		fmt.Fprintf(stdout, "Runtime de %s mis à jour : %s (%s).\n", response.Instance.Alias,
+		fmt.Fprintf(stdout, "Runtime of %s updated: %s (%s).\n", response.Instance.Alias,
 			response.Instance.RuntimePath, response.Instance.RuntimeID)
 	case "update-publication":
 		if len(remaining) < 3 {
-			return fail(errors.New("instance update-publication attend un alias"))
+			return fail(errors.New("instance update-publication expects an alias"))
 		}
 		flags := flag.NewFlagSet("instance update-publication", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		publication := flags.String("publication", "", "nouvelle publication web Spark")
-		clearAssociation := flags.Bool("clear", false, "retirer l'association sans supprimer de fichiers")
+		publication := flags.String("publication", "", "new Spark web publication")
+		clearAssociation := flags.Bool("clear", false, "remove the association without deleting files")
 		if err := flags.Parse(remaining[3:]); err != nil {
 			return 2
 		}
 		if len(flags.Args()) != 0 || (*publication == "") == !*clearAssociation {
-			return fail(errors.New("instance update-publication attend exactement --publication <dossier> ou --clear"))
+			return fail(errors.New("instance update-publication expects exactly --publication <directory> or --clear"))
 		}
 		response, err := launcher.CallLauncherControl(*dataDirectory, *controlRuntimeDirectory,
 			launcher.LauncherControlRequest{Operation: "update_publication", Alias: remaining[2], PublicationPath: *publication})
@@ -322,28 +365,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		if response.Instance == nil {
-			return fail(errors.New("réponse du superviseur sans instance"))
+			return fail(errors.New("supervisor response without instance"))
 		}
 		if response.Instance.PublicationPath == "" {
-			fmt.Fprintf(stdout, "Publication web de %s retirée du registre ; aucun fichier supprimé.\n", response.Instance.Alias)
+			fmt.Fprintf(stdout, "Web publication of %s removed from the registry; no file deleted.\n", response.Instance.Alias)
 		} else {
-			fmt.Fprintf(stdout, "Publication web de %s mise à jour : %s (%s).\n", response.Instance.Alias,
+			fmt.Fprintf(stdout, "Web publication of %s updated: %s (%s).\n", response.Instance.Alias,
 				response.Instance.PublicationPath, response.Instance.PublicationID)
 		}
 	case "update-web-profile":
 		if len(remaining) < 3 {
-			return fail(errors.New("instance update-web-profile attend un alias"))
+			return fail(errors.New("instance update-web-profile expects an alias"))
 		}
 		flags := flag.NewFlagSet("instance update-web-profile", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		clearProfile := flags.Bool("clear", false, "revenir au profil local par défaut")
+		clearProfile := flags.Bool("clear", false, "go back to the default local profile")
 		webFlags := addWebProfileFlags(flags)
 		if err := flags.Parse(remaining[3:]); err != nil {
 			return 2
 		}
 		profile := webFlags.profile()
 		if len(flags.Args()) != 0 || (profile == nil) == !*clearProfile {
-			return fail(errors.New("instance update-web-profile attend exactement des options --web-* ou --clear"))
+			return fail(errors.New("instance update-web-profile expects exactly --web-* options or --clear"))
 		}
 		response, err := launcher.CallLauncherControl(*dataDirectory, *controlRuntimeDirectory,
 			launcher.LauncherControlRequest{Operation: "update_web_profile", Alias: remaining[2], WebProfile: profile})
@@ -351,12 +394,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		if response.Instance == nil {
-			return fail(errors.New("réponse du superviseur sans instance"))
+			return fail(errors.New("supervisor response without instance"))
 		}
 		if response.Instance.Web == nil {
-			fmt.Fprintf(stdout, "Profil web de %s : local par défaut.\n", response.Instance.Alias)
+			fmt.Fprintf(stdout, "Web profile of %s: local by default.\n", response.Instance.Alias)
 		} else {
-			fmt.Fprintf(stdout, "Profil web de %s : %s (%s).\n", response.Instance.Alias, response.Instance.Web.Mode, response.Instance.Web.Address)
+			fmt.Fprintf(stdout, "Web profile of %s: %s (%s).\n", response.Instance.Alias, response.Instance.Web.Mode, response.Instance.Web.Address)
 		}
 	default:
 		fmt.Fprint(stderr, usage)
@@ -366,74 +409,58 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func runBrowser(ctx context.Context, store launcher.Store, args []string, stdout, stderr io.Writer, fail func(error) int) int {
-	if len(args) < 2 {
+	if len(args) < 1 {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	if args[0] == "host" {
-		if args[1] != "install" {
-			fmt.Fprint(stderr, usage)
-			return 2
+	switch args[0] {
+	case "associate":
+		// brique-launcher browser associate <browser> <instance>... [--identity <instance>]
+		if len(args) < 3 {
+			return fail(errors.New("browser associate expects a browser and at least one instance"))
 		}
-		flags := flag.NewFlagSet("browser host install", flag.ContinueOnError)
-		flags.SetOutput(stderr)
-		browser := flags.String("browser", "chrome", "brave, chrome, chromium ou firefox")
-		extensionID := flags.String("extension-id", "", "identifiant Chrome exact de l'extension")
-		jsonOutput := flags.Bool("json", false, "sortie JSON")
-		if err := flags.Parse(args[2:]); err != nil {
-			return 2
+		var instances []string
+		identity := ""
+		for index := 2; index < len(args); index++ {
+			if args[index] == "--identity" {
+				if index+1 >= len(args) {
+					return fail(errors.New("--identity expects an instance"))
+				}
+				identity = args[index+1]
+				index++
+				continue
+			}
+			instances = append(instances, args[index])
 		}
-		if len(flags.Args()) != 0 {
-			return fail(errors.New("arguments inattendus pour browser host install"))
-		}
-		installation, err := store.InstallBrowserNativeHost(ctx, launcher.BrowserNativeHostOptions{
-			Browser: *browser, ExtensionID: *extensionID,
-		})
+		entry, err := store.SetBrowserAssociation(ctx, args[1], instances, identity)
 		if err != nil {
 			return fail(err)
 		}
-		if *jsonOutput {
-			return writeJSON(stdout, installation, fail)
+		fmt.Fprintf(stdout, "%s: %s (identity: %s), extension %s\n", entry.Browser, strings.Join(entry.Instances, ", "), entry.Identity, entry.ExtensionID)
+		fmt.Fprintf(stdout, "Load the extension from: %s\n", filepath.Join(store.Directory, "browser-extension", entry.Browser))
+	case "dissociate":
+		if len(args) != 2 {
+			return fail(errors.New("browser dissociate expects a browser"))
 		}
-		fmt.Fprintf(stdout, "Host navigateur installé pour %s : %s\n", installation.Browser, installation.ManifestPath)
-		return 0
-	}
-	if args[0] != "gateway" {
-		fmt.Fprint(stderr, usage)
-		return 2
-	}
-	switch args[1] {
-	case "set":
-		if len(args) != 3 {
-			return fail(errors.New("browser gateway set attend un alias"))
-		}
-		gateway, err := store.SetBrowserGateway(args[2])
-		if err != nil {
+		if err := store.ClearBrowserAssociation(ctx, args[1]); err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "Passerelle navigateur : %s (révision %d).\n", gateway.Alias, gateway.Revision)
-	case "show":
-		jsonOutput, err := parseJSONFlag(args[2:], stderr)
+		fmt.Fprintf(stdout, "Extension of %s dissociated.\n", args[1])
+	case "list":
+		jsonOutput, err := parseJSONFlag(args[1:], stderr)
 		if err != nil {
 			return 2
 		}
-		gateway, err := store.BrowserGateway()
+		associations, err := store.BrowserAssociations()
 		if err != nil {
 			return fail(err)
 		}
 		if jsonOutput {
-			return writeJSON(stdout, gateway, fail)
+			return writeJSON(stdout, associations, fail)
 		}
-		fmt.Fprintf(stdout, "%s\trévision=%d\n", gateway.Alias, gateway.Revision)
-	case "clear":
-		if len(args) != 2 {
-			return fail(errors.New("browser gateway clear n'attend pas d'argument"))
+		for _, entry := range associations.Entries {
+			fmt.Fprintf(stdout, "%s\t%s\tidentity=%s\t%s\n", entry.Browser, strings.Join(entry.Instances, ","), entry.Identity, entry.ExtensionID)
 		}
-		gateway, err := store.ClearBrowserGateway()
-		if err != nil {
-			return fail(err)
-		}
-		fmt.Fprintf(stdout, "Passerelle navigateur retirée (révision %d).\n", gateway.Revision)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -441,7 +468,7 @@ func runBrowser(ctx context.Context, store launcher.Store, args []string, stdout
 	return 0
 }
 
-func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlRuntimeDirectory string, stdout io.Writer, fail func(error) int) int {
+func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlRuntimeDirectory, pageAddress string, stdout io.Writer, fail func(error) int) int {
 	supervisor, err := launcher.NewSupervisor(launcher.SupervisorOptions{Store: store, RuntimeDirectory: runtimeDirectory})
 	if err != nil {
 		return fail(err)
@@ -450,9 +477,20 @@ func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlR
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Fprintln(stdout, "Superviseur Brique prêt.")
+	fmt.Fprintln(stdout, "Brique supervisor ready.")
+	if pageAddress != "" {
+		// The page is a convenience: a busy port never stops the supervisor.
+		page, pageErr := startManagementPage(store, controlRuntimeDirectory, pageAddress)
+		if pageErr != nil {
+			fmt.Fprintf(stdout, "Management page unavailable: %v\n", pageErr)
+		} else {
+			defer page.Close()
+			defer launcher.RetractWebUIAddress(store.Directory)
+			fmt.Fprintf(stdout, "Management page: http://%s/\n", page.Address())
+		}
+	}
 	for alias, startErr := range supervisor.StartAutostart(ctx) {
-		fmt.Fprintf(stdout, "Autostart %s refusé : %v\n", alias, startErr)
+		fmt.Fprintf(stdout, "Autostart of %s refused: %v\n", alias, startErr)
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -468,7 +506,7 @@ func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlR
 	if err := supervisor.Shutdown(shutdownContext); err != nil {
 		return fail(err)
 	}
-	fmt.Fprintln(stdout, "Superviseur Brique arrêté.")
+	fmt.Fprintln(stdout, "Brique supervisor stopped.")
 	return 0
 }
 
@@ -476,13 +514,13 @@ func serve(ctx context.Context, store launcher.Store, runtimeDirectory, controlR
 // peer. Only names are sent: the engine finds the address in its signed policy.
 func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, stdout, stderr io.Writer, fail func(error) int) int {
 	if len(args) < 2 {
-		return fail(errors.New("instance diagnose attend un alias et un pair"))
+		return fail(errors.New("instance diagnose expects an alias and a peer"))
 	}
 	alias, peer := args[0], args[1]
 	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	endpoint := flags.String("endpoint", "", "nom du point d'accès du pair (par défaut le premier)")
-	jsonOutput := flags.Bool("json", false, "sortie JSON")
+	endpoint := flags.String("endpoint", "", "name of the peer endpoint (the first by default)")
+	jsonOutput := flags.Bool("json", false, "JSON output")
 	if err := flags.Parse(args[2:]); err != nil || len(flags.Args()) != 0 {
 		return 2
 	}
@@ -492,7 +530,7 @@ func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, s
 		return fail(err)
 	}
 	if response.Diagnosis == nil {
-		return fail(errors.New("réponse du superviseur sans diagnostic"))
+		return fail(errors.New("supervisor response without diagnosis"))
 	}
 	status := 0
 	if !response.Diagnosis.OK {
@@ -504,9 +542,9 @@ func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, s
 		}
 		return status
 	}
-	fmt.Fprintf(stdout, "pair %s", response.Diagnosis.PeerID)
+	fmt.Fprintf(stdout, "peer %s", response.Diagnosis.PeerID)
 	if response.Diagnosis.Endpoint != "" {
-		fmt.Fprintf(stdout, "  point d'accès %s", response.Diagnosis.Endpoint)
+		fmt.Fprintf(stdout, "  endpoint %s", response.Diagnosis.Endpoint)
 	}
 	fmt.Fprintln(stdout)
 	for _, step := range response.Diagnosis.Steps {
@@ -520,9 +558,9 @@ func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, s
 		fmt.Fprintln(stdout)
 	}
 	if response.Diagnosis.OK {
-		fmt.Fprintln(stdout, "Aucune étape en échec.")
+		fmt.Fprintln(stdout, "No failing step.")
 	} else {
-		fmt.Fprintln(stdout, "Une étape est en échec : voir la ligne « failed » ci-dessus.")
+		fmt.Fprintln(stdout, "A step failed: see the \"failed\" line above.")
 	}
 	return status
 }
@@ -530,7 +568,7 @@ func runDiagnose(dataDirectory, controlRuntimeDirectory string, args []string, s
 func parseJSONFlag(args []string, stderr io.Writer) (bool, error) {
 	flags := flag.NewFlagSet("output", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	value := flags.Bool("json", false, "sortie JSON")
+	value := flags.Bool("json", false, "JSON output")
 	if err := flags.Parse(args); err != nil {
 		return false, err
 	}

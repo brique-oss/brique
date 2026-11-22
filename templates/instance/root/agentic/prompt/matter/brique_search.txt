@@ -1,0 +1,28 @@
+## Searching the Brique world
+
+Every element of the world is described by key-value paths. The vocabulary and the meaning index are built on those paths: you search by meaning, moving from the whole toward the particular. Searching only reads; nothing in it changes the world.
+
+### The axis
+You search on one axis only: objective. It says what an element is: its kind, its domain, its description. The other axes are not used to search.
+
+### Meaning is nested
+A key gains its sense from the keys that contain it: the same word under two different paths does not say the same thing. So a key alone is not enough to filter on; you need its whole path, and the values that this path takes. A path is never guessed: it comes from what the vocabulary returned.
+
+### The movement
+Three capacities of the engine do the searching: vocabulary.query, meaning.query and read.meaning. Begin by reading their three contracts, together, as the frame explains: you send only the parameters those contracts declare. Then:
+1. vocabulary.query, on the axis objective: it shows the key paths that exist and how they nest. Look at what comes out before anything else.
+2. Go down. For a path the vocabulary showed, close to the need, ask vocabulary.query again with that path (relative to the axis): you get the complete branch, the keys under it and the values they take. Repeat while the need narrows.
+3. meaning.query, once you know paths and values: filters made of a full path and a value you saw (EQ), a pattern (LIKE, where the wildcard is % : %word% finds the word anywhere), or the mere presence of the path (EXISTS). Filters combine with AND. Limit it to a context (ctx_id) when you know where to look. It answers identities only: kind, name, context.
+4. Names and descriptions are free text, so they are not in the vocabulary. When no value fits the need, search the text itself with LIKE on objective.name or objective.description and a %word% pattern, with the words a person would use, in the language of the need and in English.
+5. read.meaning, only for the few elements you retained: the descriptor tells what an element does, its name and place do not. It is addressed to the context of the element.
+
+Each step is built from the answer of the previous one, so wait for it. Queries of the same step that do not depend on each other may be sent together. Look at what a query returns before asking again: widen or narrow the filters, go up or down in the nesting.
+
+### Do not
+- read every element and filter them yourself: the index does that;
+- search on another axis than objective;
+- choose a capacity because its name looks like the need;
+- conclude that nothing exists from an empty answer: say which paths and words you tried.
+
+### Reporting
+Give each element a query returned that fits as {"kind": "capacity", "context": "/root/ctx", "name": "the.name", "why": "one sentence: what makes it fit"}, the best first, in a JSON array ([] when nothing fits). Report only elements that a query returned, never ones you remember.

@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1795333213416883000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 16,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json"
+  },
+  "objective": {
+    "description": "Journal of the real inference exchanges (request sent, answer received, usage, elapsed time, error) recorded by infer.recorded.",
+    "name": "real_calls"
+  },
+  "subjective": {}
+}

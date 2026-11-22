@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+from .busy import busy_attempts as default_busy_attempts, busy_pause_s, is_busy
 from .constants import KIND_INTENTION, TYPE_EXECUTION
 from .execution import current_delegation, current_intention
 from .util import new_id, utc_now_rfc3339
@@ -106,7 +108,28 @@ class OutboundIntentionAPI:
         await self.runtime.send_message(message)
         return intention_id
 
-    async def emit_and_wait(
+    async def emit_and_wait(self, *, busy_attempts: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        """Send an intention and wait for its response. A callee that refuses it because it is busy is asked again
+        (``busy_attempts`` in all, BRIQUE_BUSY_ATTEMPTS by default), after a growing pause that does not hold an execution slot.
+        A timeout is never retried."""
+        attempts = default_busy_attempts() if busy_attempts is None else max(1, busy_attempts)
+        for attempt in range(attempts):
+            message = await self._emit_and_wait_once(**kwargs)
+            body = message.get("response") if isinstance(message, dict) else None
+            if attempt == attempts - 1 or not is_busy(body or {}):
+                return message
+            await self._pause(busy_pause_s(attempt))
+        raise AssertionError("unreachable")
+
+    async def _pause(self, seconds: float) -> None:
+        scheduler = getattr(self.runtime, "scheduler", None)
+        if scheduler is None:
+            await asyncio.sleep(seconds)
+            return
+        async with scheduler.yielding():
+            await asyncio.sleep(seconds)
+
+    async def _emit_and_wait_once(
         self,
         *,
         to_context: str,

@@ -1,0 +1,224 @@
+{
+  "description": "The `running` response a capacity sends to say it is still working (the engine and the callers renew their inactivity budget on it). It answers the intention being served: same intention_id, addressed to the caller, from the capacity, with no payload. The identity is the wrapper's, except in a delegated call where the engine stamps it. from.context is the context the intention was addressed to, relative to the wrapper, with the slashes at both ends dropped; '' when the intention was not addressed through this wrapper. The ts is not compared. An empty identity or payload may be absent from the wire (the Go runtime omits them, as it does in all its responses, and the engine reads an absent one as empty): the comparison drops an empty identity and an empty payload on both sides.",
+  "cases": [
+    {
+      "name": "addressed through the wrapper",
+      "wrapper_name": "w",
+      "delegated": false,
+      "intention": {
+        "intention_id": "i1",
+        "to": {
+          "context": "@wrapper_w:/sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        }
+      },
+      "response": {
+        "intention_id": "i1",
+        "to": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        },
+        "from": {
+          "context": "sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {
+          "id": "w",
+          "kind": "wrapper"
+        },
+        "status": "running",
+        "payload": {}
+      }
+    },
+    {
+      "name": "nested context",
+      "wrapper_name": "w",
+      "delegated": false,
+      "intention": {
+        "intention_id": "i2",
+        "to": {
+          "context": "@wrapper_w:/a/b",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root/x",
+          "cap": "k",
+          "type": "user"
+        }
+      },
+      "response": {
+        "intention_id": "i2",
+        "to": {
+          "context": "/root/x",
+          "cap": "k",
+          "type": "user"
+        },
+        "from": {
+          "context": "a/b",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {
+          "id": "w",
+          "kind": "wrapper"
+        },
+        "status": "running",
+        "payload": {}
+      }
+    },
+    {
+      "name": "slashes at both ends are dropped",
+      "wrapper_name": "w",
+      "delegated": false,
+      "intention": {
+        "intention_id": "i3",
+        "to": {
+          "context": "@wrapper_w://sub/",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        }
+      },
+      "response": {
+        "intention_id": "i3",
+        "to": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        },
+        "from": {
+          "context": "sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {
+          "id": "w",
+          "kind": "wrapper"
+        },
+        "status": "running",
+        "payload": {}
+      }
+    },
+    {
+      "name": "not addressed through the wrapper",
+      "wrapper_name": "w",
+      "delegated": false,
+      "intention": {
+        "intention_id": "i4",
+        "to": {
+          "context": "/root/sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        }
+      },
+      "response": {
+        "intention_id": "i4",
+        "to": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        },
+        "from": {
+          "context": "",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {
+          "id": "w",
+          "kind": "wrapper"
+        },
+        "status": "running",
+        "payload": {}
+      }
+    },
+    {
+      "name": "another wrapper name",
+      "wrapper_name": "w",
+      "delegated": false,
+      "intention": {
+        "intention_id": "i5",
+        "to": {
+          "context": "@wrapper_other:/sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        }
+      },
+      "response": {
+        "intention_id": "i5",
+        "to": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        },
+        "from": {
+          "context": "",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {
+          "id": "w",
+          "kind": "wrapper"
+        },
+        "status": "running",
+        "payload": {}
+      }
+    },
+    {
+      "name": "delegated call: the engine stamps the identity",
+      "wrapper_name": "w",
+      "delegated": true,
+      "intention": {
+        "intention_id": "i6",
+        "to": {
+          "context": "@wrapper_w:/sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "from": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        }
+      },
+      "response": {
+        "intention_id": "i6",
+        "to": {
+          "context": "/root",
+          "cap": "caller",
+          "type": "execution"
+        },
+        "from": {
+          "context": "sub",
+          "cap": "c",
+          "type": "user"
+        },
+        "identity": {},
+        "status": "running",
+        "payload": {}
+      }
+    }
+  ]
+}

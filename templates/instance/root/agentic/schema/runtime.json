@@ -1,0 +1,39 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "runtime",
+    "description": "Defines the runtime Matter as an element: a Matter whose substance tracks the execution status, active cognitive run, current mailbox message and active wait groups of one continuity, described by the runtime_data schema."
+  },
+  "functional": {
+    "brique": {
+      "kind": [
+        "matter"
+      ],
+      "substance_mode": [
+        "brique"
+      ],
+      "substance_type": [
+        "text"
+      ]
+    },
+    "objective": {
+      "type": [
+        "runtime"
+      ]
+    },
+    "functional": {
+      "_format_note": "Required. The substance is a JSON document.",
+      "_schema_ref_note": "Required. Schema constraining the content (substance) of the Matter.",
+      "format": [
+        "json"
+      ],
+      "schema_ref": [
+        "/root/agentic/schema/runtime_data"
+      ]
+    },
+    "subjective": {}
+  },
+  "subjective": {}
+}

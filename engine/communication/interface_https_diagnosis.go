@@ -14,7 +14,7 @@ import (
 
 	"brique_engine/contracts/connectiondiagnosis"
 	"brique_engine/engine/junction"
-	"brique_engine/engine/transport/diagnostic"
+	"brique_engine/platform/diagnostic"
 )
 
 // DiagnoseEndpoint probes one endpoint of a declared peer with this interface's own client

@@ -1,0 +1,105 @@
+{
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "",
+    "ctx_name": "test",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "config": {
+              "allow_any_origin": false,
+              "egress_enabled": true,
+              "idle_timeout_ms": 0,
+              "ingress_enabled": true,
+              "path": "/wrapper/test_tools",
+              "read_limit": 0,
+              "read_timeout_ms": 0,
+              "request_timeout_ms": 0,
+              "tls_cert_file": "",
+              "tls_insecure_skip_verify": false,
+              "tls_key_file": "",
+              "tls_server_name": "",
+              "write_timeout_ms": 0
+            },
+            "driver": "ws",
+            "name": "test_tools",
+            "type": "wrapper"
+          },
+          {
+            "config": {
+              "allow_any_origin": false,
+              "egress_enabled": true,
+              "idle_timeout_ms": 0,
+              "ingress_enabled": true,
+              "path": "/agentic/test/ws",
+              "read_limit": 0,
+              "read_timeout_ms": 0,
+              "request_timeout_ms": 0,
+              "tls_cert_file": "",
+              "tls_insecure_skip_verify": false,
+              "tls_key_file": "",
+              "tls_server_name": "",
+              "write_timeout_ms": 0
+            },
+            "driver": "ws",
+            "name": "it_driver",
+            "type": "ui"
+          }
+        ],
+        "wrapper_boundary": [
+          "test_tools"
+        ]
+      },
+      "execution": {
+        "default_invoke_timeout_ms": 0,
+        "wrappers": [
+          {
+            "mode": "interpreted",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "cwd": "code/test_tools",
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "test_tools"
+              },
+              "env_name": "env1",
+              "log": {
+                "enabled": false
+              },
+              "shell": false
+            },
+            "stop_timeout_ms": 1000,
+            "watch": [
+              "../../../../../wrapper/python/lib"
+            ],
+            "wrapper_name": "test_tools"
+          }
+        ]
+      },
+      "matter": {},
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "minimal",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.0"
+  },
+  "objective": {
+    "name": "test",
+    "description": "Fictitious tools and fake LLM of the end-to-end integration test of the agentic context: scriptable capacities, with no business logic."
+  },
+  "functional": {
+    "role": "worker"
+  },
+  "subjective": {}
+}

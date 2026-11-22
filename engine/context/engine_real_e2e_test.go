@@ -102,7 +102,7 @@ func newRealNode(t *testing.T, bins realBinaries, base, name, id string) *realNo
 	node.publicKey = node.advertisedKey(t)
 	// The HTTPS interface and its certificate come from the command, as for an operator: the
 	// context.json names no certificate, the engine finds the machine's own.
-	if out := node.sec(t, "tls", "init", "--host", "127.0.0.1", "--addr", node.httpsAddr); !strings.Contains(out, "Interface HTTPS") {
+	if out := node.sec(t, "tls", "init", "--host", "127.0.0.1", "--addr", node.httpsAddr); !strings.Contains(out, "HTTPS interface") {
 		t.Fatalf("%s: tls init:\n%s", name, out)
 	}
 	return node
@@ -455,7 +455,7 @@ func TestRealProcesses_TwoInstancesWrappersAndLocalPrincipals(t *testing.T) {
 			t.Fatalf("a call before the regeneration failed: %v", inner["relayed_error"])
 		}
 		out := b.sec(t, "tls", "init", "--host", "127.0.0.1", "--force")
-		if !strings.Contains(out, "déjà présente") {
+		if !strings.Contains(out, "already present") {
 			t.Fatalf("regenerating must not add the interface again:\n%s", out)
 		}
 		a.sec(t, "tls", "trust", filepath.Join(b.secDir, "tls", "cert.pem"))

@@ -1,0 +1,69 @@
+{
+  "brique": {
+    "cap_name": "weather.fetch",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "weather.fetch",
+    "description": "Fetch the current weather of a known French city from the open-meteo service (real internet access)."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return the current temperature, apparent temperature, precipitation and wind of a known city.",
+      "inputs": {
+        "params": {
+          "city": {
+            "type": "string",
+            "description": "City name, one of paris, lyon, marseille, lille."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "city": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "temperature_c": {
+            "type": "number"
+          },
+          "feels_like_c": {
+            "type": "number"
+          },
+          "precipitation_mm": {
+            "type": "number"
+          },
+          "wind_kmh": {
+            "type": "number"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A city name becomes the weather observed there now.",
+        "invariants": [
+          "The data comes from a real HTTP request to the open-meteo service: it is not deterministic.",
+          "An unknown city fails instead of returning a guess."
+        ],
+        "success": [
+          "The response carries the city, the observation time and the four measures."
+        ],
+        "failure": [
+          "city missing or not known.",
+          "The weather service is unreachable or does not answer within 10 seconds."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure: the only capacity of the world that leaves the machine."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry to the tool_calls matter once the observation is in (done) or has failed (failed)."
+      }
+    }
+  },
+  "subjective": {}
+}

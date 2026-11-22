@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/schema_matter_runtime.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Schema of the runtime Matter in the agentic context.",
+    "name": "schema_matter_runtime"
+  },
+  "subjective": {}
+}

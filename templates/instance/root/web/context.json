@@ -1,0 +1,54 @@
+{
+  "objective": {
+    "name": "web",
+    "description": "The web home page of the instance: it lists the user interfaces that are published and open the one chosen."
+  },
+  "functional": {
+    "role": "child"
+  },
+  "subjective": {},
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "",
+    "ctx_name": "web",
+    "ctx_version": "1",
+    "engine_version": "0.0.0",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "config": {
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/web/ws"
+            },
+            "driver": "ws",
+            "name": "web",
+            "type": "ui"
+          }
+        ],
+        "wrapper_boundary": []
+      },
+      "execution": {
+        "wrappers": []
+      },
+      "matter": {},
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "minimal",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "ui_config": {
+      "adapter": "react",
+      "host": "electron",
+      "name": "web",
+      "root_view": "WebPortal",
+      "ws_path": "/web/ws"
+    }
+  }
+}

@@ -1,0 +1,387 @@
+{
+  "brique": {
+    "cap_name": "mailbox.read",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "mailbox.read",
+    "description": "Selects and claims the next mailbox entry eligible for consumption by the active run of a continuity, through one guarded mailbox write."
+  },
+  "functional": {
+    "#root": {
+      "role": "Give the active run exclusive ownership of the next eligible mailbox message of an explicitly requested priority class, according to deterministic continuity message ordering.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "_comment": "Optional. 'user': absorption read. With priority normal, only entries whose durable message has kind user are eligible; the claimed entry is not made the current message of the run (it is absorbed by the chain in progress)."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "claimed_by": {
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "mailbox": "Changes exactly one eligible mailbox entry from pending to claimed by the active run, through one mailbox write guarded by expected_revision.",
+        "runtime": "Reads active ownership state to verify that the caller is the current cognitive run.",
+        "journal": "Reads durable message ordering information from the journal without modifying it."
+      },
+      "transformation_contract": {
+        "morphing": "A mailbox containing pending eligible work becomes a mailbox where the deterministic next entry is exclusively claimed by the active run.",
+        "invariants": [
+          "Only the current runtime.run_id may claim mailbox work.",
+          "Selection and claim form one atomic mailbox mutation: a single matter.write guarded by expected_revision; on conflict the mailbox is re-read and the selection recomputed.",
+          "One mailbox entry can have at most one owner.",
+          "Only pending entries are eligible.",
+          "Expected entries captured by an active wait group are never selected by mailbox.read.",
+          "Only entries of the requested priority class, normal or control, are selected; priority classes are never mixed.",
+          "The priority parameter accepts only normal or control; expected is forbidden because expected entries are captured directly by mailbox.send.",
+          "Within one priority, the referenced continuity message with the lowest seq is selected first.",
+          "With kind user, only normal entries whose durable message has kind user are eligible; other normal messages keep waiting for their own treatment.",
+          "A parked entry (status failed) is never claimed.",
+          "Physical order of mailbox.entries is irrelevant.",
+          "The journal is never mutated by mailbox.read.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "The operation mutates a single Matter through one matter.write guarded by expected_revision, and is atomic at the engine level for that Matter only.",
+          "A mailbox entry whose message_id matches no durable message in the journal is never eligible for claim."
+        ],
+        "success": [
+          "The next eligible entry of the requested priority class is selected deterministically.",
+          "The selected entry becomes status claimed.",
+          "claimed_by becomes the provided run_id.",
+          "The returned message_id references the canonical durable message in the journal.",
+          "No available eligible message is a valid empty result rather than an execution error."
+        ],
+        "failure": [
+          "Fails if continuity, mailbox, or runtime are inconsistent.",
+          "Fails if run_id is not the current runtime.run_id.",
+          "Fails if mailbox ownership state is internally contradictory.",
+          "Fails if priority is expected or is not one of normal or control.",
+          "Does not alter any entry when ownership validation fails.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "This capacity does not perform cognition and does not read message payload semantically.",
+          "It delegates no architectural behavior to another capacity; its responsibility is one local mailbox transformation applied by a single guarded write.",
+          "Setting runtime.current_message_id belongs to pilot.activate after a successful claim, not to mailbox.read itself.",
+          "Controls are read by pilot.activate at safe points with priority control, repeatedly until none remains pending, ordered by message seq; normal work is read with priority normal.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model.",
+          "Implementation constraint: the existence and the order (seq) of the eligible messages are read from the in-memory object that duplicates the continuity for performance, rebuilt from the journal when absent."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the four Matters owned by the target continuity (header, journal, mailbox, runtime) from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if one of the four derived Matters does not exist."
+                  ],
+                  "invariants": [
+                    "Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs of its continuity header, journal, mailbox, and runtime."
+                }
+              }
+            },
+            {
+              "#authorize": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "authorized": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Verify that the requesting run is the unique active owner of the continuity.",
+                "transformation_contract": {
+                  "failure": [
+                    "Mismatched or absent active ownership rejects the read without mutation."
+                  ],
+                  "invariants": [
+                    "The supplied run_id must equal runtime.run_id.",
+                    "An idle or suspended continuity cannot consume normal mailbox work."
+                  ],
+                  "morphing": "A mailbox read request becomes an authorized or rejected consumption attempt.",
+                  "success": [
+                    "The current active run is authorized to proceed."
+                  ]
+                }
+              }
+            },
+            {
+              "#select": {
+                "inputs": {
+                  "params": {
+                    "priority": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "found": {
+                      "type": "boolean"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#eligible_entries": {
+                          "inputs": {
+                            "params": {
+                              "priority": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "entries": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "role": "Identify mailbox entries eligible for ordinary run consumption.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "claimed entries are excluded.",
+                              "expected entries are excluded.",
+                              "Entries of any other priority class are excluded.",
+                              "Entries whose message_id matches no durable message in the journal are excluded."
+                            ],
+                            "morphing": "Mailbox entries become the subset currently eligible for read consumption."
+                          }
+                        }
+                      },
+                      {
+                        "#priority_order": {
+                          "inputs": {
+                            "params": {
+                              "entries": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "found": {
+                                "type": "boolean"
+                              },
+                              "message_id": {
+                                "type": "string"
+                              },
+                              "priority": {
+                                "type": "string"
+                              },
+                              "seq": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "role": "Order eligible entries of the requested priority class by referenced message seq.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "All eligible entries share the requested priority class.",
+                              "FIFO within equal priority derives exclusively from continuity message seq."
+                            ],
+                            "morphing": "Eligible mailbox entries become one deterministic next-consumption candidate."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Determine the next eligible pending mailbox entry using priority and canonical message sequence order.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Only status pending entries participate.",
+                    "Expected entries are excluded from normal selection.",
+                    "Only entries of the requested priority class participate.",
+                    "Within equal priority, lower continuity message seq precedes higher seq."
+                  ],
+                  "morphing": "Pending mailbox state becomes one deterministic candidate entry or an explicit no-work result."
+                }
+              }
+            },
+            {
+              "#claim": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "claimed_by": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Transfer exclusive consumption ownership of the selected entry to the requesting run through one guarded mailbox write.",
+                "transformation_contract": {
+                  "failure": [
+                    "If the entry is no longer pending, the claim fails rather than stealing ownership."
+                  ],
+                  "invariants": [
+                    "The entry must still be pending at the instant of claim.",
+                    "Selection and claim are one mailbox write guarded by expected_revision; a revision conflict re-reads the mailbox and recomputes the selection.",
+                    "status becomes claimed and claimed_by becomes run_id together."
+                  ],
+                  "morphing": "A selected pending mailbox entry becomes exclusively claimed by the active run.",
+                  "success": [
+                    "Exactly one selected entry becomes owned by the run."
+                  ]
+                }
+              }
+            },
+            {
+              "#return_message_ref": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "claimed_by": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Return the durable message reference and ordering metadata of the newly claimed mailbox entry.",
+                "transformation_contract": {
+                  "invariants": [
+                    "The message payload itself remains canonical in the journal.",
+                    "Returning the reference performs no additional state change."
+                  ],
+                  "morphing": "A successfully claimed mailbox entry becomes an explicit message reference returned to the active run."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

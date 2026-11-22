@@ -37,7 +37,7 @@ func TestSecretCommands(t *testing.T) {
 
 	withStdin(t, cliSecret+"\n")
 	out, errOut, code := sec(t, dir, "secret", "add", "anthropic")
-	if code != 0 || !strings.Contains(out, "Secret anthropic enregistré") {
+	if code != 0 || !strings.Contains(out, "Secret anthropic registered") {
 		t.Fatalf("secret add: %d\n%s%s", code, out, errOut)
 	}
 	if strings.Contains(out+errOut, cliSecret) {
@@ -51,7 +51,7 @@ func TestSecretCommands(t *testing.T) {
 	// A rotation: adding again replaces the value.
 	withStdin(t, "rotated\n")
 	mustOK(t, dir, "secret", "add", "anthropic")
-	if out := mustOK(t, dir, "secret", "list"); !strings.Contains(out, "anthropic  7 octets") {
+	if out := mustOK(t, dir, "secret", "list"); !strings.Contains(out, "anthropic  7 bytes") {
 		t.Fatalf("after rotation:\n%s", out)
 	}
 
@@ -60,10 +60,10 @@ func TestSecretCommands(t *testing.T) {
 		t.Fatalf("doctor complains about the secrets folder:\n%s%s", out, errOut)
 	}
 
-	if out := mustOK(t, dir, "secret", "remove", "anthropic"); !strings.Contains(out, "supprimé") {
+	if out := mustOK(t, dir, "secret", "remove", "anthropic"); !strings.Contains(out, "removed") {
 		t.Fatalf("secret remove:\n%s", out)
 	}
-	if out := mustOK(t, dir, "secret", "list"); !strings.Contains(out, "Aucun secret") {
+	if out := mustOK(t, dir, "secret", "list"); !strings.Contains(out, "No secret") {
 		t.Fatalf("secret list after removal:\n%s", out)
 	}
 }

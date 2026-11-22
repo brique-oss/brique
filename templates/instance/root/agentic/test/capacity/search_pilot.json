@@ -1,0 +1,411 @@
+{
+  "brique": {
+    "cap_name": "search_pilot",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "search_pilot",
+    "description": "Pilot plan of the search test: one pilot.infer per round over the conversation of the continuity; the first round carries a task text written here followed by the prompt Matter brique_search; it queries the world with the engine capacities and proposes a capacity.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity by asking the model for the next round of a search of the Brique world.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "intentions": {
+            "type": "array"
+          },
+          "wait_group": {
+            "type": "object"
+          },
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A request to find a capacity becomes, round after round, queries of the engine and finally a message listing the capacities found.",
+        "invariants": [
+          "The first round sends the task text written in this plan followed by the Matter brique_search, once: they enter the journal as a prompt line and stay in the conversation.",
+          "A later round sends only what is new, the stimulus of the resumption: everything else, the earlier prompt, the answers of the model and of the capacities, is the conversation the step reads from the journal.",
+          "The plan holds no state: the history of the rounds comes from the continuity."
+        ],
+        "notes": [
+          "Test infrastructure of the search scenario. The step is named differently when the plan is invoked again with a stimulus, so that a round is never replayed from memory."
+        ]
+      },
+      "resolution": {
+        ">if": {
+          "when": {
+            "left": "$input.stimulus",
+            "op": "exists"
+          },
+          ">then": {
+            ">sequence": {
+              "items": [
+                {
+                  "invoke": {
+                    "@capacity": "/root/agentic/pilot.infer",
+                    "as": "round",
+                    "with": {
+                      "continuity_id": "$input.continuity_id",
+                      "run_id": "$input.run_id",
+                      "step": "resume",
+                      "output_schema": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "intentions",
+                          "wait_group",
+                          "messages"
+                        ],
+                        "properties": {
+                          "intentions": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "id",
+                                    "target_capacity",
+                                    "target_type",
+                                    "parameters",
+                                    "await_response"
+                                  ],
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "description": "Yours, new in this continuity."
+                                    },
+                                    "target_capacity": {
+                                      "type": "string",
+                                      "description": "The absolute reference of the capacity."
+                                    },
+                                    "target_type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "reflexive",
+                                        "matter",
+                                        "execution",
+                                        "control",
+                                        "user"
+                                      ],
+                                      "description": "The family of the capacity: reflexive for read.*, meaning.* and vocabulary.*."
+                                    },
+                                    "parameters": {
+                                      "type": "string",
+                                      "description": "The parameters, a JSON object written as text."
+                                    },
+                                    "await_response": {
+                                      "type": "boolean",
+                                      "description": "true: the Response comes back to you."
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "wait_group": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "condition"
+                                ],
+                                "properties": {
+                                  "condition": {
+                                    "type": "string",
+                                    "enum": [
+                                      "all"
+                                    ],
+                                    "description": "all: the group waits for every intention of this answer that awaits a response."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "messages": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "to",
+                                    "kind",
+                                    "content"
+                                  ],
+                                  "properties": {
+                                    "to": {
+                                      "type": "string",
+                                      "enum": [
+                                        "user:1"
+                                      ]
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "user"
+                                      ]
+                                    },
+                                    "content": {
+                                      "type": "string",
+                                      "description": "The JSON array of the elements found, as text."
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "model": {
+                        "provider": "recorded",
+                        "model": "claude-haiku-4-5-20251001",
+                        "parameters": {
+                          "max_output_tokens": 700,
+                          "temperature": 0,
+                          "upstream_provider": "anthropic"
+                        }
+                      },
+                      "projection": {
+                        "include_kinds": [
+                          "user",
+                          "prompt",
+                          "completion",
+                          "capacity_response"
+                        ]
+                      },
+                      "prompt_parts": [
+                        "$input.stimulus"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "output": {
+                    "intentions": "$round.payload.output.intentions",
+                    "wait_group": "$round.payload.output.wait_group",
+                    "messages": "$round.payload.output.messages"
+                  }
+                }
+              ]
+            }
+          },
+          ">else": {
+            ">sequence": {
+              "items": [
+                {
+                  "invoke": {
+                    "@capacity": "/root/agentic/pilot.infer",
+                    "as": "round",
+                    "with": {
+                      "continuity_id": "$input.continuity_id",
+                      "run_id": "$input.run_id",
+                      "step": "search",
+                      "output_schema": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "intentions",
+                          "wait_group",
+                          "messages"
+                        ],
+                        "properties": {
+                          "intentions": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "id",
+                                    "target_capacity",
+                                    "target_type",
+                                    "parameters",
+                                    "await_response"
+                                  ],
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "description": "Yours, new in this continuity."
+                                    },
+                                    "target_capacity": {
+                                      "type": "string",
+                                      "description": "The absolute reference of the capacity."
+                                    },
+                                    "target_type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "reflexive",
+                                        "matter",
+                                        "execution",
+                                        "control",
+                                        "user"
+                                      ],
+                                      "description": "The family of the capacity: reflexive for read.*, meaning.* and vocabulary.*."
+                                    },
+                                    "parameters": {
+                                      "type": "string",
+                                      "description": "The parameters, a JSON object written as text."
+                                    },
+                                    "await_response": {
+                                      "type": "boolean",
+                                      "description": "true: the Response comes back to you."
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "wait_group": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "condition"
+                                ],
+                                "properties": {
+                                  "condition": {
+                                    "type": "string",
+                                    "enum": [
+                                      "all"
+                                    ],
+                                    "description": "all: the group waits for every intention of this answer that awaits a response."
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "messages": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "to",
+                                    "kind",
+                                    "content"
+                                  ],
+                                  "properties": {
+                                    "to": {
+                                      "type": "string",
+                                      "enum": [
+                                        "user:1"
+                                      ]
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "user"
+                                      ]
+                                    },
+                                    "content": {
+                                      "type": "string",
+                                      "description": "The JSON array of the elements found, as text."
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "model": {
+                        "provider": "recorded",
+                        "model": "claude-haiku-4-5-20251001",
+                        "parameters": {
+                          "max_output_tokens": 700,
+                          "temperature": 0,
+                          "upstream_provider": "anthropic"
+                        }
+                      },
+                      "projection": {
+                        "include_kinds": [
+                          "user",
+                          "prompt",
+                          "completion",
+                          "capacity_response"
+                        ]
+                      },
+                      "@matter": {
+                        "prompt_matters": [
+                          "/root/agentic/prompt/brique_search"
+                        ]
+                      },
+                      "prompt_parts": [
+                        "You look for things that can be done in Brique, among the capacities that are exposed to you, and you propose one. You work in rounds. In a round you answer either with queries to send (intentions, and a wait_group over them, and no message), or, once you have found what you need, with one message to user:1 whose content is the JSON array described at the end. The answers to your queries come back in the history you are given.\nThe capacities you use are those of the engine that the search explains: /root/read.capacity, /root/vocabulary.query, /root/meaning.query, and read.meaning, addressed to the context of the element."
+                      ],
+                      "prompt_order": "parts_first"
+                    }
+                  }
+                },
+                {
+                  "output": {
+                    "intentions": "$round.payload.output.intentions",
+                    "wait_group": "$round.payload.output.wait_group",
+                    "messages": "$round.payload.output.messages"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

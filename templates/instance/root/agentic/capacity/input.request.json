@@ -1,0 +1,144 @@
+{
+  "brique": {
+    "cap_name": "input.request",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "input.request",
+    "description": "Asks a person a precise question on behalf of a continuity and answers with what they said: a long-running capacity whose Response is the answer."
+  },
+  "functional": {
+    "#root": {
+      "role": "Write a request for input in the journal of a continuity, wait for a person to answer it through input.answer, and answer the intention with that answer, as any capacity answers the intention that called it.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string",
+            "_comment": "The continuity that asks: its journal carries the request."
+          },
+          "question": {
+            "type": "string"
+          },
+          "answer_kind": {
+            "type": "string",
+            "_comment": "Optional: text (default), choice or confirm."
+          },
+          "choices": {
+            "type": "array",
+            "_comment": "Required for choice (at least two distinct texts), refused otherwise."
+          },
+          "request_id": {
+            "type": "string",
+            "_comment": "Optional. Given, it makes the call replayable; absent, it is derived from the calling intention."
+          },
+          "timeout_s": {
+            "type": "number",
+            "_comment": "Optional. Life of the request without an answer; default INPUT_TIMEOUT_S."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "request_id": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "answered_at": {
+            "type": "string"
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Appends an input_request line to the journal of the continuity, and an input_closed line when the request times out or is cancelled.",
+        "external": "Waits for input.answer. While it waits it acknowledges itself as running at regular intervals and gives back its execution slot."
+      },
+      "transformation_contract": {
+        "morphing": "A question about a continuity becomes an open request that a person answers; the answer of the person becomes the answer of the call.",
+        "invariants": [
+          "The request is a line of kind event, event input_request, in the journal of the continuity that asks, written by this capacity and never by the model.",
+          "The answer of the call is the answer of the person given through input.answer: the call waits for it like any awaited capacity, acknowledging itself as running at regular intervals and giving back its execution slot while it waits.",
+          "A request is open until an input_response or an input_closed line carries its request_id; if both exist, the first written in the journal wins.",
+          "The same request_id with the same question, kind and choices is the same request: the call again writes nothing twice, and gives the answer at once when the request is already answered.",
+          "The same request_id with another question, kind or choices is an identity conflict, refused.",
+          "A request lives at most timeout_s (default INPUT_TIMEOUT_S): when it expires an input_closed line with reason timeout is written and the call is refused with reason timeout.",
+          "A request whose continuity is deleted or replaced by its successor while it waits is closed with reason cancelled and the call is refused with reason cancelled.",
+          "A restart of the wrapper takes the wait away, not the request: the same call again with the same request_id waits again, or gives the answer already given.",
+          "input.request writes only lines of the journal of the continuity that asks."
+        ],
+        "success": [
+          "The call answers with the answer of the person, valid for the kind asked."
+        ],
+        "failure": [
+          "Fails with an invalid request when continuity_id or question is missing or empty, answer_kind is unknown, choices is missing for a choice or given for another kind, timeout_s is not a positive number, or request_id is empty.",
+          "Fails not found when the continuity does not exist, before anything is written.",
+          "Fails refused (reason timeout) when nobody answers in time, refused (reason cancelled) when the continuity is deleted or replaced while it waits, and refused (reason closed) when the request was closed before this call."
+        ],
+        "notes": [
+          "The person sees the open request in the conversation of the continuity that asks; the first valid answer closes it."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#write": {
+                "role": "Write the request in the journal, idempotent by its identifier.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A question becomes an open request of the continuity."
+                }
+              }
+            },
+            {
+              "#await_answer": {
+                "role": "Wait for the answer of the person, or the end of the request.",
+                "inputs": {
+                  "params": {
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "The response line of the request becomes the answer of the call."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

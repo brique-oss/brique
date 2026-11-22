@@ -1,0 +1,23 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "projection_request",
+    "description": "Defines a temporary request to rebuild the continuity projection using a deterministic projection definition before the next pilot inference."
+  },
+  "functional": {
+    "projection": {
+      "schema_ref": "projection_definition"
+    },
+    "_projection_note": "Required. Deterministic projection definition to apply.",
+    "mode": [
+      "merge",
+      "replace"
+    ],
+    "_mode_note": "Optional. merge supplements the pilot default projection; replace temporarily substitutes it. Defaults to merge.",
+    "budget": [],
+    "_budget_note": "Optional. Maximum budget granted to the resulting continuity projection for this request."
+  },
+  "subjective": {}
+}

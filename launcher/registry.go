@@ -311,6 +311,32 @@ func (s Store) UpdatePublication(ctx context.Context, alias, publicationPath str
 
 // UpdateWebProfile records the public posture of the web host. A nil profile
 // restores the default local profile. The server profile needs a web publication.
+// SetAutostart says whether the supervisor starts the instance when it starts. It only changes
+// the registry: the instance may be running or stopped.
+func (s Store) SetAutostart(alias string, enabled bool) (Instance, error) {
+	if !validAlias(alias) {
+		return Instance{}, errors.New("invalid instance alias")
+	}
+	var updated Instance
+	err := s.withLock(func(registry *Registry) error {
+		for index := range registry.Instances {
+			if registry.Instances[index].Alias != alias {
+				continue
+			}
+			updated = registry.Instances[index]
+			if updated.Autostart == enabled {
+				return nil
+			}
+			registry.Instances[index].Autostart = enabled
+			updated = registry.Instances[index]
+			registry.Revision++
+			return s.write(*registry)
+		}
+		return fmt.Errorf("instance %q is not registered", alias)
+	})
+	return updated, err
+}
+
 func (s Store) UpdateWebProfile(alias string, profile *WebProfile) (Instance, error) {
 	if !validAlias(alias) {
 		return Instance{}, errors.New("invalid instance alias")

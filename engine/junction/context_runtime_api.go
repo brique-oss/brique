@@ -34,13 +34,13 @@ type InterfaceEgress struct {
 	MaxWaitNs int64
 }
 
-// ContextRuntimeAPI = surface minimale exposée aux familles.
-// Implémentée par ContextLoop via closures injectées dans le frame.
+// ContextRuntimeAPI is the minimal surface exposed to the families.
+// ContextLoop implements it through closures injected into the frame.
 type ContextRuntimeAPI struct {
 	// Context state
 	GetContextState func() shared.ContextState
 
-	// Family states (pas les channels, mais l'état runtime)
+	// Family states (not the channels, but the runtime state)
 	GetFamilyState  func(name shared.FamilyName) (shared.FamilyState, bool)
 	ListFamilyState func() map[shared.FamilyName]shared.FamilyState
 

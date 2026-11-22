@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/agentic_interface.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Specification of the agentic interface, the agentic context UI block: hierarchical conversation list, one conversation window per lineage, starting a chat with the guide, and new-message state; wiring, data sources, journal rendering, labels, and pre-implementation checks.",
+    "name": "agentic_interface"
+  },
+  "subjective": {}
+}

@@ -40,7 +40,9 @@ inline Response request(
     const std::string& method,
     const std::string& url,
     const std::string& body = "",
-    std::size_t max_body = 128U * 1024U * 1024U
+    std::size_t max_body = 128U * 1024U * 1024U,
+    bool throw_on_status = true,
+    long timeout_s = 300
 ) {
     if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) {
         throw std::runtime_error("Matter lease URL must use HTTP or HTTPS");
@@ -54,7 +56,7 @@ inline Response request(
     ::curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, method.c_str());
     ::curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
     ::curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 30L);
-    ::curl_easy_setopt(handle, CURLOPT_TIMEOUT, 300L);
+    ::curl_easy_setopt(handle, CURLOPT_TIMEOUT, timeout_s);
     ::curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
     ::curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error);
     ::curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, append_body);
@@ -72,7 +74,7 @@ inline Response request(
         throw std::runtime_error(std::string("Matter HTTP request failed: ") +
             (error[0] == '\0' ? ::curl_easy_strerror(code) : error));
     }
-    if (status < 200 || status >= 300) throw std::runtime_error("Matter HTTP status " + std::to_string(status));
+    if (throw_on_status && (status < 200 || status >= 300)) throw std::runtime_error("Matter HTTP status " + std::to_string(status));
     return Response{status, std::move(state.body)};
 }
 

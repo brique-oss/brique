@@ -1,0 +1,197 @@
+/*
+ * Copyright 2026 Nicolas Cassan
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"brique/wrapper/wrapper"
+)
+
+// BriqueCapacityClient implements BriqueOutbound by emitting outbound intentions
+// through the Brique wrapper runtime.
+type BriqueCapacityClient struct {
+	rt    *wrapper.Runtime
+	names wrapperNames
+}
+
+// wrapperNames is what tells this wrapper from another one that runs the same code. The engine routes the response to an outbound
+// intention to the wrapper that owns the capacity named in `from`: two wrappers must not name the same one, or they would take each
+// other's answers. Without configuration the names are those of the wrapper mcp_server_go.
+type wrapperNames struct {
+	responseCap string // the routing anchor capacity of this wrapper (BRIQUE_MCP_RESPONSE_CAP)
+	identity    string // the wrapper's own name (BRIQUE_WRAPPER_NAME, which the engine sets)
+}
+
+func wrapperNamesFromEnv() wrapperNames {
+	return wrapperNames{responseCap: envOr("BRIQUE_MCP_RESPONSE_CAP", "mcp.response"), identity: envOr("BRIQUE_WRAPPER_NAME", "mcp_server_go")}
+}
+
+func NewBriqueCapacityClient(rt *wrapper.Runtime, names wrapperNames) *BriqueCapacityClient {
+	return &BriqueCapacityClient{rt: rt, names: names}
+}
+
+// Initialize assembles the MCP initialize response.
+//
+// <brique:capacity name="mcp.initialize">
+// <brique:section id="#read_framework">
+// <brique:section id="#build_response">
+func (c *BriqueCapacityClient) Initialize() (map[string]any, error) {
+	// #build_response — assemble the MCP initialize response.
+	return map[string]any{
+		"protocolVersion": "2024-11-05",
+		"serverInfo":      map[string]any{"name": "brique-mcp", "version": "0.0.1"},
+		"capabilities": map[string]any{
+			"tools":     map[string]any{"listChanged": false},
+			"resources": map[string]any{"subscribe": false, "listChanged": false},
+		},
+	}, nil
+}
+
+func (c *BriqueCapacityClient) Framework() (string, error) {
+	// #read_framework — retrieve the Brique framework matter via engine_external intention.
+	frameworkResp, err := c.rt.Outbound().EmitAndWait(wrapper.OutboundParams{
+		ToContext:     "",
+		ToCap:         "matter.read",
+		ToType:        "matter",
+		FromCap:       c.names.responseCap,
+		Params:        map[string]any{"matter_id": "brique_framework", "read_mode": "data"},
+		AwaitResponse: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("mcp.bootstrap #read_framework: %w", err)
+	}
+
+	return extractText(frameworkResp), nil
+}
+
+// FrameworkPath returns the absolute path of the Brique framework file, resolved
+// from the context_dir reported by the engine (read.state).
+func (c *BriqueCapacityClient) FrameworkPath() (string, error) {
+	resp, err := c.rt.Outbound().EmitAndWait(wrapper.OutboundParams{
+		ToContext:     "",
+		ToCap:         "read.state",
+		ToType:        "reflexive",
+		FromCap:       c.names.responseCap,
+		Params:        map[string]any{"include": []any{"context"}},
+		AwaitResponse: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("mcp.bootstrap #framework_path: %w", err)
+	}
+	return frameworkPathFromState(resp)
+}
+
+// frameworkPathFromState extracts context_dir from a read.state response.
+func frameworkPathFromState(resp map[string]any) (string, error) {
+	dir := ""
+	if ctx, ok := resp["context"].(map[string]any); ok {
+		dir, _ = ctx["context_dir"].(string)
+	}
+	if dir == "" {
+		return "", fmt.Errorf("mcp.bootstrap #framework_path: context_dir missing from read.state")
+	}
+	return filepath.Join(dir, "matter", "brique_framework.md"), nil
+}
+
+// ForwardIntention extracts the Brique intention from an MCP tools/call message,
+// dispatches it to the Brique engine, and returns the wrapped response.
+//
+// <brique:capacity name="brique.intention">
+// <brique:section id="#extract_intention">
+// <brique:section id="#dispatch">
+// <brique:section id="#wrap_response">
+func (c *BriqueCapacityClient) ForwardIntention(intention map[string]any) (map[string]any, error) {
+	return c.ForwardIntentionWithProgress(intention, nil)
+}
+
+// ForwardIntentionWithProgress is ForwardIntention that tells onRunning about each `running`
+// acknowledgement of a long-running capacity, before the single final response.
+func (c *BriqueCapacityClient) ForwardIntentionWithProgress(intention map[string]any, onRunning wrapper.RunningFunc) (map[string]any, error) {
+	// #extract_intention — validate that a non-empty intention is present.
+	if len(intention) == 0 {
+		return nil, fmt.Errorf("brique.intention #extract_intention: missing intention")
+	}
+
+	// #dispatch — complete the intention with wrapper-managed fields before forwarding.
+	id := fmt.Sprintf("mcp_%d", time.Now().UnixNano())
+	patched := make(map[string]any, len(intention))
+	for k, v := range intention {
+		patched[k] = v
+	}
+	patched["intention_id"] = id
+	patched["await_response"] = true
+	patched["from"] = map[string]any{
+		"context": "",
+		"cap":     c.names.responseCap,
+		"type":    "execution",
+	}
+	patched["identity"] = map[string]any{
+		"id":   c.names.identity,
+		"kind": "wrapper",
+	}
+	patched["correlation"] = map[string]any{
+		"root_intention_id": id,
+	}
+
+	result, err := c.rt.Outbound().SendRawIntentionWithProgress(patched, onRunning)
+	if err != nil {
+		return nil, fmt.Errorf("brique.intention #dispatch: %w", err)
+	}
+
+	// #wrap_response — wrap the Brique response as MCP content.
+	data, _ := json.Marshal(result)
+	return map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": string(data)}},
+	}, nil
+}
+
+// BuildBindings declares the wrapper capacity bindings toward Brique.
+// This wrapper has no local capacity bindings — all dispatch goes outbound.
+func BuildBindings(rt *wrapper.Runtime, names wrapperNames) wrapper.BindingsFragment {
+	return wrapper.BindingsFragment{
+		Capacities: []wrapper.CapacityBinding{
+			{
+				Context: "",
+				Name:    names.responseCap,
+				Handler: func(params *wrapper.Params) (any, error) {
+					return map[string]any{"ok": true}, nil
+				},
+			},
+		},
+		Matters:  []wrapper.MatterBinding{},
+		Shutdown: []func(){},
+	}
+}
+
+func extractText(resp map[string]any) string {
+	if data, ok := resp["data"].(map[string]any); ok {
+		if b, ok := data["bytes"].(string); ok && b != "" {
+			return b
+		}
+		if t, ok := data["text"].(string); ok {
+			return t
+		}
+	}
+	if t, ok := resp["text"].(string); ok {
+		return t
+	}
+	return ""
+}

@@ -18,11 +18,19 @@
 
 #include <ctime>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
+#if !defined(_WIN32)
+#include <unistd.h>
+#else
+#include <process.h>
+#define getpid _getpid
+#endif
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -30,6 +38,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <random>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,6 +49,7 @@
 #include "http.hpp"
 #include "json.hpp"
 #include "scheduler.hpp"
+#include "settings.hpp"
 #include "ws_client.hpp"
 
 namespace wrapper {
@@ -77,17 +87,60 @@ inline std::string new_id() {
 	return raw.substr(0, 8) + "-" + raw.substr(8, 4) + "-" + raw.substr(12, 4) + "-" + raw.substr(16, 4) + "-" + raw.substr(20, 12);
 }
 
-inline std::size_t positive_env(const char* key, std::size_t fallback) {
-    const std::string raw = env_or(key);
-    if (raw.empty()) {
-        return fallback;
+// The errors of a call, typed by what a caller reacts to. An engine response with status error carries an error: a code, a message and details
+// whose reason says what happened. A call throws it as a CallError, and kind() says what a caller does about it. The reason decides first, the code
+// when the reason says nothing known. The classification is shared by the three runtimes and fixed by vectors/errors.json.
+class CallError : public std::runtime_error {
+public:
+    CallError(std::string code, const std::string& message, std::string details_raw)
+        : std::runtime_error(message), code_(std::move(code)), details_(std::move(details_raw)) {}
+    const std::string& code() const { return code_; }
+    const std::string& details() const { return details_; }
+    std::string reason() const { return json::string_field(details_, "reason"); }
+    // busy: the callee refused the call BEFORE running it (asking again is safe; the library already did). revision_mismatch, line_count_mismatch:
+    // read again. connection_lost: the call may have been executed, never ask again blindly. not_found. other.
+    std::string kind() const {
+        const std::string r = reason();
+        if (r == "busy" || r == "loop busy") return "busy";
+        if (r == "line_count_mismatch") return "line_count_mismatch";
+        if (r == "revision_mismatch" || r == "revision not coherent") return "revision_mismatch";
+        if (r == "connection_lost") return "connection_lost";
+        return code_ == "not_found" ? "not_found" : "other";
     }
-    std::size_t consumed = 0;
-    const unsigned long value = std::stoul(raw, &consumed);
-    if (consumed != raw.size() || value == 0) {
-        throw std::runtime_error(std::string(key) + " must be a positive integer");
-    }
-    return static_cast<std::size_t>(value);
+    bool outcome_unknown() const { return kind() == "connection_lost"; }   // the call may have been executed
+    bool busy() const { return kind() == "busy"; }
+private:
+    std::string code_;
+    std::string details_;
+};
+
+// The CallError of the error object of an engine response (raw JSON); a missing field has its default.
+inline CallError call_error_from(const std::string& error_raw) {
+    const std::size_t first = error_raw.find_first_not_of(" \t\r\n");
+    const bool object = first != std::string::npos && error_raw[first] == '{';
+    const std::string code = object ? json::string_field(error_raw, "code") : "";
+    const std::string message = object ? json::string_field(error_raw, "message") : "";
+    return CallError(code.empty() ? "internal" : code, message.empty() ? "engine error" : message, object ? json::object_field(error_raw, "details", "{}") : "{}");
+}
+
+// A callee that is busy refuses BEFORE running the call: asking again is safe. A call that timed out is never asked again, it may have
+// run. The rules are shared by the three runtimes and fixed by vectors/busy_retry.json.
+inline bool is_busy_response(const std::string& response) {
+    if (json::string_field(response, "status") != "error") return false;
+    const std::string error = json::object_field(response, "error", "{}");
+    const std::string reason = json::string_field(json::object_field(error, "details", "{}"), "reason");
+    return reason == "busy" || reason == "loop busy";
+}
+
+inline int busy_attempts() { return static_cast<int>(setting_value("BRIQUE_BUSY_ATTEMPTS")); }
+
+// The pause after the refusal of attempt number `attempt` (0 for the first); random is a number in [0, 1).
+inline double busy_pause_ms(int attempt, double random) {
+    const double base = static_cast<double>(setting_value("BRIQUE_BUSY_BASE_MS"));
+    const double cap = static_cast<double>(setting_value("BRIQUE_BUSY_CAP_MS"));
+    double doubled = base;
+    for (int i = 0; i < attempt && i < 30; ++i) doubled *= 2;
+    return (doubled < cap ? doubled : cap) * (0.5 + random);
 }
 
 // TransitError is a typed parameter failure. reason is one of: not_found,
@@ -319,6 +372,7 @@ struct OutboundParams {
     std::string matters_raw = "[]";
     std::string root_intention_id;
     std::string parent_intention_id;
+    int busy_attempts = 0;  // attempts in all for a call refused because its callee is busy; 0 for BRIQUE_BUSY_ATTEMPTS
 };
 
 struct ExecutionContext {
@@ -327,6 +381,10 @@ struct ExecutionContext {
     std::string relative_context;
     std::string capacity;
     std::string delegation;
+    // what the response to the intention being served is made of (a "running" response is one)
+    std::string from_raw;          // the caller, as the intention gave it
+    std::string to_context_raw;    // the context the intention was addressed to
+    std::string to_type;
 };
 
 inline thread_local ExecutionContext current_execution;
@@ -344,8 +402,49 @@ private:
     ExecutionContext previous_;
 };
 
+// A diagnostic on demand for a wrapper that stops answering. On the signal SIGUSR1 the state of the execution slots is written to
+// $TMPDIR/brique_wrapper_tasks_<pid>.txt (kill -USR1 <pid of the wrapper>). The handler only sets a flag; a thread of the runtime writes the
+// file, so that nothing unsafe runs in the handler. It only reads, and does nothing until the signal comes.
+inline std::atomic<bool> state_dump_requested{false};
+inline void on_state_dump_signal(int) { state_dump_requested.store(true); }
+
+inline std::string dump_state(WorkScheduler& scheduler, std::string path = "") {
+    if (path.empty()) path = (std::filesystem::temp_directory_path() / ("brique_wrapper_tasks_" + std::to_string(static_cast<long long>(getpid())) + ".txt")).string();
+    const SchedulerStats stats = scheduler.stats();
+    std::ofstream out(path);
+    out << "pid " << getpid() << "\n"
+        << "scheduler: slots free " << stats.free_slots << " of " << stats.max_concurrency << ", active " << stats.active << ", pending " << stats.pending
+        << ", queued " << stats.queued << " of " << stats.queue_limit << ", refused " << stats.refused << ", locks " << stats.locks
+        << ", ordered chains " << stats.ordered_chains << "\n"
+        << "settings not at their default:";
+    for (const auto& item : settings_not_default()) out << " " << item.first << "=" << item.second;
+    out << (settings_not_default().empty() ? " none" : "") << "\n";
+    return path;
+}
+
+// The message a capacity sends to say it is still working (vectors/running_response.json): it answers the intention being served, with no
+// payload. The identity is the wrapper's, except in a delegated call where the engine stamps it.
+inline std::string running_message(const std::string& wrapper_name, bool delegated, const std::string& intention_id, const std::string& from_raw,
+                                   const std::string& cap, const std::string& type, const std::string& to_context_raw, const std::string& ts) {
+    const std::string prefix = "@wrapper_" + wrapper_name + ":/";
+    std::string context;
+    if (to_context_raw.rfind(prefix, 0) == 0) {
+        context = to_context_raw.substr(prefix.size());
+        while (!context.empty() && context.front() == '/') context.erase(context.begin());
+        while (!context.empty() && context.back() == '/') context.pop_back();
+    }
+    const std::string identity = delegated ? "{}" : "{\"id\":" + json::quote(wrapper_name) + ",\"kind\":\"wrapper\"}";
+    return "{\"kind\":\"response\",\"ts\":" + json::quote(ts) + ",\"response\":{\"intention_id\":" + json::quote(intention_id) + ",\"to\":" + from_raw +
+           ",\"from\":{\"context\":" + json::quote(context) + ",\"cap\":" + json::quote(cap) + ",\"type\":" + json::quote(type) + "},\"identity\":" + identity +
+           ",\"status\":\"running\",\"payload\":{}}}";
+}
+
+class MatterClient;
+
 class Runtime {
 public:
+    friend class MatterClient;   // the Matter client calls the engine through matter_call
+
     Runtime()
         : raw_ctx_dir_(env_or("BRIQUE_CTX_DIR")),
           ctx_dir_(raw_ctx_dir_.empty() ? std::filesystem::path{} : std::filesystem::absolute(raw_ctx_dir_)),
@@ -358,11 +457,11 @@ public:
           wrapper_work_dir_(std::filesystem::absolute(
               env_or("BRIQUE_WORKDIR", (ctx_dir_ / "tmp" / ("wrapper_" + wrapper_name_)).string()))),
           transit_dir_(wrapper_work_dir_ / "transit"),
-          transit_max_bytes_(positive_env("BRIQUE_TRANSIT_MAX_BYTES", 64U * 1024U * 1024U)),
-          transit_ttl_seconds_(positive_env("BRIQUE_TRANSIT_TTL_SECONDS", 60U * 60U)),
+          transit_max_bytes_(static_cast<std::size_t>(strict_setting("BRIQUE_TRANSIT_MAX_BYTES"))),
+          transit_ttl_seconds_(static_cast<std::size_t>(strict_setting("BRIQUE_TRANSIT_TTL_SECONDS"))),
           scheduler_(std::make_unique<WorkScheduler>(
-              positive_env("BRIQUE_MAX_CONCURRENCY", 16),
-              positive_env("BRIQUE_QUEUE_LIMIT", 256))) {
+              static_cast<std::size_t>(strict_setting("BRIQUE_MAX_CONCURRENCY")),
+              static_cast<std::size_t>(strict_setting("BRIQUE_QUEUE_LIMIT")))) {
         allowed_context_root_ = ctx_dir_;
         std::size_t components = 0; bool in_component = false;
         for (char ch : ctx_id_) { if (ch == '/') in_component = false; else if (!in_component) { ++components; in_component = true; } }
@@ -425,6 +524,20 @@ public:
     }
 
     int run() {
+        for (const auto& item : settings_not_default()) std::cerr << "cpp wrapper setting not at its default: " << item.first << "=" << item.second << "\n";
+        std::atomic<bool> dumper_stop{false};
+        std::thread dumper;
+#if !defined(_WIN32)
+        std::signal(SIGUSR1, on_state_dump_signal);
+        dumper = std::thread([this, &dumper_stop] {
+            while (!dumper_stop) {
+                if (state_dump_requested.exchange(false)) {
+                    try { std::cerr << "cpp wrapper state dumped to " << dump_state(*scheduler_) << "\n"; } catch (...) {}
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+#endif
         send_message(wrapper_ready_message());
         std::string raw;
         while (!stop_requested_ && transport_.receive_text(raw)) {
@@ -438,17 +551,48 @@ public:
             }
         }
         transport_.close();
+        dumper_stop = true;
+        if (dumper.joinable()) dumper.join();
         return 0;
     }
 
+    // The bounded execution of the wrapper: stats(), and the scheduler a CriticalSection takes its locks from.
+    WorkScheduler& scheduler() { return *scheduler_; }
+
     const std::string& ctx_id() const { return ctx_id_; }
     const std::string& wrapper_name() const { return wrapper_name_; }
+
+    // Say that the capacity being executed is still working: one "running" response for its call, which renews the inactivity budget of whoever
+    // waits for it. It does nothing outside a capacity call. Use Keepalive to send it again and again.
+    void notify_running() {
+        if (current_execution.intention_id.empty()) return;
+        send_message(running_message(wrapper_name_, !current_execution.delegation.empty(), current_execution.intention_id, current_execution.from_raw,
+                                     current_execution.capacity, current_execution.to_type, current_execution.to_context_raw, now_rfc3339()),
+                     current_execution.delegation);
+    }
 
     void emit_intention(OutboundParams params) {
         send_message(outbound_message(params, false, new_id()));
     }
 
+    // Send an intention and wait for its response. A callee that refuses it because it is busy is asked again (BRIQUE_BUSY_ATTEMPTS in all),
+    // after a growing pause that does not hold an execution slot. A timeout is never retried.
     std::string emit_and_wait(OutboundParams params) {
+        const int attempts = params.busy_attempts > 0 ? params.busy_attempts : busy_attempts();
+        static thread_local std::mt19937_64 generator{std::random_device{}()};
+        for (int attempt = 0;; ++attempt) {
+            try {
+                return emit_and_wait_once(params);
+            } catch (const CallError& refused) {
+                if (!refused.busy() || attempt >= attempts - 1) throw;
+            }
+            const double random = std::uniform_real_distribution<double>(0.0, 1.0)(generator);
+            SlotYield pause_gives_its_slot_back;
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(busy_pause_ms(attempt, random)));
+        }
+    }
+
+    std::string emit_and_wait_once(OutboundParams params) {
         const std::string id = new_id();
         auto pending = std::make_shared<Pending>();
         {
@@ -469,8 +613,11 @@ public:
                 observed_activity = pending->activity;
             }
             if (json::string_field(pending->response, "status") != kStatusOk) {
-                const std::string error = json::object_field(pending->response, "error", "{}");
-                throw std::runtime_error(json::string_field(error, "message", "outbound intention failed"));
+                CallError failure = call_error_from(json::raw_field(pending->response, "error", "null"));
+                if (json::string_field(json::object_field(pending->response, "error", "{}"), "message").empty()) {
+                    failure = CallError(failure.code(), "outbound intention failed", failure.details());
+                }
+                throw failure;
             }
             const std::string payload = json::object_field(pending->response, "payload", "{}");
             {
@@ -818,6 +965,9 @@ private:
                 target_context(to_context),
                 to_cap,
 				delegation,
+				from,
+				to_context,
+				to_type,
 			});
             try {
                 const std::string payload = callback(ParamsView(
@@ -919,7 +1069,7 @@ private:
 			[this, intention_id, from, context_raw, rel_ctx, params_raw, cap, matter_id, sub_id, correlation_raw, delegation] {
 			std::string root_id = json::string_field(correlation_raw, "root_intention_id");
 			if (root_id.empty()) root_id = intention_id;
-			const ExecutionContextGuard guard(ExecutionContext{intention_id, root_id, rel_ctx, cap, delegation});
+			const ExecutionContextGuard guard(ExecutionContext{intention_id, root_id, rel_ctx, cap, delegation, from, context_raw, kTypeMatter});
             try {
                 handle_matter(intention_id, from, context_raw, rel_ctx, params_raw, cap, matter_id, sub_id);
             } catch (const std::exception& ex) {
@@ -1493,6 +1643,48 @@ private:
                "}"
                "}";
     }
+};
+
+// Acknowledge the capacity being executed as long-running for the length of the scope: a "running" at once, then one every BRIQUE_HEARTBEAT_MS.
+//
+//     wrapper::Keepalive alive(runtime);
+//
+// The heartbeat belongs to the one who writes the capacity, on purpose: it is sent from a thread of its own, so it would go on saying "running"
+// for a handler that is stuck, and the budget would no longer protect the caller. The library gives the means, not a heartbeat of its own.
+class Keepalive {
+public:
+    // `notify` says "running" (Runtime::notify_running for a capacity); it is called now and then every period_ms (BRIQUE_HEARTBEAT_MS by default).
+    explicit Keepalive(std::function<void()> notify, long long period_ms = 0)
+        : notify_(std::move(notify)), context_(current_execution),
+          period_(std::chrono::milliseconds(period_ms > 0 ? period_ms : setting_value("BRIQUE_HEARTBEAT_MS"))) {
+        notify_();
+        thread_ = std::thread([this] {
+            const ExecutionContextGuard guard(context_);     // the heartbeat belongs to this very call
+            std::unique_lock<std::mutex> lock(mu_);
+            while (!cv_.wait_for(lock, period_, [this] { return stop_; })) {
+                lock.unlock();
+                try { notify_(); } catch (...) {}
+                lock.lock();
+            }
+        });
+    }
+    explicit Keepalive(Runtime& runtime, long long period_ms = 0) : Keepalive([&runtime] { runtime.notify_running(); }, period_ms) {}
+    ~Keepalive() {
+        { std::lock_guard<std::mutex> lock(mu_); stop_ = true; }
+        cv_.notify_all();
+        if (thread_.joinable()) thread_.join();
+    }
+    Keepalive(const Keepalive&) = delete;
+    Keepalive& operator=(const Keepalive&) = delete;
+
+private:
+    std::function<void()> notify_;
+    ExecutionContext context_;
+    std::chrono::milliseconds period_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::thread thread_;
 };
 
 }  // namespace wrapper

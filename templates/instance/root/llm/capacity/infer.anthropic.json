@@ -1,0 +1,170 @@
+{
+  "brique": {
+    "cap_name": "infer.anthropic",
+    "kind": "interpreted",
+    "lang": "python",
+    "rel_ctx": "",
+    "wrapper": "llm_llm"
+  },
+  "functional": {
+    "#root": {
+      "effects": {},
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object",
+            "_comment": "Transit parameter, consumed by this capacity. It may arrive as a value or as a transit reference; the contract declares only its name and schema (/root/llm/schema/request), and it is read through the parameter resolver."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object",
+            "_comment": "Transit result, consumed by the caller (/root/llm/schema/response). Never persisted by this capacity."
+          }
+        }
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#adapt_request": {
+                "inputs": {
+                  "params": {
+                    "request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Build the Anthropic Messages API request from the canonical request.",
+                "transformation_contract": {
+                  "morphing": "A canonical inference request becomes an Anthropic Messages API request.",
+                  "notes": [
+                    "HTTP method: POST.",
+                    "API URL: https://api.anthropic.com/v1/messages.",
+                    "Header x-api-key: ${ANTHROPIC_API_KEY}.",
+                    "Header anthropic-version: 2023-06-01.",
+                    "Header Content-Type: application/json.",
+                    "request.model -> body.model.",
+                    "Canonical messages with role 'system' are removed from body.messages and mapped to body.system as ordered text blocks.",
+                    "Canonical messages with role 'user' or 'assistant' -> body.messages, preserving their order and content.",
+                    "A message role with no Anthropic Messages API equivalent causes an explicit invalid-request failure.",
+                    "request.parameters.max_output_tokens -> body.max_tokens.",
+                    "Anthropic requires max_tokens; if request.parameters.max_output_tokens is absent, this capacity fails rather than inventing a provider-specific generation limit.",
+                    "request.parameters.temperature -> body.temperature when present.",
+                    "request.parameters.top_p -> body.top_p when present.",
+                    "request.parameters.stop -> body.stop_sequences when present.",
+                    "request.requirements.reasoning -> body.output_config.effort when present and supported.",
+                    "When request.output.format is absent or 'text', output_config.format is omitted.",
+                    "When request.output.format is 'json_schema', body.output_config.format = {\"type\":\"json_schema\",\"schema\":request.output.schema}.",
+                    "A schemaless canonical 'json' output has no equivalent contract used by this adapter and causes an explicit invalid-request failure.",
+                    "A canonical system message with cache true produces a system block carrying cache_control {type: ephemeral}; a user or assistant message with cache true becomes a single text block carrying the same cache_control, so that the history up to that message is read from the cache on the next request. The provider ignores a marker below its minimum cacheable length."
+                  ]
+                }
+              }
+            },
+            {
+              "#execute": {
+                "inputs": {
+                  "params": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Execute the Anthropic Messages API request asynchronously.",
+                "transformation_contract": {
+                  "morphing": "An Anthropic Messages API request becomes an Anthropic message response.",
+                  "notes": [
+                    "Measure duration around the remote API call.",
+                    "Provider authentication and transport errors become Brique errors.",
+                    "No credential value is returned or logged by the capacity."
+                  ]
+                }
+              }
+            },
+            {
+              "#normalize_response": {
+                "inputs": {
+                  "params": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Normalize the Anthropic message into /root/llm/schema/response.",
+                "transformation_contract": {
+                  "morphing": "An Anthropic message response becomes a canonical inference response.",
+                  "notes": [
+                    "Collect provider_response.content blocks whose type is 'text' and preserve their order.",
+                    "For format 'text', response.output.content is the concatenated text.",
+                    "For format 'json_schema', parse the returned text as JSON and use the parsed value as response.output.content.",
+                    "response.output.format is the effective canonical output format.",
+                    "response.resolved.provider = 'anthropic'.",
+                    "response.resolved.model = provider_response.model.",
+                    "response.usage.input_tokens = provider_response.usage.input_tokens + provider_response.usage.cache_creation_input_tokens + provider_response.usage.cache_read_input_tokens, treating absent cache fields as zero.",
+                    "response.usage.output_tokens = provider_response.usage.output_tokens.",
+                    "response.usage.total_tokens = response.usage.input_tokens + response.usage.output_tokens.",
+                    "response.finish_reason = provider_response.stop_reason.",
+                    "response.duration_ms = duration_ms.",
+                    "response.usage.cached_input_tokens = provider_response.usage.cache_read_input_tokens, treating an absent field as zero.",
+                    "response.usage.cache_creation_input_tokens = provider_response.usage.cache_creation_input_tokens, treating an absent field as zero."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "role": "Adapt a canonical LLM request to the Anthropic Messages API, execute it asynchronously, and normalize the result to the canonical response schema.",
+      "transformation_contract": {
+        "invariants": [
+          "request.provider equals 'anthropic'.",
+          "request.model is forwarded unchanged.",
+          "Canonical message meaning and ordering are preserved.",
+          "Anthropic-specific representation remains internal to this capacity.",
+          "Authentication is read from ANTHROPIC_API_KEY.",
+          "The API call is asynchronous.",
+          "The capacity is stateless between invocations.",
+          "The request and the response are transit values: no Matter is read, written or created, and nothing is persisted.",
+          "A transient failure of the provider (a rate limit 429, an overload 529, a server error 5xx, a request timeout 408, a broken connection) is asked again up to three times, waiting longer each time (the Retry-After of the provider when it gives one); any other error is returned at once.",
+          "An output cut at max_tokens before its JSON is complete fails with an error that says so, instead of a parsing error."
+        ],
+        "morphing": "A canonical inference request becomes a canonical inference response produced through Anthropic."
+      }
+    }
+  },
+  "objective": {
+    "name": "infer.anthropic",
+    "description": "Execute a canonical inference request through the Anthropic Messages API and return a canonical inference response."
+  },
+  "subjective": {}
+}

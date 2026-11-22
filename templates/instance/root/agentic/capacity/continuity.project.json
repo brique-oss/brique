@@ -1,0 +1,624 @@
+{
+  "brique": {
+    "cap_name": "continuity.project",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "continuity.project",
+    "description": "Builds a deterministic bounded view of a continuity and any explicitly requested related continuities without altering durable cognitive history."
+  },
+  "functional": {
+    "#root": {
+      "role": "Transform complete durable continuity history into a deterministic non-cognitive projection suitable for contextual consumption.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "projection": {
+            "type": "object"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "any"
+          },
+          "default_projection": {
+            "_comment": "Optional. Default projection of the pilot, supplied by the caller as a value (transit): composed by mode merge, ignored by mode replace. When absent, merge composes the request with an empty default. continuity.project never reads pilot_definition.",
+            "type": "object"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "projection": {
+            "type": "object"
+          },
+          "selected_message_ids": {
+            "type": "array"
+          },
+          "omitted_count": {
+            "type": "integer"
+          },
+          "budget": {
+            "type": "any"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A complete continuity history and deterministic projection definition become a bounded reproducible contextual view.",
+        "invariants": [
+          "continuity.project never mutates the continuity header, journal, mailbox or runtime Matters, and never reads pilot_definition.",
+          "The journal remains the source of truth.",
+          "The pinned lines (kind framework, the cognitive frame) are always carried first by a projection, whatever its filters, limit or budget; the budget never counts them.",
+          "Projection is deterministic for the same source state, definition, mode, and budget.",
+          "Projection performs no LLM inference.",
+          "Projection performs no cognitive summarization.",
+          "Projection never reformulates message meaning.",
+          "Projection never decides importance through semantic reasoning.",
+          "Canonical relative message order follows message.seq.",
+          "Parent and child continuities are not included unless explicitly requested.",
+          "A dynamic projection never modifies the default projection supplied by the caller.",
+          "By default the projection takes the whole continuity, the thread of the LLM: the lines of kind user, pilot, capacity_intention, capacity_response, continuity, summary, prompt and completion. The follow-up kinds (event, projection, error, control) stay in the journal and are not part of it unless the projection asks for them explicitly through include_kinds, in which case they are read from the journal."
+        ],
+        "success": [
+          "The effective projection definition is resolved from mode, default projection, and requested projection.",
+          "Only explicitly eligible messages are selected.",
+          "The selected view is deterministically reduced when required by budget.",
+          "selected_message_ids identifies the durable source messages represented by the result.",
+          "A projection selecting no messages is a valid result."
+        ],
+        "failure": [
+          "Fails if the bound continuity does not correspond to continuity_id.",
+          "Fails if projection or mode is structurally invalid.",
+          "Fails if an explicitly referenced related continuity cannot be resolved.",
+          "Fails if budget is invalid.",
+          "Does not alter any Matter when projection fails."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "Filtering, ordering, selection, and budget reduction are computation local to this interpreted capacity.",
+          "The DSL is not used to reshape or filter message collections because such data transformation belongs in wrapper-backed computation.",
+          "Related-continuity retrieval, when required, must use an explicit Brique capacity call rather than hidden direct access to another Matter.",
+          "Implementation constraint: the continuity is managed in a Matter (the journal) for persistence and duplicated in an in-memory object of the wrapper for performance. The projection reads that object, rebuilt from the journal when absent or stale, and applies its criteria on it; the size of each line is computed once when it enters the object."
+        ]
+      },
+      "resolution": {
+        "\u003esequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the continuity header Matter and the journal Matter owned by the target continuity from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if the derived continuity header or journal Matter does not exist."
+                  ],
+                  "invariants": [
+                    "The Matter IDs follow the convention continuity_\u003cid\u003e (header) and journal_\u003cid\u003e.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs continuity_\u003cid\u003e and journal_\u003cid\u003e of its continuity."
+                }
+              }
+            },
+            {
+              "#resolve_definition": {
+                "inputs": {
+                  "params": {
+                    "budget": {
+                      "type": "any"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "projection": {
+                      "type": "object"
+                    },
+                    "default_projection": {
+                      "_comment": "Optional. Default projection supplied by the caller as a value; absent means an empty default.",
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "effective_budget": {
+                      "type": "any"
+                    },
+                    "effective_projection": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "resolution": {
+                  "\u003eswitch": {
+                    "\u003edefault": {
+                      "#default_mode": {
+                        "inputs": {
+                          "params": {}
+                        },
+                        "outputs": {
+                          "payload": {
+                            "mode": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "role": "Treat an absent mode as merge.",
+                        "transformation_contract": {
+                          "morphing": "An unspecified projection mode becomes merge."
+                        }
+                      }
+                    },
+                    "cases": [
+                      {
+                        "then": {
+                          "#replace": {
+                            "inputs": {
+                              "params": {
+                                "projection": {
+                                  "type": "object"
+                                }
+                              }
+                            },
+                            "outputs": {
+                              "payload": {
+                                "effective_projection": {
+                                  "type": "object"
+                                }
+                              }
+                            },
+                            "role": "Use the requested projection as the effective temporary definition.",
+                            "transformation_contract": {
+                              "morphing": "A requested projection becomes the complete effective temporary projection."
+                            }
+                          }
+                        },
+                        "value": "replace"
+                      },
+                      {
+                        "then": {
+                          "#merge": {
+                            "inputs": {
+                              "params": {
+                                "projection": {
+                                  "type": "object"
+                                },
+                                "default_projection": {
+                                  "_comment": "Optional. Default projection supplied by the caller as a value; absent means an empty default.",
+                                  "type": "object"
+                                }
+                              }
+                            },
+                            "outputs": {
+                              "payload": {
+                                "effective_projection": {
+                                  "type": "object"
+                                }
+                              }
+                            },
+                            "role": "Compose the requested projection with the supplied default projection using deterministic composition rules.",
+                            "transformation_contract": {
+                              "invariants": [
+                                "Composition follows explicit projection-field semantics rather than cognitive interpretation."
+                              ],
+                              "morphing": "A default projection and requested projection become one deterministic composed projection."
+                            }
+                          }
+                        },
+                        "value": "merge"
+                      }
+                    ],
+                    "on": "$input.mode"
+                  }
+                },
+                "role": "Build the effective deterministic projection definition from the requested projection and the optional default projection supplied by the caller.",
+                "transformation_contract": {
+                  "invariants": [
+                    "mode accepts merge or replace.",
+                    "merge combines the requested definition with the supplied default_projection.",
+                    "replace ignores default_projection for this projection only.",
+                    "No Matter is read or modified: the default projection is a value supplied by the caller."
+                  ],
+                  "morphing": "A requested projection mode and an optional default projection become one effective deterministic projection definition."
+                }
+              }
+            },
+            {
+              "#collect_sources": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "effective_projection": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "sources": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "resolution": {
+                  "\u003esequence": {
+                    "items": [
+                      {
+                        "#local": {
+                          "inputs": {
+                            "params": {}
+                          },
+                          "outputs": {
+                            "payload": {
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "role": "Use the bound continuity journal as the primary projection source, read by line range when the projection does not need all of it.",
+                          "transformation_contract": {
+                            "morphing": "The bound continuity journal becomes the primary ordered source message stream."
+                          }
+                        }
+                      },
+                      {
+                        "#related": {
+                          "outputs": {
+                            "payload": {
+                              "continuities": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "\u003efor_each": {
+                              "\u003edo": {
+                                "invoke": {
+                                  "@capacity": "/root/agentic/matter.read",
+                                  "as": "related_continuity",
+                                  "to_type": "matter",
+                                  "with": {
+                                    "matter_id": "$related_matter_id",
+                                    "read_mode": "data"
+                                  }
+                                }
+                              },
+                              "as": "related_matter_id",
+                              "collection": "$input.related_matter_ids"
+                            }
+                          },
+                          "role": "Read explicitly requested related continuities through the engine-native matter.read capacity.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Cross-Matter retrieval is explicit.",
+                              "Only continuity ids requested by the effective projection are read.",
+                              "related_matter_ids are Matter ids derived by the wrapper from the requested continuity ids through the convention continuity_\u003ccontinuity_id\u003e, then journal_ref for their journal; the DSL does not compose identifiers."
+                            ],
+                            "morphing": "Explicit related Matter ids, derived from requested continuity ids, become readable related continuity states."
+                          },
+                          "inputs": {
+                            "params": {
+                              "related_matter_ids": {
+                                "type": "array"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Resolve the local continuity history and any additional continuities explicitly requested by the effective projection.",
+                "transformation_contract": {
+                  "invariants": [
+                    "The local continuity is always the primary source.",
+                    "No parent or child history is included implicitly.",
+                    "Only explicitly requested related continuities may be added."
+                  ],
+                  "morphing": "A local continuity and explicit related-continuity selectors become the complete authorized source set for projection."
+                }
+              }
+            },
+            {
+              "#select_messages": {
+                "inputs": {
+                  "params": {
+                    "effective_projection": {
+                      "type": "object"
+                    },
+                    "sources": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "candidate_count": {
+                      "type": "integer"
+                    },
+                    "messages": {
+                      "type": "array"
+                    },
+                    "selected_message_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "resolution": {
+                  "\u003esequence": {
+                    "items": [
+                      {
+                        "#filter": {
+                          "inputs": {
+                            "params": {
+                              "definition": {
+                                "type": "object"
+                              },
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "role": "Apply all explicit inclusion and exclusion constraints.",
+                          "transformation_contract": {
+                            "morphing": "Source messages become the subset satisfying explicit deterministic projection predicates."
+                          }
+                        }
+                      },
+                      {
+                        "#order": {
+                          "inputs": {
+                            "params": {
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "role": "Preserve canonical message ordering across the selected source set.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Within each continuity, seq defines canonical order.",
+                              "Any cross-continuity ordering rule must be deterministic and explicit."
+                            ],
+                            "morphing": "A filtered message set becomes a canonically ordered projected stream."
+                          }
+                        }
+                      },
+                      {
+                        "#select": {
+                          "inputs": {
+                            "params": {
+                              "definition": {
+                                "type": "object"
+                              },
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "messages": {
+                                "type": "array"
+                              },
+                              "selected_message_ids": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "role": "Apply deterministic all, first, last, explicit-id, and limit selection rules.",
+                          "transformation_contract": {
+                            "morphing": "A filtered ordered stream becomes the exact message subset requested by the projection definition."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Apply deterministic projection filters and selectors to the authorized source message streams.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Selection may use explicit kind, origin, destination, seq, correlation, message-id, continuity, and deterministic first/last/all criteria.",
+                    "Filtering performs no semantic interpretation of content.",
+                    "The relative canonical order of selected messages is preserved."
+                  ],
+                  "morphing": "Authorized source messages become the deterministic subset selected by projection rules."
+                }
+              }
+            },
+            {
+              "#fit_budget": {
+                "inputs": {
+                  "params": {
+                    "budget": {
+                      "type": "any"
+                    },
+                    "effective_projection": {
+                      "type": "object"
+                    },
+                    "messages": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "messages": {
+                      "type": "array"
+                    },
+                    "omitted_count": {
+                      "type": "integer"
+                    },
+                    "selected_message_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "resolution": {
+                  "\u003esequence": {
+                    "items": [
+                      {
+                        "#measure": {
+                          "inputs": {
+                            "params": {
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "cost": {
+                                "type": "any"
+                              }
+                            }
+                          },
+                          "role": "Measure the representation cost of the current projected view under the configured budget convention.",
+                          "transformation_contract": {
+                            "morphing": "A projected message set becomes an explicit deterministic context cost."
+                          }
+                        }
+                      },
+                      {
+                        "#reduce": {
+                          "inputs": {
+                            "params": {
+                              "budget": {
+                                "type": "any"
+                              },
+                              "messages": {
+                                "type": "array"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "messages": {
+                                "type": "array"
+                              },
+                              "omitted_count": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "role": "Apply deterministic projection reduction rules until the view fits the allowed budget.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Reduction remains non-cognitive.",
+                              "No LLM is invoked."
+                            ],
+                            "morphing": "An oversized projected message set becomes a budget-conforming structural subset."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Reduce the selected projection deterministically when its representation exceeds the allowed budget.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Budget reduction removes or narrows structural selections rather than cognitively summarizing content.",
+                    "Message text is not blindly truncated mid-content.",
+                    "The same input and budget produce the same reduced result."
+                  ],
+                  "morphing": "A selected projection exceeding its budget becomes a smaller deterministic projection that fits its allowed context space.",
+                  "success": [
+                    "The result fits the effective budget or is empty when no admissible deterministic reduction can retain a message."
+                  ]
+                }
+              }
+            },
+            {
+              "#materialize_view": {
+                "inputs": {
+                  "params": {
+                    "budget": {
+                      "type": "any"
+                    },
+                    "messages": {
+                      "type": "array"
+                    },
+                    "omitted_count": {
+                      "type": "integer"
+                    },
+                    "selected_message_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "budget": {
+                      "type": "any"
+                    },
+                    "omitted_count": {
+                      "type": "integer"
+                    },
+                    "projection": {
+                      "type": "object"
+                    },
+                    "selected_message_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "role": "Assemble the selected durable messages into the final projection payload without creating new durable state.",
+                "transformation_contract": {
+                  "invariants": [
+                    "The resulting projection is transient.",
+                    "No projection Matter is created.",
+                    "No durable message is altered."
+                  ],
+                  "morphing": "A deterministic selected message set becomes the final transient continuity projection."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

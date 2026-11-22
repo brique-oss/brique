@@ -1,0 +1,40 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "response",
+    "description": "Provider-agnostic contract of a successful inference result returned by this LLM context."
+  },
+  "functional": {
+    "output": {
+      "format": [],
+      "_format_comment": "Effective representation of the generated output.",
+      "content": [],
+      "_content_comment": "Generated content. Its concrete representation follows the effective output format."
+    },
+    "resolved": {
+      "provider": [],
+      "_provider_comment": "Provider that actually executed the inference.",
+      "model": [],
+      "_model_comment": "Model that actually executed the inference."
+    },
+    "usage": {
+      "input_tokens": [],
+      "_input_tokens_comment": "Number of input tokens reported for the inference when available.",
+      "output_tokens": [],
+      "_output_tokens_comment": "Number of generated tokens reported for the inference when available.",
+      "total_tokens": [],
+      "_total_tokens_comment": "Total token usage when available.",
+      "cached_input_tokens": [],
+      "_cached_input_tokens_comment": "Optional. Part of input_tokens served from the provider prompt cache when the provider reports it; input_tokens still counts the whole context.",
+      "cache_creation_input_tokens": [],
+      "_cache_creation_input_tokens_comment": "Optional. Part of input_tokens written to the provider prompt cache by this inference when the provider reports it (the new prefix); input_tokens still counts the whole context. What is neither read nor written is the uncached input."
+    },
+    "finish_reason": [],
+    "_finish_reason_comment": "Provider-normalized indication of why generation terminated.",
+    "duration_ms": [],
+    "_duration_ms_comment": "Total inference duration observed by the LLM wrapper when available."
+  },
+  "subjective": {}
+}

@@ -1,0 +1,23 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "active_wait_result",
+    "description": "Defines the structured wait result injected into the next pilot inference when a previously active wait group becomes satisfied. It says only that the wait ended and how many answers it holds: the answers themselves are in the conversation, each with the id of its intention."
+  },
+  "functional": {
+    "wait_group_id": [],
+    "_wait_group_id_note": "Required. Identifier of the wait group that ended. It makes each resumption a different text: pilot.infer memoizes a step by the text of its prompt, and two waits that ended alike must not be taken for one.",
+    "outcome": [
+      "satisfied",
+      "no_success"
+    ],
+    "_outcome_note": "Required. Overall wait outcome. no_success is used when a first_success group resolves because all expected results ended in error.",
+    "received": [],
+    "_received_note": "Required. Number of answers received by the wait group when it became satisfied.",
+    "expected": [],
+    "_expected_note": "Required. Number of answers the wait group expected."
+  },
+  "subjective": {}
+}

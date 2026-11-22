@@ -1,0 +1,933 @@
+{
+  "brique": {
+    "cap_name": "continuity.delete",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "continuity.delete",
+    "description": "Deletes one continuity and its associated mailbox and runtime while preserving the consistency of parent, child, structure, and external historical relations."
+  },
+  "functional": {
+    "#root": {
+      "role": "Remove one continuity from the Brique world, optionally recurse through its descendants, clean every owned operational Matter and relation, and never rewrite history already materialized elsewhere.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "cascade": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "cascade": {
+            "type": "boolean"
+          },
+          "detached_children": {
+            "type": "array"
+          },
+          "deleted_children": {
+            "type": "array"
+          }
+        },
+        "@matter": {
+          "delete": {
+            "continuity": {},
+            "mailbox": {},
+            "runtime": {},
+            "journal": {}
+          },
+          "modify": {
+            "parent": {
+              "schema": "/root/agentic/schema/continuity_data"
+            },
+            "children": {
+              "schema": "/root/agentic/schema/continuity_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Deletes the target continuity header Matter.",
+        "mailbox": "Deletes the mailbox Matter owned by the target continuity.",
+        "runtime": "Deletes the runtime Matter owned by the target continuity.",
+        "parent": "Removes the deleted continuity id from its parent children relation when a parent exists.",
+        "children": "Either detaches surviving children or recursively deletes them according to cascade.",
+        "structure": "Removes every Structure reference to each deleted continuity.",
+        "external_history": "Leaves messages and effects already materialized in other continuities or external systems untouched.",
+        "journal": "Deletes the journal Matter of the continuity."
+      },
+      "transformation_contract": {
+        "morphing": "An existing continuity becomes absent from Brique together with its owned operational Matters and explicit local relations, while already materialized external history remains unchanged.",
+        "invariants": [
+          "Deleting a continuity never rolls back already materialized external effects.",
+          "Messages already stored in another continuity are never rewritten or deleted.",
+          "A deleted continuity leaves no owned mailbox or runtime behind.",
+          "A deleted continuity leaves no parent children reference behind.",
+          "A deleted continuity leaves no Structure reference behind.",
+          "cascade defaults to false.",
+          "Without cascade, children survive and their parent_id becomes empty.",
+          "With cascade, every descendant follows the same deletion semantics.",
+          "Deletion never creates a closed or archived continuity state.",
+          "A late external result never recreates a deleted continuity.",
+          "Active work is not interrupted in the middle of inference, capacity execution, or an individually atomic Matter mutation.",
+          "The Matter IDs of a continuity are derived from continuity_id as continuity_<id> (header), journal_<id>, mailbox_<id>, and runtime_<id>; callers never bind them.",
+          "A deleted continuity is always removed from the canonical continuities Structure, and the same rule applies recursively to every cascaded descendant.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "Each Matter mutation is individually atomic; the operation as a whole is a recoverable multi-Matter operation with no rollback, whose global consistency is reconstructed through deterministic, idempotent steps and optimistic concurrency.",
+          "Locks held simultaneously are acquired in deterministic continuity_id order; a lock of a parent continuity is never held around a recursive call on a child, the state being revalidated when the call returns.",
+          "Deletion is a recoverable multi-step protocol executed in this order: children (cascade or detach), parent relation cleanup, Structure reference cleanup, runtime Matter, mailbox Matter, journal Matter, continuity header Matter last.",
+          "Each step treats an already absent or already cleaned target as an idempotent success when the remaining state is consistent; the absence of the continuity header Matter marks completion; a continuity header present without its mailbox, runtime or journal is a detectable partial deletion completed by re-running the deletion.",
+          "Deleting the runtime before the mailbox and the continuity prevents any new activation, since pilot.activate and mailbox.send fail on a missing runtime.",
+          "Writes to a parent or child Matter and to the canonical continuities Structure carry the same expected_revision guard, read just before the write.",
+          "A continuity already fully deleted yields an idempotent success with deleted false and no side effect.",
+          "A continuity that belongs to a lineage of successions is deleted only with cascade, which removes the whole lineage, newest generation first.",
+          "A deleted continuity leaves no reading cursor behind: the cursors of every reader on it are removed before its header, so that a rerun of an interrupted deletion finishes the cleaning."
+        ],
+        "success": [
+          "The target continuity Matter no longer exists.",
+          "Its mailbox and runtime no longer exist.",
+          "Its parent relation is cleaned when applicable.",
+          "Its Structure references are removed.",
+          "Without cascade, direct children survive as roots.",
+          "With cascade, all descendants are deleted recursively.",
+          "No historical data stored outside the deleted continuity is altered."
+        ],
+        "failure": [
+          "Fails if the target continuity bundle is internally inconsistent.",
+          "Fails if a required relation cleanup cannot be completed coherently.",
+          "Does not pretend rollback when some external effect already existed.",
+          "Deletion requested during running or waiting is deferred until the applicable safe point.",
+          "A partial deletion must remain explicitly detectable and recoverable rather than being reported as complete.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted.",
+          "Fails when the continuity belongs to a lineage of successions and cascade is not requested."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "Physical Matter deletion is delegated to the engine-native matter.delete capacity.",
+          "Existing Matter mutations such as parent.children removal and child.parent_id clearing belong to matter.write.",
+          "Existing Structure mutations belong to structure.patch.",
+          "The contracts of matter.write, matter.delete, and structure.patch were retrieved from the engine and every section that calls them is now formalized.",
+          "continuity.delete may recursively invoke itself for cascade deletion.",
+          "Deletion order for each continuity: clean parent and children, remove the reference from the canonical continuities Structure, then runtime_<id>, mailbox_<id>, journal_<id>, and continuity_<id>.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model.",
+          "Implementation constraint: the in-memory object that duplicates the continuity for performance is evicted with the deletion of its Matters."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#prepare": {
+                "inputs": {
+                  "params": {
+                    "cascade": {
+                      "type": "boolean"
+                    },
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "cascade": {
+                      "type": "boolean"
+                    },
+                    "children": {
+                      "type": "array"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "safe": {
+                      "type": "boolean"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "parent_matter_id": {
+                      "type": "string"
+                    },
+                    "child_matter_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#lifecycle": {
+                          "inputs": {
+                            "params": {}
+                          },
+                          "outputs": {
+                            "payload": {
+                              "safe": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Determine whether deletion may execute immediately or must wait for a safe point.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "idle and suspended may be deleted immediately.",
+                              "running and waiting are deleted only at a safe point."
+                            ],
+                            "morphing": "A runtime lifecycle state becomes an immediate-delete or deferred-delete decision."
+                          }
+                        }
+                      },
+                      {
+                        "#relations": {
+                          "inputs": {
+                            "params": {}
+                          },
+                          "outputs": {
+                            "payload": {
+                              "children": {
+                                "type": "array"
+                              },
+                              "parent_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Capture parent and child relations required for cleanup or recursive deletion.",
+                          "transformation_contract": {
+                            "morphing": "A target continuity becomes an explicit relation-cleanup plan."
+                          }
+                        }
+                      },
+                      {
+                        "#derive_matter_ids": {
+                          "inputs": {
+                            "params": {
+                              "children": {
+                                "type": "array"
+                              },
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "parent_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "child_matter_ids": {
+                                "type": "array"
+                              },
+                              "continuity_matter_id": {
+                                "type": "string"
+                              },
+                              "mailbox_matter_id": {
+                                "type": "string"
+                              },
+                              "parent_matter_id": {
+                                "type": "string"
+                              },
+                              "runtime_matter_id": {
+                                "type": "string"
+                              },
+                              "journal_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Derive the physical Matter IDs of the continuity, its parent, and its direct children from the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                              "parent_matter_id is absent when the continuity is a root."
+                            ],
+                            "morphing": "Logical continuity identifiers become the physical Matter IDs used by every later deletion step."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Inspect the target continuity lifecycle and relations and determine the complete deletion plan before destructive effects begin.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Children and parent relations are known before destructive deletion starts.",
+                    "Active runtime state is evaluated before deletion."
+                  ],
+                  "morphing": "A continuity deletion request becomes an explicit safe deletion plan."
+                }
+              }
+            },
+            {
+              "#children": {
+                "inputs": {
+                  "params": {
+                    "cascade": {
+                      "type": "boolean"
+                    },
+                    "children": {
+                      "type": "array"
+                    },
+                    "child_matter_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "deleted_children": {
+                      "type": "array"
+                    },
+                    "detached_children": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">if": {
+                    ">else": {
+                      "#detach": {
+                        "inputs": {
+                          "params": {
+                            "child_matter_ids": {
+                              "type": "array"
+                            }
+                          }
+                        },
+                        "outputs": {
+                          "payload": {
+                            "detached_children": {
+                              "type": "array"
+                            }
+                          }
+                        },
+                        "role": "Preserve each child while clearing its reference to the deleted parent.",
+                        "transformation_contract": {
+                          "invariants": [
+                            "Each surviving child receives parent_id empty.",
+                            "The mutation of each child Matter is delegated to matter.write.",
+                            "Each child write is guarded by the revision read just before it. On a revision conflict the target is re-read and the content recomputed from the fresh read before a bounded retry; removing an absent value changes nothing."
+                          ],
+                          "morphing": "Child continuities of a deleted non-cascading parent become independent root continuities.",
+                          "notes": [
+                            "Each child continuity Matter is rewritten by one matter.write of its whole content, derived from the content just read without parent_id."
+                          ]
+                        },
+                        "resolution": {
+                          ">for_each": {
+                            ">do": {
+                              ">sequence": {
+                                "items": [
+                                  {
+                                    "invoke": {
+                                      "@capacity": "/root/agentic/matter.read",
+                                      "as": "child_state",
+                                      "to_type": "matter",
+                                      "with": {
+                                        "matter_id": "$child_matter_id",
+                                        "read_mode": "data|brique"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "#derive_child_content": {
+                                      "inputs": {
+                                        "params": {
+                                          "matter_state": {
+                                            "type": "object"
+                                          },
+                                          "relation": {
+                                            "type": "object"
+                                          }
+                                        }
+                                      },
+                                      "outputs": {
+                                        "payload": {
+                                          "content": {
+                                            "type": "object"
+                                          }
+                                        }
+                                      },
+                                      "role": "Derive the child content with parent_id removed.",
+                                      "transformation_contract": {
+                                        "invariants": [
+                                          "The operation is computed from the content just read, so adding a present value or removing an absent one changes nothing.",
+                                          "No field other than the one named by the operation changes."
+                                        ],
+                                        "morphing": "The child content read becomes the same content without parent_id."
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "invoke": {
+                                      "@capacity": "/root/agentic/matter.write",
+                                      "as": "child_detach",
+                                      "to_type": "matter",
+                                      "with": {
+                                        "data": "$derive_child_content.payload.content",
+                                        "expected_revision": "$child_state.payload.brique.revision",
+                                        "matter_id": "$child_matter_id"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "as": "child_matter_id",
+                            "collection": "$input.child_matter_ids",
+                            "on_error": "fail"
+                          }
+                        }
+                      }
+                    },
+                    ">then": {
+                      "#cascade": {
+                        "inputs": {
+                          "params": {
+                            "children": {
+                              "type": "array"
+                            }
+                          }
+                        },
+                        "outputs": {
+                          "payload": {
+                            "deleted_children": {
+                              "type": "array"
+                            }
+                          }
+                        },
+                        "resolution": {
+                          ">for_each": {
+                            ">do": {
+                              "invoke": {
+                                "@capacity": "/root/agentic/continuity.delete",
+                                "as": "child_delete",
+                                "with": {
+                                  "cascade": true,
+                                  "continuity_id": "$child_id"
+                                }
+                              }
+                            },
+                            "as": "child_id",
+                            "collection": "$input.children"
+                          }
+                        },
+                        "role": "Recursively delete each direct child continuity.",
+                        "transformation_contract": {
+                          "invariants": [
+                            "Each child deletion is delegated back to continuity.delete with cascade enabled."
+                          ],
+                          "morphing": "Direct child continuities become recursively deleted continuity subtrees."
+                        }
+                      }
+                    },
+                    "when": {
+                      "left": "$input.cascade",
+                      "op": "eq",
+                      "right": true
+                    }
+                  }
+                },
+                "role": "Resolve descendant behavior according to the cascade policy before the parent continuity disappears.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Children never disappear implicitly when cascade is false.",
+                    "Recursive deletion uses the same continuity.delete semantics."
+                  ],
+                  "morphing": "A set of direct children becomes either surviving detached roots or recursively deleted descendants."
+                }
+              }
+            },
+            {
+              "#clean_relations": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "parent_matter_id": {
+                      "type": "string"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "parent_cleaned": {
+                      "type": "boolean"
+                    },
+                    "structures_cleaned": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#parent": {
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "parent_id": {
+                                "type": "string"
+                              },
+                              "parent_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "cleaned": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Remove continuity_id from the existing parent children collection.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "The existing parent Matter mutation is delegated to matter.write.",
+                              "The parent write is guarded by the revision read just before it. On a revision conflict the target is re-read and the content recomputed from the fresh read before a bounded retry; removing an absent value changes nothing."
+                            ],
+                            "morphing": "A parent referencing the soon-to-be-deleted continuity becomes a parent without that child reference.",
+                            "notes": [
+                              "The parent continuity Matter is rewritten by one matter.write of its whole content, derived from the content just read without continuity_id in children; nothing happens when the continuity has no parent."
+                            ]
+                          },
+                          "resolution": {
+                            ">if": {
+                              ">then": {
+                                ">sequence": {
+                                  "items": [
+                                    {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/matter.read",
+                                        "as": "parent_state",
+                                        "to_type": "matter",
+                                        "with": {
+                                          "matter_id": "$input.parent_matter_id",
+                                          "read_mode": "data|brique"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "#derive_parent_content": {
+                                        "inputs": {
+                                          "params": {
+                                            "matter_state": {
+                                              "type": "object"
+                                            },
+                                            "relation": {
+                                              "type": "object"
+                                            }
+                                          }
+                                        },
+                                        "outputs": {
+                                          "payload": {
+                                            "content": {
+                                              "type": "object"
+                                            }
+                                          }
+                                        },
+                                        "role": "Derive the parent content with the deleted continuity id removed from children.",
+                                        "transformation_contract": {
+                                          "invariants": [
+                                            "The operation is computed from the content just read, so adding a present value or removing an absent one changes nothing.",
+                                            "No field other than the one named by the operation changes."
+                                          ],
+                                          "morphing": "The parent content read becomes the same content without the deleted id in children."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/matter.write",
+                                        "as": "parent_children_cleanup",
+                                        "to_type": "matter",
+                                        "with": {
+                                          "data": "$derive_parent_content.payload.content",
+                                          "expected_revision": "$parent_state.payload.brique.revision",
+                                          "matter_id": "$input.parent_matter_id"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "when": {
+                                "left": "$input.parent_matter_id",
+                                "op": "exists"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#structures": {
+                          "inputs": {
+                            "params": {
+                              "continuity_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "cleaned": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Remove the reference to the continuity from the canonical continuities Structure.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Only the canonical continuities Structure is patched.",
+                              "The existing Structure mutation is delegated to structure.patch.",
+                              "The Structure write is guarded by the revision read just before it (expected_revision). On a revision conflict the target is re-read and the content recomputed from the fresh read before a bounded retry; removing an absent value changes nothing."
+                            ],
+                            "morphing": "The canonical continuities Structure becomes a Structure without the reference to the deleted continuity.",
+                            "notes": [
+                              "The canonical reference removed is { kind: matter_ref, context: /root/agentic, matter_id: continuity_<id>, role: continuity }, exactly the object added by continuity.create/#structure_relation."
+                            ]
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "invoke": {
+                                    "@capacity": "/root/agentic/structure.read",
+                                    "as": "structure_state",
+                                    "to_type": "matter",
+                                    "with": {
+                                      "structure_id": "continuities"
+                                    }
+                                  }
+                                },
+                                {
+                                  "invoke": {
+                                    "@capacity": "/root/agentic/structure.patch",
+                                    "as": "structure_reference_removed",
+                                    "to_type": "matter",
+                                    "with": {
+                                      "semantic_patch": {
+                                        "operations": [
+                                          {
+                                            "op": "remove",
+                                            "path": [
+                                              "functional",
+                                              "items"
+                                            ],
+                                            "value": {
+                                              "context": "/root/agentic",
+                                              "kind": "matter_ref",
+                                              "matter_id": "$input.continuity_matter_id",
+                                              "role": "continuity"
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "structure_id": "continuities",
+                                      "expected_revision": "$structure_state.payload.brique.revision"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Remove every external organizational relation that points to the target continuity.",
+                "transformation_contract": {
+                  "invariants": [
+                    "No dangling parent children reference remains after successful deletion.",
+                    "No dangling reference to the continuity remains in the canonical continuities Structure after successful deletion."
+                  ],
+                  "morphing": "A continuity scheduled for deletion becomes unreferenced by its parent and by the canonical continuities Structure."
+                }
+              }
+            },
+            {
+              "#delete_owned_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_deleted": {
+                      "type": "boolean"
+                    },
+                    "mailbox_deleted": {
+                      "type": "boolean"
+                    },
+                    "runtime_deleted": {
+                      "type": "boolean"
+                    },
+                    "journal_deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#delete_runtime": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "deleted": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Delete the runtime Matter runtime_<id> owned by the continuity.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Delegated capacity: matter.delete."
+                            ],
+                            "morphing": "The continuity runtime Matter becomes absent."
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.delete",
+                              "as": "runtime_deleted",
+                              "to_type": "matter",
+                              "with": {
+                                "matter_id": "$input.matter_id"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#delete_mailbox": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "deleted": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Delete the mailbox Matter mailbox_<id> owned by the continuity.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Delegated capacity: matter.delete."
+                            ],
+                            "morphing": "The continuity mailbox Matter becomes absent."
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.delete",
+                              "as": "mailbox_deleted",
+                              "to_type": "matter",
+                              "with": {
+                                "matter_id": "$input.matter_id"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#delete_journal": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "deleted": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.delete",
+                              "as": "journal_deleted",
+                              "to_type": "matter",
+                              "with": {
+                                "matter_id": "$input.matter_id"
+                              }
+                            }
+                          },
+                          "role": "Delete the journal Matter journal_<id> owned by the continuity.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Delegated capacity: matter.delete."
+                            ],
+                            "morphing": "The continuity journal Matter becomes absent."
+                          }
+                        }
+                      },
+                      {
+                        "#delete_continuity": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "deleted": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Delete the continuity header Matter continuity_<id> itself after owned operational state and external references have been handled.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Delegated capacity: matter.delete."
+                            ],
+                            "morphing": "The target continuity header Matter becomes absent."
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.delete",
+                              "as": "continuity_deleted",
+                              "to_type": "matter",
+                              "with": {
+                                "matter_id": "$input.matter_id"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Delete the target continuity header Matter and its uniquely owned journal, mailbox and runtime Matters.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Physical deletion of each Matter is delegated to matter.delete.",
+                    "Deletion of one owned Matter does not imply deletion of unrelated Matters.",
+                    "No external history is deleted.",
+                    "The Matters to delete are runtime_<id>, mailbox_<id>, journal_<id>, and continuity_<id> (header), derived from continuity_id, in that order."
+                  ],
+                  "morphing": "A relation-clean target continuity bundle becomes absent from Brique persistent Matter state.",
+                  "notes": [
+                    "matter.delete takes only matter_id; the four invocations use the Matter IDs derived by #derive_matter_ids."
+                  ]
+                }
+              }
+            },
+            {
+              "#settle": {
+                "inputs": {
+                  "params": {
+                    "cascade": {
+                      "type": "boolean"
+                    },
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "deleted_children": {
+                      "type": "array"
+                    },
+                    "detached_children": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "cascade": {
+                      "type": "boolean"
+                    },
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "deleted_children": {
+                      "type": "array"
+                    },
+                    "detached_children": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "role": "Return the explicit deletion result without recreating, archiving, or closing the removed continuity.",
+                "transformation_contract": {
+                  "invariants": [
+                    "No closed state is created.",
+                    "No deleted Matter is recreated.",
+                    "Late responses cannot implicitly reverse deletion."
+                  ],
+                  "morphing": "A completed continuity deletion becomes an explicit final deletion result."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

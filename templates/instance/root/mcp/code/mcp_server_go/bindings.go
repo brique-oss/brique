@@ -28,11 +28,24 @@ import (
 // BriqueCapacityClient implements BriqueOutbound by emitting outbound intentions
 // through the Brique wrapper runtime.
 type BriqueCapacityClient struct {
-	rt *wrapper.Runtime
+	rt    *wrapper.Runtime
+	names wrapperNames
 }
 
-func NewBriqueCapacityClient(rt *wrapper.Runtime) *BriqueCapacityClient {
-	return &BriqueCapacityClient{rt: rt}
+// wrapperNames is what tells this wrapper from another one that runs the same code. The engine routes the response to an outbound
+// intention to the wrapper that owns the capacity named in `from`: two wrappers must not name the same one, or they would take each
+// other's answers. Without configuration the names are those of the wrapper mcp_server_go.
+type wrapperNames struct {
+	responseCap string // the routing anchor capacity of this wrapper (BRIQUE_MCP_RESPONSE_CAP)
+	identity    string // the wrapper's own name (BRIQUE_WRAPPER_NAME, which the engine sets)
+}
+
+func wrapperNamesFromEnv() wrapperNames {
+	return wrapperNames{responseCap: envOr("BRIQUE_MCP_RESPONSE_CAP", "mcp.response"), identity: envOr("BRIQUE_WRAPPER_NAME", "mcp_server_go")}
+}
+
+func NewBriqueCapacityClient(rt *wrapper.Runtime, names wrapperNames) *BriqueCapacityClient {
+	return &BriqueCapacityClient{rt: rt, names: names}
 }
 
 // Initialize assembles the MCP initialize response.
@@ -58,7 +71,7 @@ func (c *BriqueCapacityClient) Framework() (string, error) {
 		ToContext:     "",
 		ToCap:         "matter.read",
 		ToType:        "matter",
-		FromCap:       "mcp.response",
+		FromCap:       c.names.responseCap,
 		Params:        map[string]any{"matter_id": "brique_framework", "read_mode": "data"},
 		AwaitResponse: true,
 	})
@@ -76,7 +89,7 @@ func (c *BriqueCapacityClient) FrameworkPath() (string, error) {
 		ToContext:     "",
 		ToCap:         "read.state",
 		ToType:        "reflexive",
-		FromCap:       "mcp.response",
+		FromCap:       c.names.responseCap,
 		Params:        map[string]any{"include": []any{"context"}},
 		AwaitResponse: true,
 	})
@@ -127,11 +140,11 @@ func (c *BriqueCapacityClient) ForwardIntentionWithProgress(intention map[string
 	patched["await_response"] = true
 	patched["from"] = map[string]any{
 		"context": "",
-		"cap":     "mcp.response",
+		"cap":     c.names.responseCap,
 		"type":    "execution",
 	}
 	patched["identity"] = map[string]any{
-		"id":   "mcp_server_go",
+		"id":   c.names.identity,
 		"kind": "wrapper",
 	}
 	patched["correlation"] = map[string]any{
@@ -152,12 +165,12 @@ func (c *BriqueCapacityClient) ForwardIntentionWithProgress(intention map[string
 
 // BuildBindings declares the wrapper capacity bindings toward Brique.
 // This wrapper has no local capacity bindings — all dispatch goes outbound.
-func BuildBindings(rt *wrapper.Runtime) wrapper.BindingsFragment {
+func BuildBindings(rt *wrapper.Runtime, names wrapperNames) wrapper.BindingsFragment {
 	return wrapper.BindingsFragment{
 		Capacities: []wrapper.CapacityBinding{
 			{
 				Context: "",
-				Name:    "mcp.response",
+				Name:    names.responseCap,
 				Handler: func(params *wrapper.Params) (any, error) {
 					return map[string]any{"ok": true}, nil
 				},

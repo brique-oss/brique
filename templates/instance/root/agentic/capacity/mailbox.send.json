@@ -1,0 +1,884 @@
+{
+  "brique": {
+    "cap_name": "mailbox.send",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "mailbox.send",
+    "description": "Introduces one external message into a continuity, persists it durably, classifies its mailbox entry, routes expected or control behavior, and activates cognition when required."
+  },
+  "functional": {
+    "#root": {
+      "role": "Make one external message a durable event of a continuity and route that event according to mailbox, wait-group, control, and activation semantics.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "claimed_by": {
+            "type": "string"
+          },
+          "wait_group_id": {
+            "type": "string"
+          },
+          "wake": {
+            "type": "boolean"
+          },
+          "redirected_to": {
+            "_comment": "Present when the message was redirected: the active continuity that received it.",
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            },
+            "runtime": {
+              "schema": "/root/agentic/schema/runtime_data"
+            },
+            "journal": {
+              "schema": "/root/agentic/schema/message"
+            }
+          }
+        }
+      },
+      "effects": {
+        "mailbox": "Reserves one unique consumption entry before the commit, or recognizes an idempotent retry.",
+        "runtime": "May capture an expected event, satisfy a wait group, apply an immediately eligible control, or prepare an idle continuity for activation. Opens the inference window (reserved for the run) for a user message sent to a continuity whose pilot is a pilot_definition and whose run is running or waiting.",
+        "external": "May invoke continuity.delete for an immediately applicable delete control and pilot.activate when cognition must wake.",
+        "journal": "Appends one immutable durable message to the journal (matter.append); its seq is the line number: the number of committed lines plus one, guarded by expected_line_count. Before the append it waits for the inference window of the continuity when an inference holds it (an acknowledgement running is sent while it waits); the semantic commit point and the result (seq known at return) do not change."
+      },
+      "transformation_contract": {
+        "morphing": "An external message becomes a durable continuity event and a deterministically routed mailbox stimulus.",
+        "invariants": [
+          "A successfully sent new message exists in the journal.",
+          "A successfully sent message has at most one mailbox entry.",
+          "Message seq is the line number of the message in the journal: the number of lines already committed plus one, computed under the continuity lock and guarded by expected_line_count on the append; seq is monotonic and never derived from revision.",
+          "Durable messages are immutable after append.",
+          "Mailbox entries never duplicate message content.",
+          "A message is classified exactly once when first accepted.",
+          "One incoming message can satisfy at most one active wait group.",
+          "Expected is contextual and exists only when an active wait group actually matches.",
+          "An acknowledged historical message cannot be reinserted with the same id.",
+          "An idempotent retry does not append, enqueue, capture, or wake twice.",
+          "pilot.activate is invoked only after persistence is coherent.",
+          "The Matters of the target continuity are resolved from continuity_id by the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>; callers never bind them.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "Each Matter mutation is individually atomic; the operation as a whole is a recoverable multi-Matter operation with no rollback, whose global consistency is reconstructed through deterministic, idempotent steps and optimistic concurrency.",
+          "Ordered steps: validation, idempotence decision, reservation of the mailbox entry, append to the journal (semantic commit point), completion of routing (normal, control, or expected capture into the wait group), wake.",
+          "Before the append the message does not exist and the operation may be abandoned or cleaned; after the append it is durably accepted, a crash never leads to appending it again, and all routing steps are idempotent and repairable from the durable message and the runtime state.",
+          "The journal is the durable stream of accepted messages; mailbox.entries holds only active consumption state.",
+          "Activation through pilot.activate is non-blocking (await_response false): mailbox.send never waits for a cognitive run.",
+          "A mailbox entry whose message_id matches no durable message in the journal is a pre-commit reservation: it is never eligible for claim, and a retry with the same message_id resumes the reservation.",
+          "The reservation is a pending mailbox entry; no provisional status is introduced.",
+          "A message addressed to a continuity that names a successor is redirected to the active continuity of its lineage; the response carries redirected_to.",
+          "A message id already accepted and consumed by an archived continuity is never reinserted in its successor.",
+          "A message accepted by a continuity while a succession switches its routing is forwarded to the successor, never stranded.",
+          "A message is written as is in one journal line, whatever its size: there is no threshold of 64 KB, no carrying by reference and no size limit imposed by agentic.",
+          "Messages of kind summary, prompt, completion, event, projection and error are history only: agentic_core records them, they never reach a mailbox and are never accepted from outside.",
+          "The activation requested after a message is marked wake: it answers at once and never waits for another run.",
+          "A wake that is refused because the callee is busy is asked again, a bounded number of times; if it is still refused, the refusal is written in the journal of the continuity as a wake_refused error line, never lost in silence.",
+          "A wake transport failure is reconciled with durable state and, if work is still idle and pending, is written as a wake_failed error with outcome unknown; it is never replayed blindly.",
+          "The identity of a message is its id and the fingerprint of its content (from, kind, content, correlation): the same id with the same fingerprint is an idempotent retry, the same id with another fingerprint is an identity conflict, whether the first message is only reserved, accepted and active, or consumed.",
+          "The append waits for the inference window of the continuity unless the writer is its holder, and the wait happens after the reservation of the entry and before the critical-section lock of the journal.",
+          "Writers waiting for the inference window are served in arrival order; a response of a tool that arrived before a user message is written before it.",
+          "A user message sent to a continuity whose pilot is a pilot_definition and whose run is running or waiting opens the inference window in the very operation that writes it, before the append; the window is handed to the run that absorbs the message, or expires after a few tens of seconds, on suspension and on deletion, and the message then stays a normal one.",
+          "mailbox.send never refuses a user message addressed to a continuity whose pilot is a Capacity: that a human does not write to it is a convention of use, not a check."
+        ],
+        "success": [
+          "The message is validated and normalized before durable mutation.",
+          "A new message is accepted by reserving its mailbox entry then appending it to the journal (semantic commit point), after which routing is completed, as one recoverable multi-Matter operation composed of individually atomic Matter mutations.",
+          "Expected messages are captured directly into the matching wait group.",
+          "Control messages follow control semantics.",
+          "Normal messages remain pending until mailbox.read claims them.",
+          "An idle continuity with newly available normal work may be activated through pilot.activate.",
+          "A running or waiting continuity never receives a competing activation.",
+          "A suspended continuity remains asleep until resume."
+        ],
+        "failure": [
+          "Fails if continuity, mailbox, or runtime are inconsistent.",
+          "Fails before mutation when incoming message data is invalid.",
+          "Fails when a historical consumed message id is reused.",
+          "Fails when correlation matches more than one active wait group.",
+          "Does not activate cognition when persistence or routing failed.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted.",
+          "Fails when the message kind is history only.",
+          "Fails with an identity conflict, changing nothing, when a message id is reused with a different content."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "pilot.activate resolves pilot_definition itself from continuity.pilot_ref; mailbox.send and its callers never need to know that Matter.",
+          "Wake-up happens after the semantic commit point and once the mailbox entry is coherent; it is a non-blocking activation.",
+          "The wrapper performs individually atomic Matter mutations; architectural behaviors delegated to another Capacity are represented explicitly below.",
+          "Sub-sections that declare @matter slots receive the Matters resolved by #resolve_state.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model.",
+          "Implementation constraint: the continuity is managed in a Matter (the journal) for persistence and duplicated in an in-memory object of the wrapper for performance. After the matter.append of the message, the same lines are applied to the object under the continuity lock; a refused append leaves the object untouched (the journal tail is re-read, the object completed, seq recomputed). The idempotence decision reads the object. The kind of a line is its characterization, set by the tool that writes it; mailbox.send keeps the kind given by the sender.",
+          "Implementation constraint: a matter.append accepts 256 KiB inline; a larger append goes through the HTTP lease of the engine (http_data), like matter.write."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the four Matters owned by the target continuity (header, journal, mailbox, runtime) from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if one of the four derived Matters does not exist."
+                  ],
+                  "invariants": [
+                    "Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs of its continuity header, journal, mailbox, and runtime."
+                }
+              }
+            },
+            {
+              "#prepare": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "idempotent": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "object"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#validate": {
+                          "inputs": {
+                            "params": {
+                              "message": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "message": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "role": "Validate and normalize the incoming message.",
+                          "transformation_contract": {
+                            "failure": [
+                              "Malformed or incoherent message data fails before any state change."
+                            ],
+                            "morphing": "Raw incoming message data becomes canonical message data ready for persistence."
+                          }
+                        }
+                      },
+                      {
+                        "#idempotency": {
+                          "inputs": {
+                            "params": {
+                              "message_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "existing_entry": {
+                                "type": "object"
+                              },
+                              "state": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Determine whether the message id is new, already active in the mailbox, or historically consumed.",
+                          "transformation_contract": {
+                            "failure": [
+                              "An id already present historically but no longer in the mailbox cannot be reinserted."
+                            ],
+                            "morphing": "A message id becomes a deterministic acceptance or retry decision.",
+                            "success": [
+                              "An unknown id is accepted as new.",
+                              "An id already represented by an active mailbox entry is treated as an idempotent retry."
+                            ],
+                            "invariants": [
+                              "message_id absent from the journal and without mailbox entry: never accepted, new message.",
+                              "message_id absent from the journal with a mailbox entry: pre-commit reservation of an interrupted send, the retry resumes it.",
+                              "message_id present in the journal with a mailbox entry: accepted message still active or post-commit routing to complete, idempotent retry.",
+                              "message_id present in the journal without a mailbox entry: accepted then consumed, reinsertion forbidden."
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Normalize the incoming request and decide whether it represents a new message or an idempotent retry.",
+                "transformation_contract": {
+                  "invariants": [
+                    "from and to are explicit before persistence.",
+                    "The target destination is coherent with continuity_id.",
+                    "Caller-provided seq is never authoritative.",
+                    "One message id identifies only one durable message."
+                  ],
+                  "morphing": "An incoming send request becomes a normalized new message or an identified idempotent retry."
+                }
+              }
+            },
+            {
+              "#persist": {
+                "inputs": {
+                  "params": {
+                    "message": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "claimed_by": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "wait_group_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#classify": {
+                          "inputs": {
+                            "params": {
+                              "message": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "priority": {
+                                "type": "string"
+                              },
+                              "wait_group_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Determine whether the message is control, expected, or normal before creating its mailbox consumption state.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "kind control produces priority control.",
+                              "A unique active wait-group match produces priority expected.",
+                              "No active wait-group match produces priority normal.",
+                              "Ambiguous wait-group correlation is invalid."
+                            ],
+                            "morphing": "A validated incoming message becomes one deterministic mailbox classification."
+                          }
+                        }
+                      },
+                      {
+                        "#enqueue": {
+                          "inputs": {
+                            "params": {
+                              "message_id": {
+                                "type": "string"
+                              },
+                              "priority": {
+                                "type": "string"
+                              },
+                              "wait_group_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "status": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Reserve the unique pending mailbox entry corresponding to the message before its commit.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Normal, control and expected entries are reserved pending; the claim of an expected entry by runtime.run_id happens at routing, after the commit.",
+                              "The reservation is idempotent by message_id and reuses an existing reservation of the same message_id.",
+                              "A reservation whose message never became durable is inert and never claimable."
+                            ],
+                            "morphing": "A classified message becomes one reserved pending mailbox entry."
+                          }
+                        }
+                      },
+                      {
+                        "#append": {
+                          "inputs": {
+                            "params": {
+                              "message": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "message_id": {
+                                "type": "string"
+                              },
+                              "seq": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "role": "Assign the next seq and append the immutable message to the journal.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "seq is monotonic within the continuity.",
+                              "seq is the number of committed lines plus one and the message is appended with one matter.append guarded by expected_line_count; on conflict the journal tail is re-read and seq recomputed.",
+                              "The append is the semantic commit point: before it the operation may be abandoned or cleaned, after it the message is durably accepted."
+                            ],
+                            "morphing": "A classified new message becomes an immutable ordered continuity fact."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Reserve the classified mailbox entry, then persist the message in the journal (semantic commit point), as one recoverable multi-Matter operation.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Entry reservation, classification, seq computation and append form one recoverable logical operation composed of individually atomic Matter mutations.",
+                    "No new durable message is left without its mailbox entry.",
+                    "A reservation whose message never became durable is inert and never claimable."
+                  ],
+                  "morphing": "A validated new message becomes one reserved mailbox entry then an immutable continuity fact."
+                }
+              }
+            },
+            {
+              "#route": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "wait_group_id": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "object"
+                    },
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "wake": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">switch": {
+                    "cases": [
+                      {
+                        "then": {
+                          "#expected": {
+                            "inputs": {
+                              "params": {
+                                "message_id": {
+                                  "type": "string"
+                                },
+                                "wait_group_id": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "outputs": {
+                              "payload": {
+                                "satisfied": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "resolution": {
+                              ">sequence": {
+                                "items": [
+                                  {
+                                    "#claim_entry": {
+                                      "inputs": {
+                                        "params": {
+                                          "continuity_id": {
+                                            "type": "string"
+                                          },
+                                          "message_id": {
+                                            "type": "string"
+                                          },
+                                          "wait_group_id": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "outputs": {
+                                        "payload": {
+                                          "claimed": {
+                                            "type": "boolean"
+                                          },
+                                          "claimed_by": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "role": "Claim the reserved entry of an expected message for the owning run, after the commit.",
+                                      "transformation_contract": {
+                                        "invariants": [
+                                          "The entry passes from pending to claimed by runtime.run_id in one mailbox write guarded by expected_revision.",
+                                          "If the wait group is no longer active or no longer matches when routing runs, the message is routed as normal instead: in the same guarded write the entry priority becomes normal and the entry stays pending."
+                                        ],
+                                        "morphing": "A reserved pending entry of a durable expected message becomes an entry claimed by the current runtime.run_id."
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "#capture": {
+                                      "inputs": {
+                                        "params": {
+                                          "message_id": {
+                                            "type": "string"
+                                          },
+                                          "wait_group_id": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "outputs": {
+                                        "payload": {
+                                          "captured": {
+                                            "type": "boolean"
+                                          }
+                                        }
+                                      },
+                                      "role": "Attach the message to the matching expected item and update received.",
+                                      "transformation_contract": {
+                                        "morphing": "A correlated durable message becomes one received item of the active wait group."
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "#evaluate_wait": {
+                                      "inputs": {
+                                        "params": {
+                                          "wait_group_id": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "outputs": {
+                                        "payload": {
+                                          "satisfied": {
+                                            "type": "boolean"
+                                          }
+                                        }
+                                      },
+                                      "role": "Evaluate the wait-group condition after capture.",
+                                      "transformation_contract": {
+                                        "morphing": "An updated wait group becomes waiting or satisfied according to its deterministic condition."
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "role": "Capture the incoming message into its matching active wait group and resume the existing run when the group becomes satisfied.",
+                            "transformation_contract": {
+                              "invariants": [
+                                "Expected messages bypass mailbox.read.",
+                                "received stores the durable message_id rather than duplicated content.",
+                                "The entry remains owned by the active run.",
+                                "One message satisfies at most one wait group.",
+                                "A completed wait group is never reopened.",
+                                "The reserved entry is claimed by the owning run only after the commit, at the start of expected routing.",
+                                "A message whose wait group is no longer active at routing time falls back to normal routing."
+                              ],
+                              "morphing": "An expected mailbox message becomes a received wait result and possibly a resumable existing run.",
+                              "success": [
+                                "The matching received item is recorded.",
+                                "The wait-group condition is reevaluated.",
+                                "When satisfied, wait_group.status becomes satisfied and runtime.status becomes running.",
+                                "The existing run is resumed rather than creating a new run."
+                              ]
+                            }
+                          }
+                        },
+                        "value": "expected"
+                      },
+                      {
+                        "then": {
+                          "#control": {
+                            "inputs": {
+                              "params": {
+                                "message_id": {
+                                  "type": "string"
+                                },
+                                "message": {
+                                  "type": "object"
+                                },
+                                "continuity_id": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "outputs": {
+                              "payload": {
+                                "applied": {
+                                  "type": "boolean"
+                                },
+                                "wake": {
+                                  "type": "boolean"
+                                }
+                              }
+                            },
+                            "resolution": {
+                              ">sequence": {
+                                "items": [
+                                  {
+                                    ">switch": {
+                                      ">default": {
+                                        "#state_control": {
+                                          "inputs": {
+                                            "params": {}
+                                          },
+                                          "outputs": {
+                                            "payload": {
+                                              "applied": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
+                                          "role": "Apply or defer set_intention, set_pilot, suspend, and other non-delete controls according to runtime state.",
+                                          "transformation_contract": {
+                                            "morphing": "A non-delete control becomes an immediate idle-state mutation or a pending safe-point control."
+                                          }
+                                        }
+                                      },
+                                      "cases": [
+                                        {
+                                          "then": {
+                                            "#resume": {
+                                              "inputs": {
+                                                "params": {}
+                                              },
+                                              "outputs": {
+                                                "payload": {
+                                                  "wake": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "resolution": {
+                                                "#activate_if_needed": {
+                                                  "inputs": {
+                                                    "params": {
+                                                      "continuity_id": {
+                                                        "type": "string"
+                                                      }
+                                                    }
+                                                  },
+                                                  "outputs": {
+                                                    "payload": {
+                                                      "status": {
+                                                        "type": "string"
+                                                      }
+                                                    }
+                                                  },
+                                                  "resolution": {
+                                                    "invoke": {
+                                                      "@capacity": "/root/agentic/pilot.activate",
+                                                      "await_response": false,
+                                                      "with": {
+                                                        "continuity_id": "$input.continuity_id"
+                                                      }
+                                                    }
+                                                  },
+                                                  "role": "Delegate renewed cognition to pilot.activate when resumable pending work exists.",
+                                                  "transformation_contract": {
+                                                    "morphing": "A resumed continuity with pending work becomes an activated cognitive run."
+                                                  }
+                                                }
+                                              },
+                                              "role": "Resume a suspended continuity and reactivate cognition when pending work remains.",
+                                              "transformation_contract": {
+                                                "invariants": [
+                                                  "resume outside suspended is a consumed no-op.",
+                                                  "Successful resume clears suspension before activation."
+                                                ],
+                                                "morphing": "A suspended continuity and resume control become an idle activable continuity."
+                                              }
+                                            }
+                                          },
+                                          "value": "resume"
+                                        },
+                                        {
+                                          "then": {
+                                            "#delete": {
+                                              "inputs": {
+                                                "params": {
+                                                  "cascade": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "continuity_id": {
+                                                    "type": "string"
+                                                  }
+                                                }
+                                              },
+                                              "outputs": {
+                                                "payload": {
+                                                  "deleted": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "resolution": {
+                                                "invoke": {
+                                                  "@capacity": "/root/agentic/continuity.delete",
+                                                  "as": "continuity_delete",
+                                                  "with": {
+                                                    "cascade": "$input.cascade",
+                                                    "continuity_id": "$input.continuity_id"
+                                                  }
+                                                }
+                                              },
+                                              "role": "Delegate an immediately applicable delete control to continuity.delete.",
+                                              "transformation_contract": {
+                                                "morphing": "An applicable delete control becomes explicit continuity deletion."
+                                              }
+                                            }
+                                          },
+                                          "value": "delete"
+                                        }
+                                      ],
+                                      "on": "$input.message.content.action"
+                                    }
+                                  },
+                                  {
+                                    "#consume_applied_control": {
+                                      "inputs": {
+                                        "params": {
+                                          "applied": {
+                                            "type": "boolean"
+                                          },
+                                          "continuity_id": {
+                                            "type": "string"
+                                          },
+                                          "message_id": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "outputs": {
+                                        "payload": {
+                                          "consumed": {
+                                            "type": "boolean"
+                                          }
+                                        }
+                                      },
+                                      "role": "Remove the mailbox entry of a non-delete control that was applied immediately, keeping its durable message.",
+                                      "transformation_contract": {
+                                        "invariants": [
+                                          "Applies only when the control was applied immediately; a deferred control stays pending for claim, application and acknowledgement by pilot.activate.",
+                                          "A delete control is terminal: the mailbox disappears with the continuity and no entry is consumed.",
+                                          "The removal is one mailbox write guarded by expected_revision, performed by the send operation itself since no run owns the entry; mailbox.ack is not used.",
+                                          "An immediately applied control is never left pending, so it cannot be processed a second time."
+                                        ],
+                                        "morphing": "An immediately applied control entry becomes absent from mailbox.entries while its message remains in the journal."
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "role": "Apply an immediately eligible control or preserve it pending for the current run's next safe point.",
+                            "transformation_contract": {
+                              "invariants": [
+                                "Controls never interrupt an inference, capacity execution, or atomic mutation.",
+                                "running and waiting controls remain pending until a safe point unless explicitly defined otherwise.",
+                                "resume while suspended is immediately applicable.",
+                                "delete delegates actual deletion to continuity.delete.",
+                                "A control applied immediately has its mailbox entry removed by the send operation; a deferred control stays pending until claimed, applied and acknowledged by pilot.activate."
+                              ],
+                              "morphing": "A persisted control event becomes an immediate state transition or a pending safe-point control."
+                            }
+                          }
+                        },
+                        "value": "control"
+                      }
+                    ],
+                    "on": "$input.priority",
+                    ">default": {
+                      "#normal": {
+                        "inputs": {
+                          "params": {
+                            "continuity_id": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "outputs": {
+                          "payload": {
+                            "wake": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "resolution": {
+                          "#activate_if_idle": {
+                            "inputs": {
+                              "params": {
+                                "continuity_id": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "outputs": {
+                              "payload": {
+                                "status": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "resolution": {
+                              "invoke": {
+                                "@capacity": "/root/agentic/pilot.activate",
+                                "with": {
+                                  "continuity_id": "$input.continuity_id"
+                                },
+                                "await_response": false
+                              }
+                            },
+                            "role": "Delegate cognition to pilot.activate when runtime is idle.",
+                            "transformation_contract": {
+                              "invariants": [
+                                "Activation is delegated to pilot.activate."
+                              ],
+                              "morphing": "An idle continuity with pending work becomes an activated cognitive run."
+                            }
+                          }
+                        },
+                        "role": "Leave ordinary work pending and activate the pilot only when the target continuity is currently idle.",
+                        "transformation_contract": {
+                          "invariants": [
+                            "running and waiting continuities are not activated again.",
+                            "suspended continuities remain suspended.",
+                            "Only idle continuities are candidates for activation."
+                          ],
+                          "morphing": "A normal pending mailbox event becomes either queued work or an activated cognitive run."
+                        }
+                      }
+                    }
+                  }
+                },
+                "role": "Route the persisted event according to its classification without mixing expected, control, and normal semantics.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Only one routing branch applies to one newly accepted message."
+                  ],
+                  "morphing": "A persisted mailbox event becomes an expected-result capture, a control transition, or pending normal work."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

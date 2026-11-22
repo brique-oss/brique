@@ -103,13 +103,16 @@ handle-free local traffic.
 ## Runtime guarantees
 
 - current Brique response/status and structured-error envelopes
-- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
+- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`); all the numeric settings are declared once (`settings.hpp`, `describe_settings`, `declare_setting`) and are the same as in the other runtimes (Wrapper.md §14.1.3)
 - responses and `wrapper_stop` outside the bounded work scheduler
 - FIFO ordering per matter; capacities run their calls in parallel unless a binding sets `serial = true`, which runs one call at a time in arrival order
 - strict binding validation before connection
 - 4 MiB control-message limit, fragmented WebSocket reads and bounded startup retries
 - matter commit before notification, relative notification origins and owner-checked subscriptions
-- outbound correlation plus `running`-renewed inactivity waits
+- outbound correlation plus `running`-renewed inactivity waits; a capacity sends its own with `runtime.notify_running()` or, for a heartbeat until the end of the scope, `wrapper::Keepalive alive(runtime);` (`BRIQUE_HEARTBEAT_MS`; never automatic)
+- a call refused `busy` is asked again with bounded backoff and jitter (`emit_and_wait`; `OutboundParams::busy_attempts` to insist longer)
+- an error response is a `CallError` (`code()`, `details()`, `reason()`, `kind()`, `outcome_unknown()`)
+- `SIGUSR1` writes `$TMPDIR/brique_wrapper_tasks_<pid>.txt` (slots and settings not at their default; threads have no portable stack to read)
 - generic internal errors carrying a public `error_id`, with details kept in local logs
 
 Build and run the runtime test with:
@@ -119,6 +122,14 @@ cd lib
 c++ -std=c++17 -pthread -Wall -Wextra -pedantic -I. tests/runtime_test.cpp -lcurl -o runtime_test
 ./runtime_test
 ```
+
+## Shared mechanisms
+
+Wrapper.md §14.1 describes the mechanisms the three runtimes share; in C++:
+
+- `wrapper::CriticalSection section(runtime.scheduler(), {"key", ...});` holds the lock of every key for its scope (sorted, a wait gives the execution slot back)
+- `wrapper::MatterClient::over(runtime, context)` (`#include "wrapper/matter_client.hpp"`) reads and writes the Matters of a context with raw JSON values: `read`, `read_text`, `read_many`, `read_lines`, `stat`, `exists`, `objective`, `create`, `write(id, content, expected_revision)`, `append_lines`, `remove`, `update(id, compute)`; the errors are `CallError` with `is_revision_mismatch`, `is_line_count_mismatch`, `is_busy`, `is_not_found`, `is_outcome_unknown`
+- `runtime.scheduler().stats()` is a snapshot of the execution slots
 
 ## Placement and transit
 

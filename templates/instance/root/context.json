@@ -9,7 +9,10 @@
   "subjective": {},
   "brique": {
     "children_list": [
-      "mcp"
+      "agentic",
+      "llm",
+      "mcp",
+      "web"
     ],
     "ctx_ext_name": "root",
     "ctx_name": "root",
@@ -17,6 +20,10 @@
     "ctx_version": "1",
     "engine_config": {
       "communication": {
+        "browser_bridge": {
+          "_comment": "Engine side of the browser extension bridge. The browser the extension identifies acts as local.ui, which holds only the grants of the policy.",
+          "enabled": true
+        },
         "websocket_listener": {
           "_comment": "Root-only shared physical WebSocket listener. Child contexts and wrappers configure only logical paths; wrapper processes receive BRIQUE_WS_ADDR and BRIQUE_WS_URL automatically from the engine.",
           "addr": "127.0.0.1:8080",
@@ -35,6 +42,17 @@
             },
             "driver": "ws",
             "name": "main",
+            "type": "ui"
+          },
+          {
+            "config": {
+              "_comment": "Route of the launcher (brique-launcher ui): it opens a short connection here to start or stop the MCP wrappers and to read the state. Kept apart from main because a route holds one connection and a new one replaces the old.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/launcher"
+            },
+            "driver": "ws",
+            "name": "launcher",
             "type": "ui"
           }
         ],
@@ -57,7 +75,7 @@
       "reflexive": {
         "_projection_note": "Optional automatic maintenance of the meaning projection (0 or absent = off): projection_sync_interval_ms applies new/changed/deleted descriptors found on disk every N ms; projection_verify_interval_ms adds a slower pass that also catches in-place edits; projection_sync_on_edit (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. On demand: meaning.update with {sync:true}.",
         "projection_sync_interval_ms": 0,
-        "projection_sync_on_edit": false,
+        "projection_sync_on_edit": true,
         "projection_verify_interval_ms": 0,
         "repo_name": "my-brique-instance",
         "root_repo": true

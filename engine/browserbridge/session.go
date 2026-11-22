@@ -127,7 +127,6 @@ type openRequest struct {
 	DocumentID    string `json:"document_id"`
 	FrameID       int64  `json:"frame_id"`
 	UIName        string `json:"ui_name"`
-	UserActivated bool   `json:"user_activated"`
 	DescriptorB64 string `json:"descriptor_b64,omitempty"`
 }
 
@@ -216,7 +215,7 @@ func (session *Session) Handle(raw []byte) Response {
 func (session *Session) open(raw []byte, sequence uint64) Response {
 	var request openRequest
 	if !session.hello || decodeStrict(raw, &request) != nil || !session.matches(request.SessionID) ||
-		!request.UserActivated || !coordinatePattern.MatchString(request.DocumentID) || request.FrameID < 0 || uint64(request.FrameID) > maxJSONSafeInteger ||
+		!coordinatePattern.MatchString(request.DocumentID) || request.FrameID < 0 || uint64(request.FrameID) > maxJSONSafeInteger ||
 		!uiPattern.MatchString(request.UIName) || len(session.channels) >= maxBridgeChannels {
 		return failure(sequence, "open_refused")
 	}
@@ -228,6 +227,8 @@ func (session *Session) open(raw []byte, sequence uint64) Response {
 	if err != nil {
 		return failure(sequence, "open_refused")
 	}
+	// No gesture is asked: a page that carries an instance descriptor can act only if its browser origin is in the
+	// descriptor's signed ui_origins, which the instance of the person checks before signing anything.
 	for _, existing := range session.channels {
 		if existing.DocumentID == request.DocumentID && existing.FrameID == request.FrameID && existing.UIName == request.UIName {
 			return failure(sequence, "already_open")
@@ -522,3 +523,6 @@ func validGeneratedID(value, prefix string) bool {
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, prefix))
 	return err == nil && len(raw) == 24
 }
+
+// MaxPayloadBytes is the largest payload the bridge carries between the engine and a page, in either direction.
+const MaxPayloadBytes = maxBridgePayloadBytes

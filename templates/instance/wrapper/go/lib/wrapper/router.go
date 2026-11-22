@@ -50,7 +50,19 @@ func (r *Router) Route(raw []byte) {
 	}
 }
 
+// decodeWrapperFrame decodes a message of the engine. The payload of a response keeps an integer above 2^53 exactly (a Matter revision is a
+// nanosecond timestamp, and a float64 would not give it back): such a number is a json.Number, every other number is a float64 as ever.
 func decodeWrapperFrame(raw []byte) (Envelope, string, error) {
+	env, delegation, err := decodeWrapperFrameLoose(raw)
+	if err == nil && env.Kind == KindResponse && env.Response != nil && len(env.Response.Payload) > 0 {
+		if exact := exactResponsePayload(raw, delegation != ""); exact != nil {
+			env.Response.Payload = exact
+		}
+	}
+	return env, delegation, err
+}
+
+func decodeWrapperFrameLoose(raw []byte) (Envelope, string, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return Envelope{}, "", err
@@ -259,6 +271,19 @@ func (r *Router) errorResponse(msg *IntentionMsg, delegation string, err *Public
 		Identity:    responseIdentity(r.runtime.wrapperName, delegation),
 		Status:      StatusError,
 		Error:       &ResponseError{Origin: "wrapper", Code: err.Code, Message: err.Message, Details: map[string]any{"reason": err.Reason}},
+	}
+}
+
+// runningResponse is the message a capacity sends to say it is still working (vectors/running_response.json): it answers the intention being
+// served, with no payload.
+func (r *Router) runningResponse(msg *IntentionMsg, delegation string) *ResponseMsg {
+	return &ResponseMsg{
+		IntentionID: msg.IntentionID,
+		To:          msg.From,
+		From:        Address{Context: r.responseFromContext(msg.To.Context), Cap: msg.To.Cap, Type: msg.To.Type},
+		Identity:    responseIdentity(r.runtime.wrapperName, delegation),
+		Status:      StatusRunning,
+		Payload:     map[string]any{},
 	}
 }
 

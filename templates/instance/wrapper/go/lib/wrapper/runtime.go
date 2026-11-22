@@ -22,7 +22,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -82,11 +81,11 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 		return fmt.Errorf("resolve wrapper url: %w", err)
 	}
 
-	maxConcurrency, err := positiveEnv("BRIQUE_MAX_CONCURRENCY", 16)
+	maxConcurrency, err := strictSetting("BRIQUE_MAX_CONCURRENCY")
 	if err != nil {
 		return err
 	}
-	queueLimit, err := positiveEnv("BRIQUE_QUEUE_LIMIT", 256)
+	queueLimit, err := strictSetting("BRIQUE_QUEUE_LIMIT")
 	if err != nil {
 		return err
 	}
@@ -119,6 +118,11 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 	}
 	defer r.transport.Close()
 
+	if changed := SettingsNotDefault(); len(changed) > 0 {
+		r.log("event=settings_not_default values=%v", changed) // what the process really uses, to compare with what was meant
+	}
+	defer installDump(r.scheduler, r.log)() // kill -USR1 <pid> writes what every goroutine awaits (diagnostic.go)
+
 	if err := r.transport.Send(r.wrapperReadyMessage()); err != nil {
 		return fmt.Errorf("wrapper_ready send: %w", err)
 	}
@@ -143,17 +147,8 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 	return nil
 }
 
-func positiveEnv(name string, fallback int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 {
-		return 0, fmt.Errorf("%s must be a positive integer", name)
-	}
-	return value, nil
-}
+// Scheduler returns the bounded execution of the wrapper: Stats() for a diagnostic or a metric.
+func (r *Runtime) Scheduler() *WorkScheduler { return r.scheduler }
 
 // OutboundAPI returns the API surface for hosted code to emit intentions.
 func (r *Runtime) Outbound() *OutboundAPI {

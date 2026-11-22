@@ -1,0 +1,52 @@
+{
+  "brique": {
+    "cap_name": "world.get_inventory",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "world.get_inventory",
+    "description": "Check the stock level of a product by SKU. The backend is unavailable in the test world."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return the stock level of a SKU; in the test world the inventory backend always fails.",
+      "inputs": {
+        "params": {
+          "sku": {
+            "type": "string",
+            "description": "Product SKU such as KB-77."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "stock": {
+            "type": "integer"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A SKU becomes a stock level when the inventory backend answers.",
+        "invariants": [
+          "In the test world the backend always answers with a service-unavailable error: this tool exists to exercise error handling."
+        ],
+        "success": [
+          "Never succeeds in the test world."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper over a fixed in-memory shop world (test infrastructure, deterministic)."
+        ],
+        "failure": [
+          "Always fails with an inventory service unavailable (HTTP 503) error."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry to the tool_calls matter."
+      }
+    }
+  },
+  "subjective": {}
+}

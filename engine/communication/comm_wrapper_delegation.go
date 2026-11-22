@@ -261,9 +261,14 @@ func (l *CommLoop) resolveWrapperDelegatedIngressDetailed(item IngressItem) (boo
 			return false, fmt.Errorf("delegated wrapper response delivery is invalid")
 		}
 		if rootRequest, root := resolution.RootRequest(); root {
-			if _, restricted := rootRequest.RestrictedLocal(); restricted {
-				// A restricted internal component is answered locally: there is no
-				// signed envelope and no permit to acquire.
+			if answeredWithoutSignature(rootRequest) {
+				// A restricted internal component, a locally authenticated browser
+				// and a public browser are answered locally: there is no signed
+				// envelope and no permit to acquire. Every other family already
+				// answers them this way (junction.BindExternalResponse); sent to the
+				// signed path instead, the response could not obtain a permit and
+				// was dropped, so a wrapper capacity called from a browser never
+				// answered.
 				local, _, err := junction.BindExternalResponse(rootRequest, response)
 				if err != nil {
 					l.sendToTrace(response, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCrypto,
@@ -305,6 +310,21 @@ func (l *CommLoop) resolveWrapperDelegatedIngressDetailed(item IngressItem) (boo
 	}
 	l.routeIngress(message, item.Endpoint, item.IfaceName, derived)
 	return true, nil
+}
+
+// answeredWithoutSignature says whether the root request of a delegated wrapper call is one that is
+// answered by an ordinary local response: a restricted internal component, the browser a local
+// instance owner controls through the bridge (local.ui) or an anonymous public browser. Only a signed
+// request from another instance is answered by a signed envelope.
+func answeredWithoutSignature(root junction.Delivery) bool {
+	if _, restricted := root.RestrictedLocal(); restricted {
+		return true
+	}
+	if _, browser := root.LocalUI(); browser {
+		return true
+	}
+	_, public := root.PublicWeb()
+	return public
 }
 
 func projectDelegatedWrapperOrigin(message *circulation.Message, boundary string) bool {

@@ -1,0 +1,66 @@
+{
+  "brique": {
+    "cap_name": "continuity.stranded",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "continuity.stranded",
+    "description": "Finds the continuities that cannot go on by themselves: a run that died, or work waiting with no run to take it. It only reads."
+  },
+  "functional": {
+    "#root": {
+      "role": "Examine the continuities of the canonical Structure and name those whose run died or whose work is waiting with no run to take it.",
+      "inputs": {
+        "params": {
+          "continuity_ids": {
+            "type": "array",
+            "_comment": "Optional. Limits the examination to these continuities. Absent: every continuity of the Structure."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_ids": {
+            "type": "array"
+          },
+          "reasons": {
+            "type": "object"
+          },
+          "examined": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "array"
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "The continuities of the Structure become the identifiers of those that need a run, each with the reason.",
+        "invariants": [
+          "Examining a continuity only reads its state: nothing is written.",
+          "A continuity is stranded when its runtime says running or waiting for a run that is not alive in this process.",
+          "A continuity is stranded when it is idle and holds a pending message that its journal holds, a current message or an active wait group.",
+          "An archived or suspended continuity, and an idle continuity with no work, is never stranded.",
+          "The continuities are taken from the canonical Structure continuities, in its order; when continuity_ids is given, only these are examined."
+        ],
+        "success": [
+          "continuity_ids lists the stranded continuities and reasons says why for each."
+        ],
+        "failure": [
+          "Fails if the Structure of the continuities cannot be read.",
+          "A continuity whose Matters cannot be read is skipped and named in skipped; it does not stop the others."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "Alive means alive in this process (substrate liveness): after a restart no run is alive, so every running or waiting continuity is stranded.",
+          "Contract only: the grain of its resolution is left open."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

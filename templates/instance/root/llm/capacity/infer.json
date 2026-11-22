@@ -1,0 +1,143 @@
+{
+  "brique": {
+    "cap_name": "infer",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "infer",
+    "description": "Route a canonical LLM inference request to the capacity responsible for its declared provider."
+  },
+  "functional": {
+    "#root": {
+      "role": "Route an inference request to the provider capacity identified by the provider parameter and return its canonical response, without reading the request.",
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object",
+            "_comment": "Required request conforming to /root/llm/schema/request. Transit parameter: forwarded as is to the provider capacity and never read by the router, so it may arrive as a value or as a transit reference."
+          },
+          "provider": {
+            "_comment": "Required. Provider that executes the inference (openai, anthropic, mistral, scaleway, fake or recorded). It must be the provider declared in request.provider: the router reads only this parameter, never the request.",
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object",
+            "_comment": "Inference response conforming to /root/llm/schema/response."
+          }
+        }
+      },
+      "effects": {},
+      "transformation_contract": {
+        "morphing": "A canonical inference request addressed to a provider becomes the canonical response returned by that provider capacity.",
+        "invariants": [
+          "The request is forwarded without cognitive modification.",
+          "infer performs no provider API adaptation.",
+          "infer performs no inference itself.",
+          "infer holds no provider credentials.",
+          "The provider capacity is responsible for provider-specific adaptation, execution, and response normalization.",
+          "The request and the response are transit values: no Matter is read, written or created, and nothing is persisted.",
+          "The provider parameter is mandatory and is the only input of the provider selection.",
+          "The request is opaque to infer: its content (model, messages, parameters, requirements) is never read by the router and is validated by the provider capacity.",
+          "The provider parameter designates the same provider as request.provider; keeping them consistent is the caller's responsibility."
+        ],
+        "success": [
+          "The declared provider corresponds to a supported provider capacity.",
+          "The selected provider capacity completes successfully.",
+          "The provider capacity returns a canonical response."
+        ],
+        "failure": [
+          "The declared provider is unsupported.",
+          "The selected provider capacity returns an error.",
+          "The provider parameter is absent."
+        ]
+      },
+      "resolution": {
+        "\u003eswitch": {
+          "on": "$input.provider",
+          "cases": [
+            {
+              "value": "openai",
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/llm/infer.openai",
+                  "with": {
+                    "request": "$input.request"
+                  },
+                  "await_response": true
+                }
+              }
+            },
+            {
+              "value": "anthropic",
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/llm/infer.anthropic",
+                  "with": {
+                    "request": "$input.request"
+                  },
+                  "await_response": true
+                }
+              }
+            },
+            {
+              "value": "mistral",
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/llm/infer.mistral",
+                  "with": {
+                    "request": "$input.request"
+                  },
+                  "await_response": true
+                }
+              }
+            },
+            {
+              "value": "scaleway",
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/llm/infer.scaleway",
+                  "with": {
+                    "request": "$input.request"
+                  },
+                  "await_response": true
+                }
+              }
+            },
+            {
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/agentic/test/infer.fake",
+                  "await_response": true,
+                  "with": {
+                    "request": "$input.request"
+                  }
+                }
+              },
+              "value": "fake"
+            },
+            {
+              "then": {
+                "invoke": {
+                  "@capacity": "/root/agentic/test/infer.recorded",
+                  "await_response": true,
+                  "with": {
+                    "request": "$input.request"
+                  }
+                }
+              },
+              "value": "recorded"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

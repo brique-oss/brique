@@ -1,0 +1,227 @@
+{
+  "brique": {
+    "cap_name": "mailbox.ack",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "mailbox.ack",
+    "description": "Acknowledges a mailbox message successfully consumed by its owning run and removes its mailbox entry while preserving the durable continuity message."
+  },
+  "functional": {
+    "#root": {
+      "role": "Finalize successful mailbox consumption by verifying ownership and removing the claimed entry through one guarded mailbox write, without altering durable message history.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "acknowledged": {
+            "type": "boolean"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "mailbox": "Removes exactly one claimed mailbox entry owned by the requesting run."
+      },
+      "transformation_contract": {
+        "morphing": "A successfully consumed claimed mailbox entry becomes absent from the mailbox while its durable message remains part of continuity history.",
+        "invariants": [
+          "Only the run owning the claimed entry may acknowledge it.",
+          "A pending entry cannot be acknowledged.",
+          "Acknowledgement removes mailbox consumption state only.",
+          "The durable message referenced by message_id is never deleted or mutated.",
+          "An acknowledged message cannot later be reinserted with the same message id.",
+          "Acknowledgement produces no replay, wake, or cognitive effect.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "The operation mutates a single Matter through one matter.write guarded by expected_revision, and is atomic at the engine level for that Matter only."
+        ],
+        "success": [
+          "The targeted entry is verified as claimed by run_id.",
+          "The mailbox entry is removed by one mailbox write guarded by expected_revision.",
+          "The durable message remains untouched in the journal."
+        ],
+        "failure": [
+          "Fails if the mailbox does not belong to continuity_id.",
+          "Fails if the entry does not exist according to the chosen technical not-found policy.",
+          "Fails if the entry is pending.",
+          "Fails if claimed_by differs from run_id.",
+          "Failure leaves mailbox state unchanged.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "mailbox.ack delegates no architectural behavior to another capacity.",
+          "Clearing runtime.current_message_id belongs to pilot.activate after acknowledgement succeeds.",
+          "The implementation may report an already-acknowledged condition idempotently, but it must never recreate the entry.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model."
+        ]
+      },
+      "resolution": {
+        "\u003esequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the three Matters owned by the target continuity from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if one of the three derived Matters does not exist."
+                  ],
+                  "invariants": [
+                    "Matter IDs follow the convention continuity_\u003cid\u003e (header), journal_\u003cid\u003e, mailbox_\u003cid\u003e, runtime_\u003cid\u003e.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs of its continuity, mailbox, and runtime."
+                }
+              }
+            },
+            {
+              "#locate": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "entry": {
+                      "type": "object"
+                    },
+                    "found": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Resolve the mailbox entry targeted by message_id.",
+                "transformation_contract": {
+                  "invariants": [
+                    "The lookup does not mutate mailbox state."
+                  ],
+                  "morphing": "A mailbox message identifier becomes its current mailbox entry or an explicit absence result."
+                }
+              }
+            },
+            {
+              "#authorize": {
+                "inputs": {
+                  "params": {
+                    "entry": {
+                      "type": "object"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "authorized": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Verify that the entry is currently claimed and owned by the requesting run.",
+                "transformation_contract": {
+                  "failure": [
+                    "Pending, unowned, or differently owned entries reject acknowledgement."
+                  ],
+                  "invariants": [
+                    "entry.status must equal claimed.",
+                    "entry.claimed_by must equal run_id."
+                  ],
+                  "morphing": "A claimed mailbox entry and run identity become an authorized or rejected acknowledgement request.",
+                  "success": [
+                    "Only the current consumption owner may proceed."
+                  ]
+                }
+              }
+            },
+            {
+              "#remove_entry": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "acknowledged": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Remove the authorized mailbox entry through one guarded mailbox write.",
+                "transformation_contract": {
+                  "failure": [
+                    "If the guarded write cannot be completed, the entry remains claimed and intact."
+                  ],
+                  "invariants": [
+                    "Removal is one mailbox write guarded by expected_revision; on conflict the mailbox is re-read and ownership re-verified.",
+                    "No other mailbox entry is modified.",
+                    "No durable continuity message is modified."
+                  ],
+                  "morphing": "An authorized claimed mailbox entry becomes permanently absent from active mailbox consumption state.",
+                  "success": [
+                    "The entry is no longer present in mailbox.entries."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

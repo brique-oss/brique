@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/continuity_succession.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of Continuity succession: token-based compaction, archival, lineage, and message redirection.",
+    "name": "continuity_succession"
+  },
+  "subjective": {}
+}

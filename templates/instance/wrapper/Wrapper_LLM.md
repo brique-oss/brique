@@ -58,7 +58,7 @@ Condensed operational reference. Full rationale: `wrapper/Wrapper.md`. Read that
 ```
 Source-change detection is off unless the wrapper entry sets `"source_check_interval_ms"` (e.g. `1000`). `watch` is relative to `<context_dir>/code/<wrapper_name>/` (the example assumes a context directly under the instance's `root/`; one `../` per directory level) and makes the engine restart the wrapper when the shared library changes.
 Wrapper output is discarded unless `"run":{"log":{"enabled":true,"max_bytes":1048576}}` is set on the wrapper entry (off by default): the stdout/stderr of the process then go to `<context_dir>/tmp/wrapper_<wrapper_name>/wrapper.log` (bounded by `max_bytes`, one `.1` file kept; `/k/<secret>` is redacted), and a wrapper that exits before it is ready reports its exit status and last output lines in `ready_error`. Turn it on when a wrapper dies at startup without an explanation.
-Wrapper defaults shown above: globally bounded execution, bounded pending queue, 64 MiB maximum serialized `@file` payload, one-hour transient lifetime. Responses and stop control bypass the work queue. A full queue refuses an awaited call with `code:"refused", details.reason:"busy"`; do not retry without backoff. Python, Go and C++ automatically switch transit above the file limit to a transient Matter; use a semantic Matter explicitly only when data must survive.
+Wrapper defaults shown above: globally bounded execution, bounded pending queue, 64 MiB maximum serialized `@file` payload, one-hour transient lifetime. Responses and stop control bypass the work queue. A full queue refuses an awaited call with `code:"refused", details.reason:"busy"`, before running it; the runtime already asks again with a growing random pause (`BRIQUE_BUSY_ATTEMPTS`, 8 by default), so never write a retry loop for it. Python, Go and C++ automatically switch transit above the file limit to a transient Matter; use a semantic Matter explicitly only when data must survive.
 3. Capacity descriptor (`capacity/<name>.json`) must set `brique.kind:"interpreted"`, `brique.lang:"python"`, `brique.wrapper:"<wrapper_name>"`, `brique.rel_ctx:"<context relative to wrapper root, "" if same as boundary>"`.
 
 ## The one rule that matters most
@@ -209,7 +209,7 @@ res = await runtime.calls.call(
 out = await res.value("image")
 ```
 
-`call` emits each parameter in the right form, moves every `MatterRef` to `intention.matters` with the parameter name as `repr`, picks the path, and releases what it posted if the callee is not found or answers with an error (not on an engine timeout). A timed-out direct call is cancelled and awaited through cleanup before release. Errors: `CapacityCallError` (engine path, carries the engine code), the callee's own exception (direct path), `asyncio.TimeoutError`. Use `emit_intention` / `emit_and_wait` directly only for non-capacity targets (`matter.*`, `meaning.query`, traces).
+`call` emits each parameter in the right form, moves every `MatterRef` to `intention.matters` with the parameter name as `repr`, picks the path, and releases what it posted if the callee is not found or answers with an error (not on an engine timeout). A timed-out direct call is cancelled and awaited through cleanup before release. Errors: a typed `CapacityCallError` (engine path: `Busy`, `RevisionMismatch`, `LineCountMismatch`, `ConnectionLost`, `NotFound`; carries the engine code, message and details), the callee's own exception (direct path), `asyncio.TimeoutError`. Use `emit_intention` / `emit_and_wait` directly only for non-capacity targets (`matter.*`, `meaning.query`, traces).
 
 Returns are plain data unless the wrapper turned on `runtime.transit.emit_returns`; do not return `@file`/`@object` yourself. The serialized control message is always capped at 4 MiB; return a matter reference when compatibility mode would otherwise exceed it.
 
@@ -237,7 +237,28 @@ def write_cache(value: object) -> dict:
 
 ## Long-running capacities
 
-Call `await runtime.notify_running()` zero/one/many times while still working, before final `return`. No-op outside capacity execution — always safe to call. Does not replace the final return value. No descriptor flag needed — purely a runtime call inside the hosted function.
+Say that you are still working, zero/one/many times, before the final `return`: Python `await runtime.notify_running()`, Go `params.NotifyRunning()`, C++ `runtime.notify_running()`. No-op outside capacity execution — always safe. Does not replace the final return value. No descriptor flag needed.
+
+For work that may last, ask for a heartbeat (a `running` at once, then one every `BRIQUE_HEARTBEAT_MS`, 10 s, until the block ends): Python `async with runtime.keepalive():`, Go `stop := params.Keepalive(); defer stop()`, C++ `wrapper::Keepalive alive(runtime);`. It is never automatic: ask for it where the work may last, never around code that could be stuck.
+
+## Shared mechanisms — same behavior in Python, Go and C++ (Wrapper.md §14.1)
+
+Use these; never rewrite them in a capacity. Rules are fixed in `wrapper/vectors/`.
+
+| Need | Python | Go | C++ |
+|---|---|---|---|
+| Read/write Matters, guarded | `MatterClient(runtime, ctx)`: `read`, `read_text`, `read_many`, `read_lines`, `stat`, `exists`, `create`, `write(expected_revision=)`, `append_lines(lines, expected_line_count)`, `update(id, compute)` | `params.Store(ctx)`: `Read`, `ReadText`, `ReadMany`, `ReadLines`, `Stat`, `Exists`, `Create`, `Write(&rev)`, `AppendLines`, `Update` | `MatterClient::over(runtime, ctx)` (`matter_client.hpp`): same names, raw JSON strings |
+| Take turns on shared state | `async with runtime.scheduler.critical(key, ...):` | `release := params.Critical(key, ...); defer release()` | `CriticalSection s(runtime.scheduler(), {key, ...});` |
+| React to an error | `except Busy / RevisionMismatch / LineCountMismatch / ConnectionLost / NotFound` (all `CapacityCallError`) | `IsBusy`, `IsRevisionMismatch`, `IsLineCountMismatch`, `IsNotFound`, `IsOutcomeUnknown`; `err.(*CallError).Kind()` | `e.kind()`, `is_busy`, `is_revision_mismatch`, `is_line_count_mismatch`, `is_not_found`, `e.outcome_unknown()` |
+| Declare a setting | `settings.declare(name, default, minimum, what=)` | `DeclareSetting(name, default, minimum, what)` | `declare_setting(name, default, minimum, what)` |
+| Look at the scheduler | `runtime.scheduler.stats()` | `runtime.Scheduler().Stats()` | `runtime.scheduler().stats()` |
+
+Rules that go with them:
+- A write is guarded: `expected_revision` (sent as a decimal string; a revision is above 2^53) or `expected_line_count`. A `RevisionMismatch` means read again; `update` does it for you, `BRIQUE_CAS_ATTEMPTS` times with a short random pause.
+- A critical section is short: "read, compute, guarded write". Never hold it across an inference or a call that may last; never hold a parent's lock around a call on a child. Waiting for it gives the execution slot back.
+- `ConnectionLost` (`outcome_unknown`): the call may have been executed — never ask again blindly. A timeout is the same.
+- A large Matter is read through a one-shot lease (HTTP 409 = it changed meanwhile, the client reads again); a journal block above 240 KiB is appended through a lease.
+- Settings are `BRIQUE_<NAME>` in `run.env`; the engine reads them at its start. `kill -USR1 <pid>` writes `$TMPDIR/brique_wrapper_tasks_<pid>.txt` (slots, settings not at their default, tasks). The table of settings is in Wrapper.md §14.1.3.
 
 ## User traces from wrapper code
 
@@ -259,9 +280,9 @@ Model as an outbound intention to a trace-writing capability (`trace_kind:"user"
 - One wrapper runtime process per wrapper name + boundary context. No per-subcontext process.
 - Every binding resolves to a live symbol — no dynamic runtime registration (`register_capacity(...)` doesn't exist; bindings load once from `bindings.py` at bootstrap).
 - Ordering is guaranteed per matter. A capacity runs its calls in parallel, and may wait for another call of itself; declare it serial (`@serial` in Python, `Serial: true` in Go, `serial = true` in C++) to run one call at a time, in arrival order.
-- Matter writes: no intermediate invalid state exposed — visible only as completed.
+- Matter writes: no intermediate invalid state exposed — visible only as completed. Writes from a wrapper are guarded by revision or line count; use the Matter client.
 - Communication loop must stay responsive; never block it on outbound waits.
-- Excess concurrent work queues; never breaks the runtime.
+- Excess concurrent work queues; never breaks the runtime. A saturated callee refuses "busy" before running; the runtime asks again, the capacity does not.
 - State = matter, transit = `@file`/`@object`, never the reverse. A capacity keeps nothing between calls.
 - Wrapper-owned files (`ext_ref`): single writer, atomic replace for state, a JSONL line is committed by its LF.
 - Wrapper never does global routing / global context reconstruction / meaning interpretation — that's the engine's job.

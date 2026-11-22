@@ -1,0 +1,134 @@
+{
+  "brique": {
+    "cap_name": "reading.mark",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "reading.mark",
+    "description": "Advances the reading cursor of a reader on a conversation (a lineage), so that the interface can tell what is new; the cursor never moves back."
+  },
+  "functional": {
+    "#root": {
+      "role": "Advance, in the reading_cursors Matter, the cursor of one reader on one lineage to the given line, never moving it back, creating the Matter on first use.",
+      "inputs": {
+        "params": {
+          "lineage_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "reader": {
+            "type": "string",
+            "_comment": "Optional. The reader; user:1 by default."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "lineage_id": {
+            "type": "string"
+          },
+          "reader": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "_comment": "The cursor after the mark."
+          },
+          "changed": {
+            "type": "boolean",
+            "_comment": "True when the cursor moved forward."
+          }
+        },
+        "@matter": {
+          "modify": {
+            "cursors": {
+              "schema": "/root/agentic/schema/reading_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "cursors": "Creates the reading_cursors Matter on first use and writes it when a cursor moves forward; writes nothing otherwise."
+      },
+      "transformation_contract": {
+        "morphing": "A reader and the line up to which they have read a conversation become that reader's cursor on that conversation, moved forward only.",
+        "invariants": [
+          "The cursor of a reader on a lineage never moves back: it becomes the greater of the stored value and seq.",
+          "A mark that does not move the cursor writes nothing.",
+          "The reading_cursors Matter is created empty on first use, in the same operation as the first mark.",
+          "A mark never touches the cursors of other lineages or of other readers.",
+          "Marks that arrive together are all kept: the write is guarded by expected_revision and retried on conflict.",
+          "The answer carries the cursor after the mark and whether it moved forward.",
+          "A mark requires the continuity it names to exist: a cursor never outlives the conversation it names, and a late mark of a conversation just deleted creates nothing."
+        ],
+        "success": [
+          "The cursor of the reader on the lineage is at least seq."
+        ],
+        "failure": [
+          "Fails with an invalid request when lineage_id or reader is empty or seq is not a non-negative integer, and writes nothing.",
+          "Fails not found when the continuity named by lineage_id does not exist, and writes nothing."
+        ],
+        "notes": [
+          "What counts as new is decided by the interface, which compares the lines of a conversation with this cursor."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#ensure": {
+                "role": "Create the reading_cursors Matter, empty, when it does not exist.",
+                "inputs": {
+                  "params": {}
+                },
+                "outputs": {
+                  "payload": {}
+                },
+                "transformation_contract": {
+                  "morphing": "A missing Matter becomes an empty set of cursors."
+                }
+              }
+            },
+            {
+              "#advance": {
+                "role": "Move the cursor forward under a guarded write.",
+                "inputs": {
+                  "params": {
+                    "lineage_id": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    },
+                    "reader": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "seq": {
+                      "type": "integer"
+                    },
+                    "changed": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A cursor and a line become the greater of the two."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

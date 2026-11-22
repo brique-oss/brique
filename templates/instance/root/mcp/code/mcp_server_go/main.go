@@ -27,15 +27,23 @@ import (
 func main() {
 	rt := wrapper.NewRuntime()
 
-	mcpAddr := envOr("BRIQUE_MCP_ADDR", ":18200")
+	// Local by default: the loopback interface. Opening another address is a decision, said out loud.
+	mcpAddr := envOr("BRIQUE_MCP_ADDR", "127.0.0.1:18200")
+	if err := checkListenAddr(mcpAddr, os.Getenv("BRIQUE_MCP_ALLOW_REMOTE") == "true"); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp wrapper: %v\n", err)
+		os.Exit(2)
+	}
+	allowedOrigins := splitList(os.Getenv("BRIQUE_MCP_ALLOWED_ORIGINS")) // none by default: a web page is not a client of this server
 
 	if err := rt.Run(func(rt *wrapper.Runtime) wrapper.BindingsFragment {
-		fragment := BuildBindings(rt)
+		names := wrapperNamesFromEnv()
+		fragment := BuildBindings(rt, names)
 
 		// Wire the MCP server once the wrapper runtime is initialized.
-		client := NewBriqueCapacityClient(rt)
+		client := NewBriqueCapacityClient(rt, names)
 		handler := NewMCPHandler(client)
 		srv := NewMCPServer(mcpAddr, handler)
+		srv.guard = newGuard(mcpAddr, allowedOrigins)
 		srv.Start()
 
 		fragment.Shutdown = append(fragment.Shutdown, srv.Stop)
@@ -55,4 +63,14 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func splitList(value string) []string {
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

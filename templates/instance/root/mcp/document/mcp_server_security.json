@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/mcp_server_security.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Intention of the local boundary of the MCP server: who can talk to it, the sessions, the bounds, and the two profiles (mcp_server_go and mcp_reader) that the engine enforces.",
+    "name": "mcp_server_security"
+  },
+  "subjective": {}
+}

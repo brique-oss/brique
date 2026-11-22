@@ -464,3 +464,45 @@ func TestDerivedCapabilityRefusalIsJournaledUnderTheParentAdmission(t *testing.T
 		t.Fatal("DeriveExternal accepted it")
 	}
 }
+
+// A wrapper capacity called from a browser is answered like a family capacity: by an ordinary local
+// response to the browser, not by a signed envelope. Only a signed request from another instance is
+// answered through the signed path. Sent to that path, the response of a browser root could not
+// obtain a permit and was dropped: the page waited for an answer that never came.
+func TestWrapperRootResponsesToABrowserAreAnsweredLocallyAndSignedOnesStaySigned(t *testing.T) {
+	world := newRestrictedWorld(t)
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	request := circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
+		IntentionID: "123e4567-e89b-42d3-a456-426614174000", AwaitResponse: true,
+		To:   circulation.Address{Context: "/root/catalog", Type: circulation.ValueTypeUser, Cap: "sample.echo"},
+		From: circulation.Address{Context: "/forged", Type: circulation.ValueTypeUser},
+	}}
+
+	localAdmission, err := world.runtime.AdmitLocalUI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser, err := junction.AdmitLocalUI(localAdmission, "bbc1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "root", request, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !answeredWithoutSignature(browser) {
+		t.Fatal("the response of a wrapper to a locally authenticated browser must be a local response")
+	}
+
+	publicAdmission, err := world.runtime.AdmitPublicWeb()
+	if err != nil {
+		t.Fatal(err)
+	}
+	visitor, err := junction.AdmitPublicWeb(publicAdmission, "pub_channel", "root", request, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !answeredWithoutSignature(visitor) {
+		t.Fatal("the response of a wrapper to a public browser must be a local response")
+	}
+
+	if answeredWithoutSignature(newCommWrapperFixture(t).rootDelivery(t)) {
+		t.Fatal("a signed request from another instance must be answered through the signed path")
+	}
+}

@@ -1,0 +1,39 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "continuity",
+    "description": "Defines the continuity Matter as an element: the header of one cognitive continuity, a Matter whose substance holds its identity, intentions, pilot reference and the reference to its journal, described by the continuity_data schema."
+  },
+  "functional": {
+    "brique": {
+      "kind": [
+        "matter"
+      ],
+      "substance_mode": [
+        "brique"
+      ],
+      "substance_type": [
+        "text"
+      ]
+    },
+    "objective": {
+      "type": [
+        "continuity"
+      ]
+    },
+    "functional": {
+      "_format_note": "Required. The substance is a JSON document.",
+      "_schema_ref_note": "Required. Schema constraining the content (substance) of the Matter.",
+      "format": [
+        "json"
+      ],
+      "schema_ref": [
+        "/root/agentic/schema/continuity_data"
+      ]
+    },
+    "subjective": {}
+  },
+  "subjective": {}
+}

@@ -459,7 +459,9 @@ It should expose operations equivalent to:
 
 The Scheduler and Queue enforce concurrency policy.
 
-The generic runtime configures it through `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`). Both must be positive integers. Capacity and matter work enters this bounded queue; responses and `wrapper_stop` bypass it to avoid starvation. When the pending queue is full, an awaited intention receives `refused/busy`, while fire-and-forget work is dropped and logged. Callers must use bounded backoff rather than an immediate retry loop.
+The generic runtime configures it through `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`). Both must be positive integers. Capacity and matter work enters this bounded queue; responses and `wrapper_stop` bypass it to avoid starvation. When the pending queue is full, an awaited intention receives `refused/busy` before it runs, while fire-and-forget work is dropped and logged (`scheduler_overloaded`) and counted. The runtime of the caller asks again for it with bounded exponential backoff and jitter (`BRIQUE_BUSY_ATTEMPTS`, `BRIQUE_BUSY_BASE_MS`, `BRIQUE_BUSY_CAP_MS`), so hosted code writes no retry loop of its own (Wrapper.md §14.1.1).
+
+The scheduler (`scheduler.py`) also owns the keyed critical sections of hosted code (`runtime.scheduler.critical(*keys)`, a wait for a taken lock gives the execution slot back) and describes itself with `stats()`: free slots, active, pending, queued, refused since the start, locks, ordered chains (Wrapper.md §14.1.4 and §14.1.6).
 
 The wrapper must support:
 
@@ -576,6 +578,18 @@ It should expose operations equivalent to:
 Cheap small-scalar/reference/local-object emission stays on the event loop; potentially expensive serialization and file work is sent to a worker thread.
 
 ---
+
+### 5.11.1 Shared Mechanisms
+
+The Python runtime implements, with the other two runtimes and against the same vectors (`vectors/`), the mechanisms of Wrapper.md §14.1:
+
+* `busy.py` — the retry of a call refused busy (`outbound.emit_and_wait`, `calls.call`, `busy_attempts=` per call)
+* `errors.py` — the typed errors of a call (`typed_error`, `register` for the reasons of hosted code)
+* `settings.py` — the registry of numeric settings (`value`, `describe`, `not_default`, `declare`, `registry_table`; `python3 -m wrapper.settings table <settings.json>` generates the table)
+* `scheduler.py` — `KeyedLocks` and `WorkScheduler.critical`, `stats()`
+* `matter_client.py` — `MatterClient` (inline or lease reads, guarded writes, journal reads and appends, `update`) and `retry_on_conflict`
+* `keepalive.py` — `keepalive` and `runtime.keepalive()`
+* `diagnostic.py` — the dump on `SIGUSR1` (`dump_tasks`, `install(extra=...)`)
 
 ### 5.12 Capacity Caller
 
@@ -876,7 +890,7 @@ The specification requires normalized response emission, not a universal excepti
 The reference runtime maps two families explicitly (`router.py`):
 
 * `TransitError` becomes an error response with code `not_found` (reference not found) or `invalid` (anything else), and `details.reason`
-* `CapacityCallError`, raised when a call made by the capacity got an error response, travels up unchanged: same code, message and details
+* `CapacityCallError`, raised when a call made by the capacity got an error response, travels up unchanged: same code, message and details. It is raised as the most specific type for the reason (`Busy`, `RevisionMismatch`, `LineCountMismatch`, `ConnectionLost`, `NotFound`, all subclasses, `errors.py`; Wrapper.md §14.1.2)
 
 Any other exception becomes `internal` with a public generic message and an `error_id`; the full exception is written only to the wrapper's structured log. Malformed messages, orphan responses, queue saturation, failed notifications and failed shutdown hooks are also logged. This avoids exposing local paths or secrets while retaining a correlation point for diagnosis.
 
@@ -893,7 +907,7 @@ An implementation may choose:
 * per-outbound-wait timeout
 * externally configured timeout
 
-The reference runtime applies an inactivity budget to capacity calls (`timeout_s`), on the engine path and on the direct path alike. A `running` response, or `notify_running` on the direct path, renews it. An exhausted budget raises `asyncio.TimeoutError`. Without `timeout_s` there is no timeout.
+The reference runtime applies an inactivity budget to capacity calls (`timeout_s`), on the engine path and on the direct path alike. A `running` response, or `notify_running` on the direct path, renews it. An exhausted budget raises `asyncio.TimeoutError`. Without `timeout_s` there is no timeout. A call that timed out is never asked again by the runtime: it may have run. A capacity that may last asks for a heartbeat with `async with runtime.keepalive():` (period `BRIQUE_HEARTBEAT_MS`; never automatic).
 
 ---
 
@@ -974,6 +988,7 @@ A practical Python implementation will often contain classes equivalent to:
 * `AwaitCorrelator`
 * `Scheduler`
 * `LifecycleManager`
+* `MatterClient`, `KeyedLocks`, the typed errors, the settings registry and the diagnostic, the shared mechanisms of Wrapper.md §14.1
 
 In addition, it should include a wrapper-local Python binding configuration module.
 

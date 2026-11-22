@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/user_message_in_flight.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of user conversation with a Continuity while its Matter pilot is working: a request joining the active chain, journal protection during inference, forbidden states, proposed form, and open points.",
+    "name": "user_message_in_flight"
+  },
+  "subjective": {}
+}

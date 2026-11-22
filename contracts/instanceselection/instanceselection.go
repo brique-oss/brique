@@ -29,3 +29,23 @@ type WebStatus struct {
 	WebPID int
 	WebURL string
 }
+
+// Association is what the owner chose for one browser extension: the instances it vouches for
+// (a page served by one of them is admitted as local.ui) and the one instance that carries the
+// person's identity, which signs when the page belongs to an instance that is not local.
+type Association struct {
+	Revision  uint64
+	Instances []Selection
+	// Identity is the alias of the instance that signs for pages of other instances.
+	Identity string
+}
+
+// Instance returns the selection of an associated instance by alias.
+func (association Association) Instance(alias string) (Selection, bool) {
+	for _, selection := range association.Instances {
+		if selection.Alias == alias {
+			return selection, true
+		}
+	}
+	return Selection{}, false
+}

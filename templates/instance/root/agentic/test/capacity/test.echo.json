@@ -1,0 +1,52 @@
+{
+  "brique": {
+    "cap_name": "test.echo",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "test.echo",
+    "description": "Test tool: answers immediately with the parameters it received and records the call."
+  },
+  "functional": {
+    "#root": {
+      "role": "Answer immediately with the received parameters and record the invocation.",
+      "inputs": {
+        "params": {
+          "payload": {
+            "type": "any"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "echo": {
+            "type": "any"
+          },
+          "call_index": {
+            "type": "integer"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A set of parameters becomes the same parameters echoed back with the rank of the call.",
+        "invariants": [
+          "The invocation is always recorded, whatever the parameters.",
+          "The call_index is the 1-based rank of the call among all recorded calls of this tool."
+        ],
+        "success": [
+          "The response carries the echoed payload and the call rank."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure only: it carries no business logic and exists to exercise the agentic mechanics."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry describing the call to the tool_calls matter."
+      }
+    }
+  },
+  "subjective": {}
+}

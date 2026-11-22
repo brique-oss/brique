@@ -55,16 +55,16 @@ func TestCatalogReaderInThreeCommands(t *testing.T) {
 	mustOK(t, dir, "principal", "add", "partner-a", "--kind", "instance", "--key", key)
 	mustOK(t, dir, "grant", "add", "partner-a", "read", "/root/catalog/**", "--except", "/root/catalog/secrets/**")
 	out := mustOK(t, dir, "apply")
-	if !strings.Contains(out, "Génération g000002 installée") {
+	if !strings.Contains(out, "Generation g000002 installed") {
 		t.Fatalf("apply output:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/a#matter:m"); !strings.HasPrefix(out, "PERMIS") {
+	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/a#matter:m"); !strings.HasPrefix(out, "ALLOWED") {
 		t.Fatalf("simulate allowed:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/secrets#matter:m"); !strings.HasPrefix(out, "REFUSÉ") || !strings.Contains(out, "exception") {
+	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/secrets#matter:m"); !strings.HasPrefix(out, "DENIED") || !strings.Contains(out, "exception") {
 		t.Fatalf("simulate excepted:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "partner-a", "write", "/root/catalog#matter:m"); !strings.HasPrefix(out, "REFUSÉ") || !strings.Contains(out, "aucun droit") {
+	if out := mustOK(t, dir, "simulate", "partner-a", "write", "/root/catalog#matter:m"); !strings.HasPrefix(out, "DENIED") || !strings.Contains(out, "no right") {
 		t.Fatalf("simulate uncovered:\n%s", out)
 	}
 	if out := mustOK(t, dir, "grant", "list", "partner-a"); !strings.Contains(out, "1. read /root/catalog/** ") || !strings.Contains(out, "sauf /root/catalog/secrets/**") {
@@ -73,13 +73,13 @@ func TestCatalogReaderInThreeCommands(t *testing.T) {
 	if out := mustOK(t, dir, "principal", "list"); !strings.Contains(out, "partner-a") {
 		t.Fatalf("principal list:\n%s", out)
 	}
-	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Aucun changement") {
+	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "No change") {
 		t.Fatalf("second apply:\n%s", out)
 	}
-	if out := mustOK(t, dir, "diff"); !strings.Contains(out, "Aucune différence") {
+	if out := mustOK(t, dir, "diff"); !strings.Contains(out, "No difference") {
 		t.Fatalf("diff:\n%s", out)
 	}
-	if out := mustOK(t, dir, "doctor"); strings.Contains(out, "erreur") {
+	if out := mustOK(t, dir, "doctor"); strings.Contains(out, "error:") {
 		t.Fatalf("doctor:\n%s", out)
 	}
 }
@@ -89,10 +89,10 @@ func TestPublicWebRightsAreConfiguredWithoutAnAccountOrKey(t *testing.T) {
 	mustOK(t, dir, "init", "--instance", "prod-a")
 	mustOK(t, dir, "principal", "add", "public.web", "--kind", "public")
 	mustOK(t, dir, "grant", "add", "public.web", "read", "/root/public/**")
-	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Génération g000002 installée") {
+	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Generation g000002 installed") {
 		t.Fatalf("apply public policy:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "public.web", "read", "/root/public/a#matter:m"); !strings.HasPrefix(out, "PERMIS") {
+	if out := mustOK(t, dir, "simulate", "public.web", "read", "/root/public/a#matter:m"); !strings.HasPrefix(out, "ALLOWED") {
 		t.Fatalf("public read simulation:\n%s", out)
 	}
 	if _, stderr, code := sec(t, dir, "principal", "add", "visitors", "--kind", "public"); code == 0 || !strings.Contains(stderr, "public.web") {
@@ -106,14 +106,14 @@ func TestReservedBrowserActorNeedsAnExplicitGrant(t *testing.T) {
 	mustOK(t, dir, "init", "--instance", "prod-a")
 	mustOK(t, dir, "principal", "add", "peer-a", "--kind", "service", "--key", base64.RawURLEncoding.EncodeToString(public))
 	mustOK(t, dir, "grant", "add", "peer-a", "read", "/root/public/**")
-	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "REFUSÉ") || !strings.Contains(out, "déclaré") {
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "DENIED") || !strings.Contains(out, "declared") {
 		t.Fatalf("unbound browser actor:\n%s", out)
 	}
 	mustOK(t, dir, "grant", "add", "peer-a", "read", "/root/public/ui/**", "--actor", "brique.ui")
-	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/ui/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "PERMIS") {
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/ui/a#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "ALLOWED") {
 		t.Fatalf("bound browser actor:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/other#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "REFUSÉ") {
+	if out := mustOK(t, dir, "simulate", "peer-a", "read", "/root/public/other#matter:m", "--actor", "brique.ui"); !strings.HasPrefix(out, "DENIED") {
 		t.Fatalf("browser actor escaped its binding:\n%s", out)
 	}
 }
@@ -123,10 +123,10 @@ func TestLocalUIAuthorityIsConfiguredAsAKeylessLocalPrincipal(t *testing.T) {
 	mustOK(t, dir, "init", "--instance", "prod-a")
 	mustOK(t, dir, "principal", "add", "local.ui", "--kind", "local")
 	mustOK(t, dir, "grant", "add", "local.ui", "read", "/root/local-ui/**")
-	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Génération g000002 installée") {
+	if out := mustOK(t, dir, "apply"); !strings.Contains(out, "Generation g000002 installed") {
 		t.Fatalf("apply local UI policy:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "local.ui", "read", "/root/local-ui/a#matter:m"); !strings.HasPrefix(out, "PERMIS") {
+	if out := mustOK(t, dir, "simulate", "local.ui", "read", "/root/local-ui/a#matter:m"); !strings.HasPrefix(out, "ALLOWED") {
 		t.Fatalf("local UI simulation:\n%s", out)
 	}
 }
@@ -154,7 +154,7 @@ func TestStrictFlowThroughTheCommandLine(t *testing.T) {
 		t.Fatal("strict mode left an authority key in the security directory")
 	}
 	// Applying the same signed policy again changes nothing...
-	if out := mustOK(t, dir, "apply", "--signed", signed); !strings.Contains(out, "Aucun changement") {
+	if out := mustOK(t, dir, "apply", "--signed", signed); !strings.Contains(out, "No change") {
 		t.Fatalf("repeated signed apply:\n%s", out)
 	}
 	// ...and a stale signed policy is refused once the source has moved on.
@@ -198,7 +198,7 @@ func run0() (string, string, int) {
 func TestDenialsCommandReadsTheJournalWithFilters(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "security")
 	mustOK(t, dir, "init", "--instance", "prod-a")
-	if out := mustOK(t, dir, "denials"); !strings.Contains(out, "Aucun refus") {
+	if out := mustOK(t, dir, "denials"); !strings.Contains(out, "No denial") {
 		t.Fatalf("empty journal:\n%s", out)
 	}
 	logger, err := audit.Open(audit.Options{Directory: filepath.Join(dir, "audit")})
@@ -216,7 +216,7 @@ func TestDenialsCommandReadsTheJournalWithFilters(t *testing.T) {
 	}
 
 	all := mustOK(t, dir, "denials")
-	for _, want := range []string{"resource_denied", "matter/salaires:read", "×3", "[règle p.partner-a.d0]", "capability_denied", "(non authentifié, clé revendiquée bk1_claimed)"} {
+	for _, want := range []string{"resource_denied", "matter/salaires:read", "×3", "[rule p.partner-a.d0]", "capability_denied", "(unauthenticated, claimed key bk1_claimed)"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("denials lacks %q:\n%s", want, all)
 		}
@@ -238,7 +238,7 @@ func TestDenialsCommandReadsTheJournalWithFilters(t *testing.T) {
 			t.Errorf("%v accepted", args)
 		}
 	}
-	if out := mustOK(t, dir, "doctor"); strings.Contains(out, "erreur") {
+	if out := mustOK(t, dir, "doctor"); strings.Contains(out, "error:") {
 		t.Fatalf("doctor on a directory holding a journal:\n%s", out)
 	}
 }
@@ -258,18 +258,18 @@ func TestActorsThroughTheCommandLine(t *testing.T) {
 			t.Errorf("%v:\nwant prefix %q, got\n%s", args, want, out)
 		}
 	}
-	check("PERMIS", "simulate", "partner-a", "read", "/root/catalog/public#matter:m", "--actor", "alice")
-	check("REFUSÉ", "simulate", "partner-a", "read", "/root/catalog/private#matter:m", "--actor", "alice")
-	check("REFUSÉ", "simulate", "partner-a", "read", "/root/catalog/public#matter:m", "--actor", "mallory")
-	check("PERMIS", "simulate", "partner-a", "read", "/root/catalog/public#matter:m") // default entry
-	check("REFUSÉ", "simulate", "partner-a", "read", "/root/catalog/private#matter:m")
-	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/private#matter:m", "--actor", "alice"); !strings.Contains(out, "acteur") {
+	check("ALLOWED", "simulate", "partner-a", "read", "/root/catalog/public#matter:m", "--actor", "alice")
+	check("DENIED", "simulate", "partner-a", "read", "/root/catalog/private#matter:m", "--actor", "alice")
+	check("DENIED", "simulate", "partner-a", "read", "/root/catalog/public#matter:m", "--actor", "mallory")
+	check("ALLOWED", "simulate", "partner-a", "read", "/root/catalog/public#matter:m") // default entry
+	check("DENIED", "simulate", "partner-a", "read", "/root/catalog/private#matter:m")
+	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/private#matter:m", "--actor", "alice"); !strings.Contains(out, "actor") {
 		t.Errorf("the refusal does not say the actor is what refused:\n%s", out)
 	}
 	if out := mustOK(t, dir, "grant", "list", "partner-a", "--actor", "alice"); !strings.Contains(out, "1. read /root/catalog/public/**") {
 		t.Errorf("grant list for an actor:\n%s", out)
 	}
-	if out := mustOK(t, dir, "principal", "list"); !strings.Contains(out, "2 acteur(s)") {
+	if out := mustOK(t, dir, "principal", "list"); !strings.Contains(out, "2 actor(s)") {
 		t.Errorf("principal list:\n%s", out)
 	}
 	mustOK(t, dir, "apply")
@@ -372,7 +372,7 @@ func TestInstanceAndMachineThroughTheCommandLine(t *testing.T) {
 	if out := admin("apply"); !strings.Contains(out, "g000002") {
 		t.Fatalf("apply:\n%s", out)
 	}
-	if out := admin("doctor"); strings.Contains(out, "erreur") {
+	if out := admin("doctor"); strings.Contains(out, "error:") {
 		t.Fatalf("doctor on the split layout:\n%s", out)
 	}
 	if out := admin("key", "show"); !strings.Contains(out, "principal add monsite") {
@@ -432,7 +432,7 @@ func TestTLSCommandsMakeTheHTTPSInterfaceWork(t *testing.T) {
 		t.Fatalf("tls init without a host:\n%s", out)
 	}
 	out, code := admin("tls", "init", "--host", "mon-hote.exemple", "--host", "127.0.0.1", "--addr", "127.0.0.1:9443")
-	if code != 0 || !strings.Contains(out, "Interface HTTPS   : ajoutée") || !strings.Contains(out, "mon-hote.exemple, 127.0.0.1") {
+	if code != 0 || !strings.Contains(out, "HTTPS interface   : added") || !strings.Contains(out, "mon-hote.exemple, 127.0.0.1") {
 		t.Fatalf("tls init:\n%s", out)
 	}
 	context, _ := os.ReadFile(filepath.Join(instance, "context.json"))
@@ -448,17 +448,17 @@ func TestTLSCommandsMakeTheHTTPSInterfaceWork(t *testing.T) {
 	if out, code := admin("tls", "init", "--host", "mon-hote.exemple"); code == 0 || !strings.Contains(out, "--force") {
 		t.Fatalf("a second tls init replaced the certificate:\n%s", out)
 	}
-	if out, code := admin("tls", "init", "--host", "mon-hote.exemple", "--force"); code != 0 || !strings.Contains(out, "déjà présente") {
+	if out, code := admin("tls", "init", "--host", "mon-hote.exemple", "--force"); code != 0 || !strings.Contains(out, "already present") {
 		t.Fatalf("regenerating:\n%s", out)
 	}
 	shown, code := admin("tls", "show")
-	if code != 0 || !strings.Contains(shown, "Empreinte SHA-256") || !strings.Contains(shown, "Certificats de pairs acceptés : 0") {
+	if code != 0 || !strings.Contains(shown, "SHA-256 fingerprint") || !strings.Contains(shown, "Accepted peer certificates: 0") {
 		t.Fatalf("tls show:\n%s", shown)
 	}
-	if out, code := admin("tls", "trust", filepath.Join(machine, "cert.pem")); code != 0 || !strings.Contains(out, "1 certificat") {
+	if out, code := admin("tls", "trust", filepath.Join(machine, "cert.pem")); code != 0 || !strings.Contains(out, "1 certificate") {
 		t.Fatalf("tls trust:\n%s", out)
 	}
-	if shown, _ = admin("tls", "show"); !strings.Contains(shown, "Certificats de pairs acceptés : 1") {
+	if shown, _ = admin("tls", "show"); !strings.Contains(shown, "Accepted peer certificates: 1") {
 		t.Fatalf("tls show after trust:\n%s", shown)
 	}
 	if strings.Contains(out, "PRIVATE") {

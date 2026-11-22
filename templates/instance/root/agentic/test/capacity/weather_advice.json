@@ -1,0 +1,127 @@
+{
+  "brique": {
+    "cap_name": "weather_advice",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "weather_advice",
+    "description": "Pilot plan of the weather test: reads the real weather of a city, then asks one short prompt, held in the Matter weather_advice_prompt, what to wear.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity with a weather lookup followed by one prompt.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message naming a city becomes a message advising what to wear there this morning.",
+        "invariants": [
+          "The weather is read once, by an ordinary capacity, and leaves no trace in the continuity.",
+          "Exactly one pilot.infer step, fed with the weather returned; its prompt is the Matter weather_advice_prompt, not text written in this plan."
+        ],
+        "notes": [
+          "Test infrastructure of the weather scenarios."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/weather.fetch",
+                "as": "weather",
+                "with": {
+                  "city": "$input.message.content.city"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "advice",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "advice",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "advice": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "advice"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 80,
+                      "temperature": 0,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "@matter": {
+                    "prompt_matters": [
+                      "/root/agentic/test/weather_advice_prompt"
+                    ]
+                  },
+                  "prompt_parts": [
+                    "$weather.payload"
+                  ],
+                  "prompt_order": "matters_first"
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$advice.payload.output.advice"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

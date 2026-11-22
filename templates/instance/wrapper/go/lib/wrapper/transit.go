@@ -115,11 +115,11 @@ type TransitService struct {
 }
 
 func NewTransitService(runtime *Runtime) (*TransitService, error) {
-	maxBytes, err := positiveEnv("BRIQUE_TRANSIT_MAX_BYTES", 64*1024*1024)
+	maxBytes, err := strictSetting("BRIQUE_TRANSIT_MAX_BYTES")
 	if err != nil {
 		return nil, err
 	}
-	ttlSeconds, err := positiveEnv("BRIQUE_TRANSIT_TTL_SECONDS", 60*60)
+	ttlSeconds, err := strictSetting("BRIQUE_TRANSIT_TTL_SECONDS")
 	if err != nil {
 		return nil, err
 	}

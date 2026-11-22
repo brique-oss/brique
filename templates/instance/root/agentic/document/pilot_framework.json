@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/pilot_framework.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Pilot reasoning framework: a short text written once as the first line of every Continuity, explaining how a pilot acts in the Brique world.",
+    "name": "pilot_framework"
+  },
+  "subjective": {}
+}

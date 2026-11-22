@@ -292,7 +292,9 @@ npm run build:brique          # writes the engine, Brique Sec, launcher and brow
 ./bin/brique -root_path my-instance/root
 ```
 
-An instance runs locally with no further setup.
+An instance runs locally with no further setup. The `llm` Context needs an API key for the provider you use: it is a secret of Brique Sec
+(value, right and need are three separate steps, see the `README.md` of the instance template, `templates/instance/README.md`). No key
+is ever part of an instance or of its template.
 
 To build an integrity-checked runtime directory containing those binaries and the compatible
 Spark/Pulse assets:
@@ -324,7 +326,7 @@ emits content-hashed assets, one logical bootstrap per UI, `brique.spark-ui-cata
 all bootstraps and route/identity relationships before it listens. It still accepts legacy `/1`
 snapshots. Rendering never exposes the privileged engine WebSocket. A launcher-managed host proxies
 the dedicated `public.web` channel; an installed browser bridge can switch the same Pulse UI to the
-identified path after trusted user activation, with teardown between authorities. A manually started
+identified path, with teardown between authorities. A manually started
 host needs `-public_web_backend` for that proxy. The static catalog is a build inventory, not an
 authorization decision. The engine's `ui.list`/`ui.open` capacities intersect this verified inventory
 with currently active Contexts and the caller's current read admission; they never build or create a

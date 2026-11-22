@@ -1,0 +1,92 @@
+{
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "",
+    "ctx_name": "llm",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "config": {
+              "allow_any_origin": false,
+              "egress_enabled": true,
+              "idle_timeout_ms": 0,
+              "ingress_enabled": true,
+              "path": "/wrapper/llm",
+              "read_limit": 0,
+              "read_timeout_ms": 0,
+              "request_timeout_ms": 0,
+              "tls_cert_file": "",
+              "tls_insecure_skip_verify": false,
+              "tls_key_file": "",
+              "tls_server_name": "",
+              "write_timeout_ms": 0
+            },
+            "driver": "ws",
+            "name": "llm_llm",
+            "type": "wrapper"
+          }
+        ],
+        "wrapper_boundary": [
+          "llm_llm"
+        ]
+      },
+      "execution": {
+        "default_invoke_timeout_ms": 0,
+        "wrappers": [
+          {
+            "mode": "interpreted",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "cwd": "code/llm_llm",
+              "env": {
+                "BRIQUE_MAX_CONCURRENCY": "64",
+                "BRIQUE_WRAPPER_NAME": "llm_llm"
+              },
+              "env_name": "env1",
+              "log": {
+                "enabled": false
+              },
+              "shell": false,
+              "secrets": [
+                {
+                  "name": "anthropic",
+                  "env": "ANTHROPIC_API_KEY"
+                }
+              ]
+            },
+            "stop_timeout_ms": 1000,
+            "watch": [
+              "../../../../wrapper/python/lib"
+            ],
+            "wrapper_name": "llm_llm"
+          }
+        ]
+      },
+      "matter": {},
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "minimal",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.0"
+  },
+  "objective": {
+    "name": "llm",
+    "description": "Makes language-model inference accessible in Brique: resolves an inference resource suited to an already prepared request, executes the inference, and returns the model response."
+  },
+  "functional": {
+    "role": "child"
+  },
+  "subjective": {}
+}

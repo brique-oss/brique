@@ -1,0 +1,163 @@
+{
+  "brique": {
+    "cap_name": "review_orders_real",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "review_orders_real",
+    "description": "Capacity pilot with a real model: reads which customer is meant, reviews all their open orders, answers the customer.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Answer a customer asking where their open orders stand, by a deterministic plan with four kinds of prompt.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A customer message becomes a pilot_output answering about all the open orders of that customer.",
+        "invariants": [
+          "Only the extraction, each order analysis and the final answer are prompts; lookups are deterministic."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "who",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "extract_customer",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "customer_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "customer_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 300,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "Find the customer identifier (like C1) in the message. Answer with that identifier only.",
+                    "$input.message.content"
+                  ]
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/world.get_customer",
+                "as": "customer",
+                "with": {
+                  "customer_id": "$who.payload.output.customer_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/review_orders_real.analyse_all",
+                "as": "analyses",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "order_ids": "$customer.payload.customer.open_orders"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "final",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "answer",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "answer": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "answer"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 300,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "You are the customer-support assistant of an online shop. From these order analyses, answer the customer in French, concisely and factually: one line per order with its status and any risk.",
+                    "$analyses.payload.items"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$final.payload.output.answer"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

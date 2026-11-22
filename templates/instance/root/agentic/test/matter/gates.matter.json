@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1795334406531394000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 15,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json"
+  },
+  "objective": {
+    "description": "Open gates of the test.slow tool.",
+    "name": "gates"
+  },
+  "subjective": {}
+}

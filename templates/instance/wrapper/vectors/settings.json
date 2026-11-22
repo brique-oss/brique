@@ -1,0 +1,18 @@
+{
+  "description": "The numeric settings of the wrapper runtimes, read from the environment. This file is the single source: each runtime declares the same names, defaults, minimums and policies (its test compares them to this file), and the table of the settings is generated from it. policy 'strict': an invalid value stops the wrapper at start; policy 'tolerant': an invalid value (missing, not an integer, below the minimum) is ignored and the default is used.",
+  "settings": [
+    {"name": "BRIQUE_MAX_CONCURRENCY", "default": 16, "minimum": 1, "unit": "works", "policy": "strict", "what": "Engine-routed capacity and Matter works that run at the same time in the wrapper (the execution slots)."},
+    {"name": "BRIQUE_QUEUE_LIMIT", "default": 256, "minimum": 1, "unit": "works", "policy": "strict", "what": "Works that may wait for a slot; beyond it a call is refused 'busy' before it runs."},
+    {"name": "BRIQUE_TRANSIT_MAX_BYTES", "default": 67108864, "minimum": 1, "unit": "bytes", "policy": "strict", "what": "Largest serialized parameter sent as a transit file; above it a transient Matter is used."},
+    {"name": "BRIQUE_TRANSIT_TTL_SECONDS", "default": 3600, "minimum": 1, "unit": "seconds", "policy": "strict", "what": "Lifetime of an abandoned transit reference before it is swept."},
+    {"name": "BRIQUE_BUSY_ATTEMPTS", "default": 8, "minimum": 1, "unit": "attempts", "policy": "tolerant", "what": "Attempts in all (the first included) of a call refused because its callee is busy."},
+    {"name": "BRIQUE_BUSY_BASE_MS", "default": 20, "minimum": 0, "unit": "ms", "policy": "tolerant", "what": "Pause before the second attempt of a call refused 'busy'; doubled at each attempt, times a random factor from 0.5 to 1.5."},
+    {"name": "BRIQUE_BUSY_CAP_MS", "default": 1000, "minimum": 0, "unit": "ms", "policy": "tolerant", "what": "Ceiling of the pause between two attempts of a call refused 'busy'."},
+    {"name": "BRIQUE_LEASE_TIMEOUT_MS", "default": 30000, "minimum": 1, "unit": "ms", "policy": "tolerant", "what": "Time allowed to one HTTP transfer through a Matter lease."},
+    {"name": "BRIQUE_LEASE_RETRIES", "default": 5, "minimum": 1, "unit": "reads", "policy": "tolerant", "what": "Reads of a Matter whose lease went stale (the substance changed meanwhile) before giving up."},
+    {"name": "BRIQUE_CAS_ATTEMPTS", "default": 12, "minimum": 1, "unit": "attempts", "policy": "tolerant", "what": "Attempts of a read-recompute-write that keeps losing the race on the revision."},
+    {"name": "BRIQUE_CAS_PAUSE_BASE_MS", "default": 2, "minimum": 0, "unit": "ms", "policy": "tolerant", "what": "After a lost race, a pause of random length up to this, doubled at each attempt."},
+    {"name": "BRIQUE_CAS_PAUSE_CAP_MS", "default": 50, "minimum": 0, "unit": "ms", "policy": "tolerant", "what": "Ceiling of the pause after a lost race: writers that lost the same round do not come back together."},
+    {"name": "BRIQUE_HEARTBEAT_MS", "default": 10000, "minimum": 50, "unit": "ms", "policy": "tolerant", "what": "Period of the `running` acknowledgement of a long capacity (it renews the inactivity budget of whoever waits for it)."}
+  ]
+}

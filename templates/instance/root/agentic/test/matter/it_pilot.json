@@ -1,0 +1,41 @@
+{
+ "default_projection": {
+  "exclude_kinds": [
+   "projection"
+  ]
+ },
+ "id": "it_pilot",
+ "known_capacities": [
+  {
+   "description": "Echoes its payload.",
+   "ref": "/root/agentic/test/test.echo"
+  },
+  {
+   "description": "Answers once its gate is open.",
+   "ref": "/root/agentic/test/test.slow"
+  },
+  {
+   "description": "Opens a gate.",
+   "ref": "/root/agentic/test/test.open_gate"
+  },
+  {
+   "description": "Always fails.",
+   "ref": "/root/agentic/test/test.fail"
+  },
+  {
+   "description": "Creates a sub-continuity.",
+   "ref": "/root/agentic/continuity.create"
+  }
+ ],
+ "model": {
+  "model": "scripted",
+  "provider": "fake"
+ },
+ "parameters": {
+  "max_output_tokens": 1024
+ },
+ "prompt": "SCENARIO-DRIVEN TEST PILOT. The decisions are scripted by the integration scenario; do not reason.",
+ "rules": [
+  "Follow the scenario script exactly."
+ ]
+}

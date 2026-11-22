@@ -1,0 +1,12 @@
+{
+  "brique": {
+    "kind": "structure",
+    "revision": 1791117682691298222
+  },
+  "functional": {},
+  "objective": {
+    "description": "Organizes references to the cognitive continuities belonging to the agentic context.",
+    "name": "continuities"
+  },
+  "subjective": {}
+}

@@ -1,0 +1,827 @@
+{
+  "brique": {
+    "cap_name": "continuity.create",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "continuity.create",
+    "description": "Creates a new cognitive continuity together with its mailbox and runtime and establishes its optional parent and structure relationships."
+  },
+  "functional": {
+    "#root": {
+      "role": "Materialize one complete new continuity as four coherent Matters (journal, continuity header, mailbox, runtime) and establish its optional structural relationships without starting cognition.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "pilot_ref": {
+            "type": "object"
+          },
+          "initial_intention": {
+            "type": "any"
+          },
+          "parent_id": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          }
+        },
+        "@matter": {
+          "new": {
+            "continuity": {
+              "schema": "/root/agentic/schema/continuity_data"
+            },
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            },
+            "runtime": {
+              "schema": "/root/agentic/schema/runtime_data"
+            },
+            "journal": {
+              "schema": "/root/agentic/schema/message"
+            }
+          },
+          "modify": {
+            "parent": {
+              "schema": "/root/agentic/schema/continuity_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Creates the continuity header Matter with its founding intention, pilot reference, parent relation, and the reference to its journal.",
+        "mailbox": "Creates the unique empty mailbox Matter associated with the continuity.",
+        "runtime": "Creates the unique idle runtime Matter associated with the continuity.",
+        "parent": "May add the new continuity id to an existing parent continuity children collection.",
+        "structure": "Adds a reference to the new continuity in the canonical continuities Structure.",
+        "journal": "Creates the empty journal Matter (JSON Lines) that holds the durable history of the continuity."
+      },
+      "transformation_contract": {
+        "morphing": "A founding intention and pilot reference become a complete idle cognitive continuity with its mailbox, runtime, and optional explicit relations.",
+        "invariants": [
+          "A valid continuity always has exactly one associated mailbox.",
+          "A valid continuity always has exactly one associated runtime.",
+          "initial_intention is present at creation.",
+          "current_intention initially equals initial_intention.",
+          "pilot_ref is present at creation.",
+          "The journal initially holds only the cognitive frame line.",
+          "The first line of the journal is the cognitive frame, copied from its Matter at creation (kind framework); a missing or empty frame refuses the creation before any effect.",
+          "runtime initially has status idle.",
+          "runtime initially has no run_id.",
+          "runtime initially has no current_message_id.",
+          "runtime initially has no active wait groups.",
+          "mailbox initially has no entries.",
+          "Parent and child relations are explicit and bidirectionally coherent when parent_id is provided.",
+          "Structure placement is independent of parent-child cognitive relation.",
+          "Creation does not invoke pilot.activate.",
+          "Creation does not send the first mailbox message.",
+          "The Matter IDs of a continuity are derived deterministically from its continuity_id as continuity_<id> (header), journal_<id>, mailbox_<id>, and runtime_<id>.",
+          "Every new continuity is automatically referenced by the canonical continuities Structure.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "Each Matter mutation is individually atomic; the operation as a whole is a recoverable multi-Matter operation with no rollback, whose global consistency is reconstructed through deterministic, idempotent steps and optimistic concurrency.",
+          "Locks held simultaneously are acquired in deterministic continuity_id order; a lock of a parent continuity is never held around a recursive call on a child, the state being revalidated when the call returns.",
+          "Creation is a recoverable multi-step protocol executed in this order: journal Matter, continuity Matter (header, which references the journal), mailbox Matter, runtime Matter, parent relation, Structure relation.",
+          "Each step treats an already realized step in its expected state as an idempotent success; a present but contradictory Matter or relation fails as a consistency failure; re-running the creation completes the remaining steps.",
+          "Writes to the parent Matter and to the canonical continuities Structure carry the same expected_revision guard, read just before the write.",
+          "Each created Matter descriptor carries functional.format json and functional.schema_ref to the data schema of its content (continuity_data, mailbox_data or runtime_data), with brique.substance_mode brique and brique.substance_type text; the content itself is the substance passed as the payload of matter.create, never a part of the descriptor. The wrapper validates every content it writes against that schema because the engine does not.",
+          "Each created Matter carries a tracked brique.revision, since every later write is guarded by expected_revision.",
+          "A creation by succession carries predecessor_id, lineage_id and generation; a plain creation starts a new lineage: lineage_id is its own id and generation 1.",
+          "pilot_ref designates exactly one of a pilot_definition Matter { context, matter_id } and a Capacity { context, capacity, limits? }; the Matter or the Capacity must exist, in the context that pilot_ref names (a pilot_definition may live in any context).",
+          "A pilot_ref designates a pilot, not any element that exists: a Matter must be a pilot_definition (its objective.type), a Capacity must declare itself a pilot (objective.agentic.pilot in its descriptor). An ordinary capacity is used by invoking it, never by launching it as a pilot; the refusal says what is missing."
+        ],
+        "success": [
+          "continuity, mailbox, and runtime Matters are created with the same continuity identity.",
+          "If parent_id is provided, the child stores parent_id and the parent stores the child id.",
+          "The new continuity is automatically referenced by the canonical continuities Structure.",
+          "The result is ready to receive its first message through mailbox.send."
+        ],
+        "failure": [
+          "Fails if pilot_ref is missing or invalid.",
+          "Fails if initial_intention is missing.",
+          "Fails if continuity_id designates an existing continuity whose state contradicts the requested creation; an identical existing creation is an idempotent success.",
+          "Fails if parent_id is provided but the parent continuity does not exist.",
+          "Fails if one of the required Matter creations cannot be completed coherently.",
+          "Does not start cognition after partial creation.",
+          "A failed parent or structure relation must not be silently ignored when that relation was explicitly requested.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted.",
+          "Fails with a consistency failure when an existing Matter or relation contradicts the expected state.",
+          "Fails when generation is not a positive integer.",
+          "Fails when pilot_ref designates both or neither of a Matter and a Capacity, or an unknown Matter or Capacity.",
+          "Fails with an invalid request when pilot_ref designates a Matter that is not a pilot_definition or a Capacity that does not declare itself a pilot, before anything is written."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "The four Matter creations are explicitly delegated to the engine-native matter.create capacity.",
+          "Updating an existing parent Matter belongs to matter.write.",
+          "Updating an existing Structure belongs to structure.patch.",
+          "The matter.write and structure.patch invocations follow their retrieved engine contracts; the canonical Structure reference is { kind: matter_ref, context: /root/agentic, matter_id: continuity_<id>, role: continuity }.",
+          "The wrapper does not roll back: after a partial creation the operation is re-runnable and completes or repairs the missing steps.",
+          "The four physical Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>; the schema field continuity_id holds <id>, not the Matter ID.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model.",
+          "Implementation constraint: the continuity is managed in a Matter (the journal) and duplicated in an in-memory object for performance; the journal is empty at creation and the object is created empty, or lazily at first use."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#prepare": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "initial_intention": {
+                      "type": "any"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "pilot_ref": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_state": {
+                      "type": "object"
+                    },
+                    "mailbox_state": {
+                      "type": "object"
+                    },
+                    "runtime_state": {
+                      "type": "object"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "parent_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#validate_identity": {
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "valid": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Validate the requested continuity identity and ensure it does not conflict with an existing continuity.",
+                          "transformation_contract": {
+                            "morphing": "A proposed continuity identity becomes an accepted unique identity or an explicit conflict."
+                          }
+                        }
+                      },
+                      {
+                        "#validate_pilot": {
+                          "inputs": {
+                            "params": {
+                              "pilot_ref": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "valid": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Verify that pilot_ref, an explicit { context, matter_id } reference, identifies an existing valid pilot_definition Matter in /root/agentic, the only context currently supported.",
+                          "transformation_contract": {
+                            "morphing": "A pilot reference becomes a validated cognitive configuration reference."
+                          }
+                        }
+                      },
+                      {
+                        "#validate_parent": {
+                          "inputs": {
+                            "params": {
+                              "parent_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "valid": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Verify the optional parent continuity before any parent-child relation is established.",
+                          "transformation_contract": {
+                            "morphing": "An optional parent reference becomes a validated parent relation or an explicit absence."
+                          }
+                        }
+                      },
+                      {
+                        "#build_initial_state": {
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "initial_intention": {
+                                "type": "any"
+                              },
+                              "parent_id": {
+                                "type": "string"
+                              },
+                              "pilot_ref": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "continuity_state": {
+                                "type": "object"
+                              },
+                              "mailbox_state": {
+                                "type": "object"
+                              },
+                              "runtime_state": {
+                                "type": "object"
+                              },
+                              "continuity_matter_id": {
+                                "type": "string"
+                              },
+                              "mailbox_matter_id": {
+                                "type": "string"
+                              },
+                              "runtime_matter_id": {
+                                "type": "string"
+                              },
+                              "parent_matter_id": {
+                                "type": "string"
+                              },
+                              "journal_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "role": "Construct the canonical initial values for the continuity header, mailbox, and runtime, and the Matter IDs of the continuity, its journal, mailbox, and runtime.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "continuity_state carries initial_intention and matching current_intention.",
+                              "continuity_state carries pilot_ref.",
+                              "continuity_state carries journal_ref and no messages.",
+                              "mailbox_state continuity_id matches continuity_id.",
+                              "mailbox_state entries is empty.",
+                              "runtime_state continuity_id matches continuity_id.",
+                              "runtime_state status is idle.",
+                              "runtime_state active_wait_groups is empty.",
+                              "continuity_matter_id, journal_matter_id, mailbox_matter_id, and runtime_matter_id follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>."
+                            ],
+                            "morphing": "Validated continuity creation data becomes three canonical initial Matter payloads and the identifier of an empty journal."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Validate the requested identity, pilot, founding intention, and optional relations and construct the initial states of the continuity header, mailbox, and runtime, and the identifier of the empty journal.",
+                "transformation_contract": {
+                  "invariants": [
+                    "current_intention equals initial_intention.",
+                    "children starts empty.",
+                    "The journal starts empty.",
+                    "mailbox entries starts empty.",
+                    "runtime starts idle with no ownership or active waits.",
+                    "The four Matter IDs are derived as continuity_<id> (header), journal_<id>, mailbox_<id>, and runtime_<id>."
+                  ],
+                  "morphing": "A continuity creation request becomes the canonical initial Matter states (header, mailbox, runtime), the identifier of an empty journal, and validated optional relations."
+                }
+              }
+            },
+            {
+              "#create_core": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "continuity_state": {
+                      "type": "object"
+                    },
+                    "mailbox_state": {
+                      "type": "object"
+                    },
+                    "runtime_state": {
+                      "type": "object"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "continuity_descriptor": {
+                      "type": "object"
+                    },
+                    "mailbox_descriptor": {
+                      "type": "object"
+                    },
+                    "runtime_descriptor": {
+                      "type": "object"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_descriptor": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_created": {
+                      "type": "boolean"
+                    },
+                    "mailbox_created": {
+                      "type": "boolean"
+                    },
+                    "runtime_created": {
+                      "type": "boolean"
+                    },
+                    "journal_created": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#create_journal": {
+                          "inputs": {
+                            "params": {
+                              "descriptor": {
+                                "type": "object"
+                              },
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.create",
+                              "as": "created_journal",
+                              "to_type": "matter",
+                              "with": {
+                                "matter": "$input.descriptor",
+                                "matter_id": "$input.matter_id"
+                              }
+                            }
+                          },
+                          "role": "Create the empty journal Matter of the new continuity.",
+                          "transformation_contract": {
+                            "morphing": "A canonical journal descriptor (JSON Lines, line-framed) becomes a committed empty journal Matter whose substance is later filled by matter.append."
+                          }
+                        }
+                      },
+                      {
+                        "#create_continuity": {
+                          "inputs": {
+                            "params": {
+                              "state": {
+                                "type": "object"
+                              },
+                              "matter_id": {
+                                "type": "string"
+                              },
+                              "descriptor": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.create",
+                              "as": "created_continuity",
+                              "to_type": "matter",
+                              "with": {
+                                "matter": "$input.descriptor",
+                                "matter_id": "$input.matter_id",
+                                "payload": "$input.state"
+                              }
+                            }
+                          },
+                          "role": "Create the continuity header Matter.",
+                          "transformation_contract": {
+                            "morphing": "A canonical continuity descriptor and header content become a committed continuity header Matter whose substance is the content."
+                          }
+                        }
+                      },
+                      {
+                        "#create_mailbox": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "object"
+                              },
+                              "descriptor": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.create",
+                              "as": "created_mailbox",
+                              "to_type": "matter",
+                              "with": {
+                                "matter": "$input.descriptor",
+                                "matter_id": "$input.matter_id",
+                                "payload": "$input.state"
+                              }
+                            }
+                          },
+                          "role": "Create the mailbox Matter associated with the new continuity.",
+                          "transformation_contract": {
+                            "morphing": "A canonical mailbox descriptor and content become a committed mailbox Matter whose substance is the content."
+                          }
+                        }
+                      },
+                      {
+                        "#create_runtime": {
+                          "inputs": {
+                            "params": {
+                              "matter_id": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "object"
+                              },
+                              "descriptor": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            "invoke": {
+                              "@capacity": "/root/agentic/matter.create",
+                              "as": "created_runtime",
+                              "to_type": "matter",
+                              "with": {
+                                "matter": "$input.descriptor",
+                                "matter_id": "$input.matter_id",
+                                "payload": "$input.state"
+                              }
+                            }
+                          },
+                          "role": "Create the runtime Matter associated with the new continuity.",
+                          "transformation_contract": {
+                            "morphing": "A canonical runtime descriptor and content become a committed runtime Matter whose substance is the content."
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Create the journal, the continuity header, mailbox, and runtime Matters through explicit matter.create invocations, the journal first so that journal_ref never designates an absent Matter.",
+                "transformation_contract": {
+                  "failure": [
+                    "If a later creation fails after an earlier one succeeded, the earlier Matters remain and re-running the creation completes the missing steps idempotently; no atomic rollback is pretended."
+                  ],
+                  "invariants": [
+                    "Each Matter creation is delegated to matter.create.",
+                    "All four Matters represent the same continuity identity.",
+                    "No pilot cognition begins during creation.",
+                    "The journal is created before the continuity header, which references it."
+                  ],
+                  "morphing": "Four canonical descriptors and initial contents become four committed Brique Matters, the journal being empty."
+                }
+              }
+            },
+            {
+              "#relate": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "parent_matter_id": {
+                      "type": "string"
+                    },
+                    "continuity_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "parent_linked": {
+                      "type": "boolean"
+                    },
+                    "structure_linked": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#parent_relation": {
+                          "inputs": {
+                            "params": {
+                              "child_id": {
+                                "type": "string"
+                              },
+                              "parent_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "linked": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Add the new continuity id to the existing parent's children collection when parent_id is present.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "The child already carries parent_id from its initial state.",
+                              "The parent must explicitly gain child_id in children.",
+                              "The existing parent Matter mutation is delegated to matter.write.",
+                              "The parent write is guarded by the revision read just before it. On a revision conflict the target is re-read and the content recomputed from the fresh read before a bounded retry; adding an id already present changes nothing."
+                            ],
+                            "morphing": "A validated parent and new child become a bidirectionally coherent continuity relation.",
+                            "notes": [
+                              "The parent continuity Matter is rewritten by one matter.write of its whole content (its substance), derived from the content just read with child_id added to children; nothing happens when the continuity has no parent. This is the exact dual of continuity.delete/#parent."
+                            ]
+                          },
+                          "resolution": {
+                            ">if": {
+                              ">then": {
+                                ">sequence": {
+                                  "items": [
+                                    {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/matter.read",
+                                        "as": "parent_state",
+                                        "to_type": "matter",
+                                        "with": {
+                                          "matter_id": "$input.parent_matter_id",
+                                          "read_mode": "data|brique"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "#derive_parent_content": {
+                                        "inputs": {
+                                          "params": {
+                                            "matter_state": {
+                                              "type": "object"
+                                            },
+                                            "relation": {
+                                              "type": "object"
+                                            }
+                                          }
+                                        },
+                                        "outputs": {
+                                          "payload": {
+                                            "content": {
+                                              "type": "object"
+                                            }
+                                          }
+                                        },
+                                        "role": "Derive the parent content with the new child id added once to its children collection.",
+                                        "transformation_contract": {
+                                          "invariants": [
+                                            "The operation is computed from the content just read, so adding a present value or removing an absent one changes nothing.",
+                                            "No field other than the one named by the operation changes."
+                                          ],
+                                          "morphing": "The parent content read becomes the same content with child_id present in children."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/matter.write",
+                                        "as": "parent_children_update",
+                                        "to_type": "matter",
+                                        "with": {
+                                          "data": "$derive_parent_content.payload.content",
+                                          "expected_revision": "$parent_state.payload.brique.revision",
+                                          "matter_id": "$input.parent_matter_id"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "when": {
+                                "left": "$input.parent_matter_id",
+                                "op": "exists"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#structure_relation": {
+                          "inputs": {
+                            "params": {
+                              "continuity_matter_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "linked": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "role": "Add a reference to the new continuity into the canonical continuities Structure.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "The continuity itself stores no structure path.",
+                              "The canonical continuities Structure is mutated through structure.patch.",
+                              "The Structure write is guarded by the revision read just before it (expected_revision). On a revision conflict the target is re-read and the patch recomputed before a bounded retry; the add and remove patches are idempotent."
+                            ],
+                            "morphing": "A new continuity becomes an organizational reference in the canonical continuities Structure.",
+                            "notes": [
+                              "The canonical reference is { kind: matter_ref, context: /root/agentic, matter_id: continuity_<id>, role: continuity }; the exact same object is removed by continuity.delete/#structures."
+                            ]
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "invoke": {
+                                    "@capacity": "/root/agentic/structure.read",
+                                    "as": "structure_state",
+                                    "to_type": "matter",
+                                    "with": {
+                                      "structure_id": "continuities"
+                                    }
+                                  }
+                                },
+                                {
+                                  "invoke": {
+                                    "@capacity": "/root/agentic/structure.patch",
+                                    "as": "structure_reference_added",
+                                    "to_type": "matter",
+                                    "with": {
+                                      "semantic_patch": {
+                                        "operations": [
+                                          {
+                                            "op": "add",
+                                            "path": [
+                                              "functional",
+                                              "items"
+                                            ],
+                                            "value": {
+                                              "context": "/root/agentic",
+                                              "kind": "matter_ref",
+                                              "matter_id": "$input.continuity_matter_id",
+                                              "role": "continuity"
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "structure_id": "continuities",
+                                      "expected_revision": "$structure_state.payload.brique.revision"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "role": "Establish the optional parent-child relationship and the canonical Structure reference after the four core Matters exist.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Parent-child cognition and Structure organization remain independent relationships.",
+                    "No parent relation is inferred when parent_id is absent; the canonical Structure reference is always established."
+                  ],
+                  "morphing": "A newly created continuity becomes explicitly related to its requested parent and organizational Structure."
+                }
+              }
+            },
+            {
+              "#settle": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Return the newly created continuity in idle state without activating or messaging it.",
+                "transformation_contract": {
+                  "invariants": [
+                    "No mailbox message is created by continuity.create.",
+                    "pilot.activate is not invoked by continuity.create."
+                  ],
+                  "morphing": "A coherently created continuity bundle becomes an idle addressable cognitive resource.",
+                  "success": [
+                    "The caller may subsequently invoke mailbox.send to provide the first stimulus."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

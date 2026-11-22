@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794048003944770000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 1014,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "objective": {
+    "description": "Pilot of the weather test: reads the real weather with weather.fetch, then says in one short sentence what to wear this morning.",
+    "name": "real_weather",
+    "type": "pilot_definition"
+  },
+  "subjective": {}
+}

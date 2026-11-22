@@ -56,7 +56,7 @@ function opened(): { page: MockPort; native: MockPort } {
   assert.deepEqual(native.sent.shift(), {
     format: "brique.browser.bridge/1", kind: "open", sequence: 2, session_id: session,
     origin: sender.origin, document_id: sender.documentId, frame_id: sender.frameId,
-    ui_name: "root", user_activated: true, descriptor_b64: "e30",
+    ui_name: "root", descriptor_b64: "e30",
   });
   return { page, native };
 }
@@ -104,7 +104,7 @@ test("service worker does not start the native host before an open request", () 
   assert.equal(native.disconnected, false);
 });
 
-test("content relay releases open only on trusted active user input", () => {
+test("content relay releases an open that carries a descriptor only on trusted active user input", () => {
   const port = new MockPort();
   const listeners = new Map<string, Array<(event: any) => void>>();
   const pageWindow = { postMessage() {} };
@@ -123,14 +123,9 @@ test("content relay releases open only on trusted active user input", () => {
   vm.runInNewContext(readFileSync(new URL("../hosts/browser/extension/content-relay.js", import.meta.url), "utf8"), sandbox);
   const emit = (name: string, event: any) => { for (const listener of listeners.get(name) ?? []) listener(event); };
   emit("message", { source: pageWindow, origin: sandbox.location.origin, data: {
-    marker: "brique.browser.page/1", direction: "page", message: { kind: "open", uiName: "root" },
+    marker: "brique.browser.page/1", direction: "page", message: { kind: "open", uiName: "root", descriptorB64: "AAAA" },
   } });
-  assert.equal(port.sent.length, 0);
-  emit("pointerdown", { isTrusted: false });
-  assert.equal(port.sent.length, 0);
-  navigator.userActivation.isActive = true;
-  emit("pointerdown", { isTrusted: true });
-  assert.deepEqual(port.sent, [{ kind: "open", uiName: "root" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(port.sent)), [{ kind: "open", uiName: "root", descriptorB64: "AAAA" }]);
 });
 
 function loadRelay(now: () => number) {
@@ -155,23 +150,18 @@ function loadRelay(now: () => number) {
   return { port, posted, emit, fromPage };
 }
 
-test("content relay asks the page for a fresh descriptor only after a trusted click and rejects a late answer", () => {
+test("content relay asks the page for a fresh descriptor at the open and rejects a late or repeated answer", () => {
   let clock = 1000;
   const relay = loadRelay(() => clock);
   const requests = () => relay.posted.filter((entry) => entry.message?.kind === "descriptor-request").length;
   relay.fromPage({ kind: "open", uiName: "root", refreshDescriptor: true });
-  relay.emit("pointerdown", { isTrusted: false });
-  assert.equal(requests(), 0, "a synthetic event asked for a descriptor");
-  relay.emit("pointerdown", { isTrusted: true });
-  assert.equal(requests(), 1);
+  assert.equal(requests(), 1, "the relay asks for a fresh descriptor, without any click");
   assert.equal(relay.port.sent.length, 0, "the open was released before the descriptor arrived");
-
-  clock += 5000; // past the window: this answer belongs to a click that is gone
+  clock += 5000; // past the window: this answer is stale
   relay.fromPage({ kind: "descriptor", descriptorB64: "AAAA" });
   assert.equal(relay.port.sent.length, 0, "a descriptor answered outside the window released the open");
-
-  relay.emit("pointerdown", { isTrusted: true });
-  assert.equal(requests(), 2, "a new trusted click must ask again");
+  relay.fromPage({ kind: "open", uiName: "root", refreshDescriptor: true });
+  assert.equal(requests(), 2);
   clock += 100;
   relay.fromPage({ kind: "descriptor", descriptorB64: "BBBB" });
   assert.deepEqual(JSON.parse(JSON.stringify(relay.port.sent)), [{ kind: "open", uiName: "root", descriptorB64: "BBBB" }],
@@ -180,11 +170,10 @@ test("content relay asks the page for a fresh descriptor only after a trusted cl
   assert.equal(relay.port.sent.length, 1, "a second descriptor answer opened another channel");
 });
 
-test("content relay opens without a descriptor request when the page has no descriptor to renew", () => {
+test("content relay opens the page of the local instance without a click and without a descriptor request", () => {
   const relay = loadRelay(() => 1000);
   relay.fromPage({ kind: "open", uiName: "root" });
-  relay.emit("pointerdown", { isTrusted: true });
-  assert.deepEqual(relay.port.sent, [{ kind: "open", uiName: "root" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(relay.port.sent)), [{ kind: "open", uiName: "root" }]);
   assert.equal(relay.posted.filter((entry) => entry.message?.kind === "descriptor-request").length, 0);
 });
 
@@ -223,4 +212,19 @@ test("page bridge fetches a linked descriptor only when the relay asks for it", 
   const answer = posted.at(-1).message;
   assert.equal(answer.kind, "descriptor");
   assert.match(answer.descriptorB64, /^[A-Za-z0-9_-]+$/);
+});
+
+test("the open of the local instance (no descriptor) carries no descriptor and no gesture field", () => {
+  const localSender = { origin: "http://127.0.0.1:61418", documentId: sender.documentId, frameId: 0 };
+  const page = new MockPort(localSender);
+  const native = new MockPort();
+  attachPagePort(page as any, () => native as any);
+  page.onMessage.emit({ kind: "open", uiName: "web" });
+  assert.deepEqual(native.sent.shift(), { format: "brique.browser.bridge/1", kind: "hello", sequence: 1 });
+  native.onMessage.emit({ format: "brique.browser.bridge/1", kind: "hello", sequence: 1, ok: true,
+    session_id: session, gateway_alias: "alpha", gateway_revision: 1 });
+  assert.deepEqual(native.sent.shift(), {
+    format: "brique.browser.bridge/1", kind: "open", sequence: 2, session_id: session,
+    origin: localSender.origin, document_id: localSender.documentId, frame_id: 0, ui_name: "web",
+  });
 });

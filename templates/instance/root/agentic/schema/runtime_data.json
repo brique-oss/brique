@@ -1,0 +1,30 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "runtime_data",
+    "description": "Defines the content (substance) of a runtime Matter: execution status, active cognitive run, current mailbox message and active wait groups of one continuity."
+  },
+  "functional": {
+    "continuity_id": [],
+    "_continuity_id_note": "Required. Identifier of the unique continuity owning this runtime.",
+    "status": [
+      "idle",
+      "running",
+      "waiting",
+      "suspended"
+    ],
+    "_status_note": "Required. Current operational state of the continuity.",
+    "run_id": [],
+    "_run_id_note": "Present while status is running or waiting. Identifies the unique logical cognitive run currently owning the continuity. Null or absent while idle or suspended.",
+    "current_message_id": [],
+    "_current_message_id_note": "Optional. Identifier of the mailbox message currently being processed across the whole cognitive chain, including waits and resumptions.",
+    "active_wait_groups": {
+      "schema_ref": "wait_group",
+      "cardinality": "many"
+    },
+    "_active_wait_groups_note": "Required. Collection of wait groups currently belonging to the active cognitive run. A group remains present through waiting and satisfied states until its cognitive resume is completed."
+  },
+  "subjective": {}
+}

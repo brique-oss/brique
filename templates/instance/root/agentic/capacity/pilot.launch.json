@@ -1,0 +1,201 @@
+{
+  "brique": {
+    "cap_name": "pilot.launch",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "pilot.launch",
+    "description": "Launches a pilot: creates a continuity associated with a Matter or Capacity pilot, optionally attached to a parent, and hands it its first message, which starts the pilot. When a parent launches it with a task, the answer is the result of the pilot."
+  },
+  "functional": {
+    "#root": {
+      "role": "Create one continuity associated with a pilot (a Matter pilot_definition or a Capacity), optionally attached to a parent, and hand it its first message so that the pilot starts. When a parent launches a task, wait for the pilot to finish treating it and answer with its result, as any capacity answers the intention that called it.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "pilot_ref": {
+            "type": "object"
+          },
+          "initial_intention": {
+            "type": "any"
+          },
+          "parent_id": {
+            "type": "string",
+            "_comment": "Optional. The continuity that launches; absent for a root."
+          },
+          "message": {
+            "type": "object",
+            "_comment": "Optional. The first message: { content, id? }. Absent, the continuity waits for its first message."
+          },
+          "wait": {
+            "type": "boolean",
+            "_comment": "Optional. Wait for the pilot to finish treating the first message and answer with its result. Default: true when parent_id and message are both given (a parent delegating a task), false otherwise (an interface opening a chat must not wait)."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "message_id": {
+            "type": "string",
+            "_comment": "Null without a message."
+          },
+          "seq": {
+            "type": "integer",
+            "_comment": "Line of the first message in the journal; null without a message."
+          },
+          "result": {
+            "type": "object",
+            "_comment": "Only when the call waited. { text, messages: [{ to, kind, content }] }: what the pilot said, in order, while treating the first message. text is the contents joined by blank lines."
+          },
+          "treated": {
+            "type": "boolean",
+            "_comment": "True when the call waited and the pilot finished the first message."
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Creates the continuity (journal, header, mailbox, runtime) through continuity.create and attaches it to its parent when there is one.",
+        "mailbox": "Hands the first message to the continuity through mailbox.send.",
+        "external": "The first message wakes the pilot of the new continuity, asynchronously. With wait, pilot.launch then waits for the pilot to finish the message, acknowledging itself as long-running (a running response every few seconds) and giving back its execution slot while it waits."
+      },
+      "transformation_contract": {
+        "morphing": "A pilot reference, a founding intention and an optional first message become a new continuity whose pilot has started on that message; when the call waits, the answer is what the pilot said while treating it.",
+        "invariants": [
+          "The continuity is created by continuity.create from the pilot_ref, the founding intention and the parent_id given; a Matter pilot and a Capacity pilot are launched the same way.",
+          "The first message, when given, is of kind user; its sender is continuity:<parent_id> when there is a parent and user:1 for a root; its identifier is the one given or <continuity_id>_launch.",
+          "Without a message the continuity is created and waits for its first message.",
+          "Every step is idempotent: the same call again creates nothing twice and sends nothing twice.",
+          "The same continuity_id with another pilot, intention or parent is an identity conflict, refused.",
+          "No message is sent when the creation failed.",
+          "pilot.launch writes no Matter itself: every mutation goes through the capacities it composes.",
+          "The first message is handed over by mailbox.send, which wakes the pilot: pilot.launch never activates the pilot explicitly.",
+          "Without wait the answer comes at once and carries no result of the pilot; with wait the answer is given when the pilot has finished the first message and is at rest: its continuity is idle, its mailbox is empty, no wait group is active and no awaited intention is still without its Response, and it stays so for a short moment (LAUNCH_SETTLE_S); acknowledging the first message is not enough, since a pilot that emits an awaited intention without a wait group ends its turn and goes on with new messages.",
+          "wait defaults to true only when both parent_id and message are given; a root launch (an interface opening a chat) answers at once.",
+          "The result is read from the journal of the launched continuity, never from a field the model must aim at: the messages of kind pilot written after the first message, whoever they are addressed to, in order. A pilot that said nothing gives an empty result.",
+          "The wait follows a succession: if the continuity is replaced by its successor while treating the message, the successor's treatment is awaited and its messages are part of the result.",
+          "While it waits the call acknowledges itself as running at regular intervals and yields its execution slot; it is bounded (setting LAUNCH_WAIT_TIMEOUT_S) and a bound reached is a refusal, not a silent stop.",
+          "A message the pilot could not treat (set aside after its attempts), the first one or a later one of the same task, is an error answer, not a result, and it carries the cause: the error of the last failed attempt."
+        ],
+        "success": [
+          "The continuity exists, attached to its parent, and its first message is accepted in its journal."
+        ],
+        "failure": [
+          "Fails with an invalid request when continuity_id, pilot_ref or initial_intention is missing, or when message has no content.",
+          "Fails when the pilot named by pilot_ref or the parent named by parent_id does not exist, before any message is sent.",
+          "Fails refused (reason message_parked) when the pilot could not treat the first message and set it aside; refused (reason timeout) when the wait bound is reached; invalid when wait is not a boolean."
+        ],
+        "notes": [
+          "The policy of the pilot that asks for a launch is applied by pilot.activate to the pilot_ref, before any effect."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#create": {
+                "role": "Create the continuity with its pilot, its founding intention and its parent.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "pilot_ref": {
+                      "type": "object"
+                    },
+                    "initial_intention": {
+                      "type": "any"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A pilot reference and a founding intention become an idle continuity."
+                }
+              }
+            },
+            {
+              "#hand_over": {
+                "role": "Hand the first message to the continuity, which wakes its pilot.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "seq": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A task becomes the first message of the continuity."
+                }
+              }
+            },
+            {
+              "#await_result": {
+                "role": "When waiting, wait for the pilot to finish the first message and read what it said.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "result": {
+                      "type": "object"
+                    },
+                    "treated": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "The rest of the continuity (or of its successor) after the task becomes the result: the messages of kind pilot written since the first message."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

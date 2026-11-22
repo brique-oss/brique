@@ -22,9 +22,9 @@ const channel = "bbc1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 test("browser bridge requests use the frozen strict schema", () => {
   assert.deepEqual(hello(1), { format: BROWSER_BRIDGE_PROTOCOL, kind: "hello", sequence: 1 });
   assert.deepEqual(openChannel({ sequence: 2, sessionId: session, origin: "https://example.test", documentId: "doc-1",
-    frameId: 0, uiName: "root", userActivated: true }), {
+    frameId: 0, uiName: "root" }), {
     format: BROWSER_BRIDGE_PROTOCOL, kind: "open", sequence: 2, session_id: session,
-    origin: "https://example.test", document_id: "doc-1", frame_id: 0, ui_name: "root", user_activated: true,
+    origin: "https://example.test", document_id: "doc-1", frame_id: 0, ui_name: "root",
   });
   assert.equal(channelMessage(3, session, channel, new TextEncoder().encode("intent")).payload_b64, "aW50ZW50");
   assert.deepEqual(channelCommand("close", 4, session, channel), {

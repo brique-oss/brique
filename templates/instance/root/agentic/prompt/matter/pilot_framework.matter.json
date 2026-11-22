@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794419188349121000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 2443,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "md"
+  },
+  "objective": {
+    "description": "Mini cognitive framework of the pilots: how a pilot acts in the Brique world. It opens every continuity, as the first line of its journal.",
+    "name": "pilot_framework"
+  },
+  "subjective": {}
+}

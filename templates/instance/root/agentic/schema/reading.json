@@ -1,0 +1,39 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "reading",
+    "description": "Defines the reading cursors Matter as an element: a Matter whose substance holds where each reader has read up to in each conversation, described by the reading_data schema."
+  },
+  "functional": {
+    "brique": {
+      "kind": [
+        "matter"
+      ],
+      "substance_mode": [
+        "brique"
+      ],
+      "substance_type": [
+        "text"
+      ]
+    },
+    "objective": {
+      "type": [
+        "reading"
+      ]
+    },
+    "functional": {
+      "_format_note": "Required. The substance is a JSON document.",
+      "_schema_ref_note": "Required. Schema constraining the content (substance) of the Matter.",
+      "format": [
+        "json"
+      ],
+      "schema_ref": [
+        "/root/agentic/schema/reading_data"
+      ]
+    },
+    "subjective": {}
+  },
+  "subjective": {}
+}

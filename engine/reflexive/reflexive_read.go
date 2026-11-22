@@ -204,7 +204,101 @@ func idDirNode(dir, relPath, sub, itemKind string, pathJoin func(...string) stri
 const (
 	maxReadStructureDepth   = 16
 	maxReadStructurePerPath = 1000
+	// A whole answer is bounded too: a caller that reads a context with its content gets a listing it can read, not the file tree of
+	// a whole code directory. The default suits a model; a caller that needs more asks for it, up to the hard limit.
+	defaultReadStructureNodes = 150
+	maxReadStructureNodes     = 5000
 )
+
+// limitNavNodes keeps the first max nodes of the tree in breadth-first order (the levels nearest the root come whole before any deeper
+// one) and drops the rest; a node that lost children says so (children_truncated, its children_total stays the real number). It returns
+// the number of nodes the tree had.
+func limitNavNodes(root *NavItem, max int) int {
+	total := 0
+	queue := []*NavItem{root}
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		total++
+		kept := node.Children[:0:0]
+		for index := range node.Children {
+			if total+len(queue)+len(kept) >= max {
+				node.ChildrenTrunc = true
+				break
+			}
+			kept = append(kept, node.Children[index])
+		}
+		node.Children = kept
+		for index := range node.Children {
+			queue = append(queue, &node.Children[index])
+		}
+	}
+	return total
+}
+
+// compactNav is the lean form of a structure tree (format "compact"), made for a reader that pays for every byte, a model: no path on a node
+// (it is the names from the root down), a leaf is just its name, and the kind a directory's leaves share is said once (leaf_kind). Nothing the
+// full form says is lost: a node that is not a plain leaf keeps its kind, its real number of children (total) and its truncation.
+type compactNav struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Total     int    `json:"total,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	LeafKind  string `json:"leaf_kind,omitempty"`
+	Children  []any  `json:"children,omitempty"`
+}
+
+func navName(node NavItem) string {
+	if node.Name != "" {
+		return node.Name
+	}
+	return filepath.Base(filepath.FromSlash(node.Path))
+}
+
+func isNavLeaf(node NavItem, leafKind string) bool {
+	return len(node.Children) == 0 && node.ChildrenTotal == 0 && !node.ChildrenTrunc && node.Kind == leafKind &&
+		(node.Name == "" || node.Name == filepath.Base(filepath.FromSlash(node.Path)))
+}
+
+func compactOf(node NavItem) compactNav {
+	out := compactNav{Name: navName(node), Kind: node.Kind, Total: node.ChildrenTotal, Truncated: node.ChildrenTrunc}
+	if len(node.Children) == 0 {
+		return out
+	}
+	// the leaf kind is the commonest kind among the children that have no children of their own
+	counts := map[string]int{}
+	order := []string{}
+	for _, child := range node.Children {
+		if len(child.Children) == 0 && child.ChildrenTotal == 0 && !child.ChildrenTrunc {
+			if counts[child.Kind] == 0 {
+				order = append(order, child.Kind)
+			}
+			counts[child.Kind]++
+		}
+	}
+	best := 0
+	for _, kind := range order {
+		if counts[kind] > best {
+			best, out.LeafKind = counts[kind], kind
+		}
+	}
+	for _, child := range node.Children {
+		if isNavLeaf(child, out.LeafKind) {
+			out.Children = append(out.Children, navName(child))
+		} else {
+			out.Children = append(out.Children, compactOf(child))
+		}
+	}
+	return out
+}
+
+func countNavNodes(node NavItem) int {
+	total := 1
+	for _, child := range node.Children {
+		total += countNavNodes(child)
+	}
+	return total
+}
 
 func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 	in := msg.Intention
@@ -215,6 +309,8 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 	scope := ""
 	depth := 1
 	maxPerPath := 50
+	maxNodes := defaultReadStructureNodes
+	compact := false
 
 	if in.Params != nil {
 		if s, ok := in.Params[configuration.KeyScope].(string); ok {
@@ -225,6 +321,21 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 		}
 		if v, ok := anyToInt(in.Params[configuration.KeyMaxPerPath]); ok {
 			maxPerPath = v
+		}
+		if v, ok := anyToInt(in.Params["max_nodes"]); ok {
+			maxNodes = v
+		}
+		if f, ok := in.Params["format"].(string); ok {
+			switch f {
+			case "", "full":
+			case "compact":
+				compact = true
+			default:
+				l.emitResponseError(errorResp(in, circulation.ValueCodeInvalid,
+					map[string]any{circulation.KeyReason: circulation.ValueReasonInvalidParams, "field": "format"},
+					"format must be full or compact"))
+				return
+			}
 		}
 	}
 	if depth < 0 {
@@ -238,6 +349,12 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 	}
 	if maxPerPath > maxReadStructurePerPath {
 		maxPerPath = maxReadStructurePerPath
+	}
+	if maxNodes <= 0 {
+		maxNodes = defaultReadStructureNodes
+	}
+	if maxNodes > maxReadStructureNodes {
+		maxNodes = maxReadStructureNodes
 	}
 	hierarchyOnly := depth == 0
 
@@ -363,7 +480,7 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 		return ids, total
 	}
 
-	// buildContextNode: pré-ordre (node puis children).
+	// buildContextNode: pre-order (node then children).
 	//
 	// shown is false only for an external caller that may not read this context:
 	// node.Children then holds the readable descendants, which the caller splices
@@ -549,7 +666,7 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 			}
 		}
 
-		// Tri alpha des siblings (déterministe) et gate max_per_path sur CE node.
+		// Alphabetical sort of the siblings (deterministic) and the max_per_path gate on THIS node.
 		finish()
 		return node, readable
 	}
@@ -624,13 +741,27 @@ func (l *ReflexiveLoop) capReadStructure(msg circulation.Message) {
 		return
 	}
 
+	nodesTotal := countNavNodes(root)
+	if nodesTotal > maxNodes {
+		limitNavNodes(&root, maxNodes)
+	}
+	var shownRoot any = root
+	format := "full"
+	if compact {
+		shownRoot, format = compactOf(root), "compact"
+	}
 	l.emitResponseOK(in, map[string]any{
-		circulation.KeyRoot: root,
+		circulation.KeyRoot: shownRoot,
 		circulation.KeyParams: map[string]any{
 			circulation.KeyScope:      scope,
 			circulation.KeyDepth:      depth,
 			circulation.KeyMaxPerPath: maxPerPath,
+			"max_nodes":               maxNodes,
+			"format":                  format,
 		},
+		"nodes_total":    nodesTotal,
+		"nodes_returned": countNavNodes(root),
+		"truncated":      nodesTotal > maxNodes,
 	})
 }
 

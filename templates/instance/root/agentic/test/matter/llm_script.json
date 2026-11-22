@@ -1,0 +1,18 @@
+{
+ "rules": [
+  {
+   "when": {},
+   "then": {
+    "output": {
+     "messages": [
+      {
+       "to": "user:1",
+       "kind": "user",
+       "content": "ok {{mid}}"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

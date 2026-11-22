@@ -1,0 +1,45 @@
+import type React from "react";
+
+const border = "1px solid var(--syn-border-medium, rgba(255,255,255,0.14))";
+const card = "var(--syn-surface-0, rgba(0,0,0,0.25))";
+const muted = "var(--syn-text-muted, rgba(232,234,237,0.55))";
+
+export const styles: Record<string, React.CSSProperties> = {
+  root: { display: "flex", height: "100%", minHeight: 0, background: "var(--syn-surface-overlay, #1a1b1e)", color: "var(--syn-text-primary, #e8eaed)", fontFamily: "system-ui, sans-serif", fontSize: 14 },
+  side: { width: 340, minWidth: 260, display: "flex", flexDirection: "column", borderRight: border, minHeight: 0 },
+  sideHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: border },
+  title: { fontWeight: 600 },
+  list: { overflow: "auto", flex: 1, padding: 6 },
+  row: { display: "flex", flexDirection: "column", gap: 2, padding: "7px 9px", borderRadius: 6, cursor: "pointer", border: "1px solid transparent" },
+  rowSelected: { background: card, border: "1px solid var(--syn-selected-border, rgba(138,180,248,0.6))" },
+  rowTop: { display: "flex", alignItems: "center", gap: 6 },
+  rowTitle: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  rowMeta: { color: muted, fontSize: 12 },
+  badge: { background: "var(--syn-feedback-info, #8ab4f8)", color: "var(--syn-text-inverse, #071014)", borderRadius: 10, padding: "0 7px", fontSize: 11, fontWeight: 700 },
+  tag: { border, borderRadius: 4, padding: "0 5px", fontSize: 11, color: muted },
+  main: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 },
+  mainHeader: { display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: border },
+  stream: { flex: 1, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 8 },
+  bubbleUser: { alignSelf: "flex-end", maxWidth: "75%", background: "var(--syn-feedback-info, #8ab4f8)", color: "var(--syn-text-inverse, #071014)", borderRadius: 10, padding: "7px 11px", whiteSpace: "pre-wrap" },
+  bubblePilot: { alignSelf: "flex-start", maxWidth: "80%", background: card, border, borderRadius: 10, padding: "7px 11px", whiteSpace: "pre-wrap" },
+  bubbleLabel: { color: muted, fontSize: 11, marginBottom: 2 },
+  toolCard: { alignSelf: "flex-start", maxWidth: "80%", border, borderRadius: 8, padding: "4px 9px", background: card, fontSize: 12 },
+  toolSummary: { cursor: "pointer", color: muted },
+  pre: { margin: "6px 0 2px", whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, maxHeight: 220, overflow: "auto" },
+  separator: { alignSelf: "stretch", borderTop: border, color: muted, fontSize: 12, paddingTop: 4 },
+  alert: { alignSelf: "stretch", color: "var(--syn-feedback-error, #f28b82)", background: "var(--syn-feedback-error-bg, rgba(242,139,130,0.12))", borderRadius: 6, padding: "5px 9px", fontSize: 12 },
+  waiting: { alignSelf: "flex-start", color: muted, fontSize: 12, fontStyle: "italic", padding: "2px 4px" },
+  banner: { margin: "6px 8px 0", padding: "5px 9px", borderRadius: 6, fontSize: 12, color: "var(--syn-feedback-warning, #fdd663)", background: "var(--syn-feedback-warning-bg, rgba(253,214,99,0.12))" },
+  metricsPanel: { width: 300, minWidth: 240, display: "flex", flexDirection: "column", gap: 6, padding: 12, borderLeft: border, overflow: "auto", fontSize: 12 },
+  inputCard: { alignSelf: "flex-start", maxWidth: "80%", border, borderRadius: 8, padding: "5px 10px", background: card, fontSize: 13 },
+  inputPanel: { display: "flex", flexDirection: "column", gap: 8, padding: 12, borderTop: border, background: "var(--syn-surface-1, rgba(138,180,248,0.08))" },
+  note: { alignSelf: "center", color: muted, fontSize: 12 },
+  composer: { display: "flex", gap: 8, padding: 10, borderTop: border },
+  input: { flex: 1, resize: "none", background: card, color: "inherit", border, borderRadius: 6, padding: "7px 9px", font: "inherit" },
+  buttonQuiet: { background: "transparent", color: "inherit", border: "1px solid var(--syn-border, #3c4043)", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  button: { background: "var(--syn-feedback-info, #8ab4f8)", color: "var(--syn-text-inverse, #071014)", border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontWeight: 600 },
+  buttonDisabled: { opacity: 0.5, cursor: "default" },
+  ghost: { background: "transparent", color: "inherit", border, borderRadius: 6, padding: "4px 9px", cursor: "pointer" },
+  empty: { margin: "auto", color: muted, textAlign: "center", padding: 24 },
+  error: { color: "var(--syn-feedback-error, #f28b82)", fontSize: 12, padding: "0 12px 6px" },
+};

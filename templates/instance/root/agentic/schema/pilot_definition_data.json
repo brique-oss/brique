@@ -1,0 +1,47 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "pilot_definition_data",
+    "description": "Defines the content (substance) of a pilot_definition Matter: the persistent configuration used to instantiate the cognition of a generic pilot."
+  },
+  "functional": {
+    "id": [],
+    "_id_note": "Required. Stable identifier of the pilot definition.",
+    "prompt": [],
+    "_prompt_note": "Required. Cognitive instructions defining the role, perspective, behavior, and decision principles of the pilot.",
+    "model": [],
+    "_model_note": "Required. Model configuration or model reference used by the pilot when performing inference.",
+    "parameters": [],
+    "_parameters_note": "Required or open according to the consuming LLM wrapper. Holds inference parameters associated with the selected model.",
+    "default_projection": {
+      "schema_ref": "projection_definition"
+    },
+    "_default_projection_note": "Required. Deterministic default projection used when constructing the continuity context for inference.",
+    "known_capacities": {
+      "schema_ref": "known_capacity",
+      "cardinality": "many"
+    },
+    "_known_capacities_note": "Required. Stable capacities explicitly known by this pilot definition. Dynamically discovered capacities remain continuity-local and are not written back automatically.",
+    "rules": [],
+    "_rules_note": "Required or open collection of explicit behavioral, operational, or domain rules supplied to the pilot.",
+    "limits": {
+      "compaction_advised_ratio": [],
+      "compaction_required_ratio": [],
+      "context_tokens": [],
+      "max_inferences_per_message": [],
+      "wait_timeout_s": []
+    },
+    "_limits_note": "Optional. Operational ceilings of the pilot. max_inferences_per_message lowers, never raises, the default ceiling of cognitive chain steps allowed for one message. context_tokens is the context window of the model, in tokens; without it no compaction pressure is computed. compaction_advised_ratio (default 0.60) is the part of the window from which the pilot is invited to compact; compaction_required_ratio (default 0.85) the part from which a succession is imposed. wait_timeout_s (default 3600) is how long a wait group waits for an answer that never comes: past it, every missing answer is resolved as an error answer (timeout) and the pilot decides.",
+    "allowed_capacities": [],
+    "_allowed_capacities_note": "Optional. Patterns of the capacity references the pilot may invoke; * matches any text, / included (for example /root/vocabulary.* or */read.meaning). Absent: every capacity is allowed. Present: only these, plus the contract readers /root/read.capacity and */read.meaning that agentic_core exposes to every pilot. forbidden_capacities wins over it.",
+    "forbidden_capacities": [],
+    "_forbidden_capacities_note": "Optional. Patterns of the capacity references the pilot may never invoke, whatever allowed_capacities says (for example /root/edit.* or */wrapper.*). Applied by agentic_core before any effect of the output: it is code, not a request made to the model.",
+    "allowed_contexts": [],
+    "_allowed_contexts_note": "Optional. Absolute paths of contexts: a capacity addressed to one of them, or to a context nested in it, may be invoked. Combines with allowed_capacities (a listed capacity or a listed context is enough). forbidden_capacities and forbidden_contexts win.",
+    "forbidden_contexts": [],
+    "_forbidden_contexts_note": "Optional. Absolute paths of contexts: no capacity addressed to one of them, or to a context nested in it, may be invoked, whatever the allowed lists say."
+  },
+  "subjective": {}
+}

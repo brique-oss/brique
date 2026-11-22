@@ -1,0 +1,157 @@
+{
+  "brique": {
+    "cap_name": "infer.scaleway",
+    "kind": "interpreted",
+    "lang": "python",
+    "rel_ctx": "",
+    "wrapper": "llm_llm"
+  },
+  "functional": {
+    "#root": {
+      "effects": {},
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object",
+            "_comment": "Transit parameter, consumed by this capacity. It may arrive as a value or as a transit reference; the contract declares only its name and schema (/root/llm/schema/request), and it is read through the parameter resolver."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object",
+            "_comment": "Transit result, consumed by the caller (/root/llm/schema/response). Never persisted by this capacity."
+          }
+        }
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#adapt_request": {
+                "inputs": {
+                  "params": {
+                    "request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Build the Scaleway Generative APIs Chat Completions request from the canonical request.",
+                "transformation_contract": {
+                  "morphing": "A canonical inference request becomes a Scaleway chat-completion request.",
+                  "notes": [
+                    "HTTP method: POST.",
+                    "Serverless API URL: https://api.scaleway.ai/v1/chat/completions.",
+                    "Header Authorization: Bearer ${SCW_SECRET_KEY}.",
+                    "Header Content-Type: application/json.",
+                    "request.model -> body.model.",
+                    "request.messages -> body.messages preserving role, content and order.",
+                    "request.parameters.max_output_tokens -> body.max_tokens when present.",
+                    "request.parameters.temperature -> body.temperature when present.",
+                    "request.parameters.top_p -> body.top_p when present.",
+                    "request.parameters.stop -> body.stop when present.",
+                    "request.requirements.reasoning -> body.reasoning_effort when supported by the selected Scaleway model.",
+                    "When request.output.format is absent or 'text', structured response_format is omitted.",
+                    "When request.output.format is 'json', body.response_format = {\"type\":\"json_object\"}.",
+                    "When request.output.format is 'json_schema', body.response_format = {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"brique_response\",\"schema\":request.output.schema}}.",
+                    "This capacity targets Scaleway Serverless Generative APIs. A dedicated deployment would require its deployment-specific base URL and is not implicitly substituted."
+                  ]
+                }
+              }
+            },
+            {
+              "#execute": {
+                "inputs": {
+                  "params": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Execute the Scaleway chat-completion request asynchronously.",
+                "transformation_contract": {
+                  "morphing": "A Scaleway chat-completion request becomes a Scaleway chat-completion response."
+                }
+              }
+            },
+            {
+              "#normalize_response": {
+                "inputs": {
+                  "params": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Normalize the Scaleway response into /root/llm/schema/response.",
+                "transformation_contract": {
+                  "morphing": "A Scaleway response becomes a canonical inference response.",
+                  "notes": [
+                    "Read generated content from provider_response.choices[0].message.content.",
+                    "For format 'text', response.output.content preserves that content.",
+                    "For format 'json' or 'json_schema', parse the generated JSON string into response.output.content.",
+                    "response.output.format is the effective canonical output format.",
+                    "response.resolved.provider = 'scaleway'.",
+                    "response.resolved.model = provider_response.model.",
+                    "response.usage.input_tokens = provider_response.usage.prompt_tokens.",
+                    "response.usage.output_tokens = provider_response.usage.completion_tokens.",
+                    "response.usage.total_tokens = provider_response.usage.total_tokens.",
+                    "response.finish_reason = provider_response.choices[0].finish_reason.",
+                    "response.duration_ms = duration_ms."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "role": "Adapt a canonical LLM request to the Scaleway OpenAI-compatible Chat Completions API, execute it asynchronously, and normalize the result.",
+      "transformation_contract": {
+        "invariants": [
+          "request.provider equals 'scaleway'.",
+          "request.model is forwarded unchanged.",
+          "Scaleway-specific representation remains internal.",
+          "Authentication is read from SCW_SECRET_KEY.",
+          "The API call is asynchronous.",
+          "The capacity is stateless.",
+          "The request and the response are transit values: no Matter is read, written or created, and nothing is persisted.",
+          "A transient failure of the provider (a rate limit 429, an overload 529, a server error 5xx, a request timeout 408, a broken connection) is asked again up to three times, waiting longer each time (the Retry-After of the provider when it gives one); any other error is returned at once."
+        ],
+        "morphing": "A canonical inference request becomes a canonical inference response produced through Scaleway."
+      }
+    }
+  },
+  "objective": {
+    "name": "infer.scaleway",
+    "description": "Execute a canonical inference request through Scaleway Generative APIs and return a canonical inference response."
+  },
+  "subjective": {}
+}

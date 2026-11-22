@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/cross_cutting_crash_recovery.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Cross-cutting document about recovering an agentic-context Continuity after a crash.",
+    "name": "cross_cutting_crash_recovery"
+  },
+  "subjective": {}
+}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 
 	"brique_engine/platform/protectedfile"
 )
@@ -27,7 +28,7 @@ const (
 var chromeExtensionIDPattern = regexp.MustCompile(`^[a-p]{32}$`)
 
 func supportedChromiumBrowser(browser string) bool {
-	return slices.Contains([]string{"brave", "chrome", "chromium"}, browser)
+	return slices.Contains([]string{"brave", "chrome"}, browser)
 }
 
 func supportedBrowser(browser string) bool {
@@ -39,22 +40,6 @@ func validBrowserExtensionID(browser, extensionID string) bool {
 		return extensionID == FirefoxExtensionID
 	}
 	return supportedChromiumBrowser(browser) && chromeExtensionIDPattern.MatchString(extensionID)
-}
-
-type BrowserNativeHostOptions struct {
-	Browser     string
-	ExtensionID string
-}
-
-type BrowserNativeHostInstallation struct {
-	Format       string `json:"format"`
-	Browser      string `json:"browser"`
-	ExtensionID  string `json:"extension_id"`
-	HostName     string `json:"host_name"`
-	HostPath     string `json:"host_path"`
-	ManifestPath string `json:"manifest_path"`
-	RuntimeID    string `json:"runtime_id"`
-	GatewayAlias string `json:"gateway_alias"`
 }
 
 type chromeNativeManifest struct {
@@ -73,14 +58,21 @@ type firefoxNativeManifest struct {
 	AllowedExtensions []string `json:"allowed_extensions"`
 }
 
-func encodeBrowserNativeManifest(browser, extensionID, hostPath string) ([]byte, error) {
+func encodeBrowserNativeManifest(browser string, extensionIDs []string, hostPath string) ([]byte, error) {
+	if len(extensionIDs) == 0 {
+		return nil, errors.New("no extension to allow")
+	}
 	var manifest any
 	if browser == "firefox" {
 		manifest = firefoxNativeManifest{Name: BrowserNativeHostName, Description: "Brique browser bridge",
-			Path: hostPath, Type: "stdio", AllowedExtensions: []string{extensionID}}
+			Path: hostPath, Type: "stdio", AllowedExtensions: extensionIDs}
 	} else {
+		origins := make([]string, 0, len(extensionIDs))
+		for _, id := range extensionIDs {
+			origins = append(origins, "chrome-extension://"+id+"/")
+		}
 		manifest = chromeNativeManifest{Name: BrowserNativeHostName, Description: "Brique browser bridge",
-			Path: hostPath, Type: "stdio", AllowedOrigins: []string{"chrome-extension://" + extensionID + "/"}}
+			Path: hostPath, Type: "stdio", AllowedOrigins: origins}
 	}
 	return json.MarshalIndent(manifest, "", "  ")
 }
@@ -89,24 +81,12 @@ var browserNativeManifestPath = defaultBrowserNativeManifestPath
 var browserNativeRegister = registerBrowserNativeManifest
 var browserNativeDefaultLauncherDirectory = DefaultDataDirectory
 
-func (s Store) InstallBrowserNativeHost(ctx context.Context, options BrowserNativeHostOptions) (BrowserNativeHostInstallation, error) {
-	if !supportedBrowser(options.Browser) || !validBrowserExtensionID(options.Browser, options.ExtensionID) {
-		return BrowserNativeHostInstallation{}, errors.New("invalid browser native host installation")
-	}
-	defaultDirectory, err := browserNativeDefaultLauncherDirectory()
-	configuredDirectory, configuredErr := filepath.Abs(s.Directory)
-	defaultDirectory, defaultErr := filepath.Abs(defaultDirectory)
-	if err != nil || configuredErr != nil || defaultErr != nil ||
-		filepath.Clean(configuredDirectory) != filepath.Clean(defaultDirectory) {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host requires the default launcher data directory")
-	}
-	gateway, err := s.BrowserGateway()
-	if err != nil {
-		return BrowserNativeHostInstallation{}, err
-	}
-	instance, err := s.Get(gateway.Alias)
+// hostBinaryOf finds the native host in the runtime package of an instance, after the checks the
+// registry always makes: the package is the one registered, compatible, and it provides the bridge.
+func (s Store) hostBinaryOf(ctx context.Context, alias string) (string, error) {
+	instance, err := s.Get(alias)
 	if err != nil || instance.RuntimePath == "" || instance.RuntimeID == "" {
-		return BrowserNativeHostInstallation{}, errors.New("browser gateway requires an associated runtime package")
+		return "", errors.New("the identity instance needs a runtime package, which carries the native host")
 	}
 	inspect := s.InspectPackage
 	if inspect == nil {
@@ -114,44 +94,102 @@ func (s Store) InstallBrowserNativeHost(ctx context.Context, options BrowserNati
 	}
 	inspection, err := inspect(ctx, instance.RuntimePath)
 	if err != nil || !inspection.Compatible || inspection.Manifest.RuntimeID != instance.RuntimeID || inspection.Directory != instance.RuntimePath {
-		return BrowserNativeHostInstallation{}, errors.New("browser gateway runtime is unavailable or incompatible")
+		return "", errors.New("the runtime of the identity instance is unavailable or incompatible")
 	}
 	if !slices.Contains(inspection.Manifest.Contracts, "brique.browser.bridge/1") {
-		return BrowserNativeHostInstallation{}, errors.New("browser gateway runtime does not provide the browser bridge")
+		return "", errors.New("the runtime of the identity instance does not provide the browser bridge")
 	}
-	hostPath := ""
 	for _, component := range inspection.Manifest.Components {
 		if component.Name == "browser-host" && component.Kind == "binary" {
-			hostPath = filepath.Join(inspection.Directory, filepath.FromSlash(component.Path))
-			break
+			hostPath := filepath.Join(inspection.Directory, filepath.FromSlash(component.Path))
+			if info, err := os.Stat(hostPath); err != nil || !info.Mode().IsRegular() {
+				return "", errors.New("the native host binary is unavailable")
+			}
+			return hostPath, nil
 		}
 	}
-	if hostPath == "" {
-		return BrowserNativeHostInstallation{}, errors.New("browser gateway runtime has no native host")
+	return "", errors.New("the runtime of the identity instance has no native host")
+}
+
+// syncBrowserNativeHosts makes the native host registrations say what the associations say: one
+// manifest per location a browser reads, listing every extension associated there (Chrome and Brave share
+// their location on macOS), and none where nothing is associated. The host binary comes from the runtime
+// of the identity instance.
+func (s Store) syncBrowserNativeHosts(ctx context.Context) error {
+	defaultDirectory, err := browserNativeDefaultLauncherDirectory()
+	configured, configuredErr := filepath.Abs(s.Directory)
+	defaultAbsolute, defaultErr := filepath.Abs(defaultDirectory)
+	if err != nil || configuredErr != nil || defaultErr != nil || filepath.Clean(configured) != filepath.Clean(defaultAbsolute) {
+		return errors.New("the browser native host requires the default launcher data directory")
 	}
-	info, err := os.Stat(hostPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host binary is unavailable")
-	}
-	manifestPath, err := browserNativeManifestPath(options.Browser, s.Directory)
-	if err != nil || !filepath.IsAbs(manifestPath) || filepath.Base(manifestPath) != browserNativeManifestFilename {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host manifest location is unavailable")
-	}
-	directory := filepath.Dir(manifestPath)
-	if err := protectedfile.CreateProtectedDirectory(directory); err != nil {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host manifest directory is unavailable")
-	}
-	raw, err := encodeBrowserNativeManifest(options.Browser, options.ExtensionID, hostPath)
+	associations, err := s.BrowserAssociations()
 	if err != nil {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host manifest encoding failed")
+		return err
 	}
-	if err := protectedfile.WriteProtectedFile(directory, browserNativeManifestFilename, append(raw, '\n'), 0o600); err != nil {
-		return BrowserNativeHostInstallation{}, errors.New("browser native host manifest installation failed")
+	type location struct {
+		browsers []string
+		ids      []string
+		host     string
 	}
-	if err := browserNativeRegister(options.Browser, manifestPath); err != nil {
-		return BrowserNativeHostInstallation{}, err
+	locations := map[string]*location{}
+	for _, descriptor := range supportedBrowsers {
+		path, err := browserNativeManifestPath(descriptor.Name, s.Directory)
+		if err != nil || !filepath.IsAbs(path) || filepath.Base(path) != browserNativeManifestFilename {
+			return errors.New("browser native host manifest location is unavailable")
+		}
+		if locations[path] == nil {
+			locations[path] = &location{}
+		}
+		locations[path].browsers = append(locations[path].browsers, descriptor.Name)
 	}
-	return BrowserNativeHostInstallation{Format: BrowserNativeInstallation, Browser: options.Browser,
-		ExtensionID: options.ExtensionID, HostName: BrowserNativeHostName, HostPath: hostPath,
-		ManifestPath: manifestPath, RuntimeID: instance.RuntimeID, GatewayAlias: instance.Alias}, nil
+	for _, entry := range associations.Entries {
+		path, _ := browserNativeManifestPath(entry.Browser, s.Directory)
+		place := locations[path]
+		if !slices.Contains(place.ids, entry.ExtensionID) {
+			place.ids = append(place.ids, entry.ExtensionID)
+		}
+		if place.host == "" {
+			host, err := s.hostBinaryOf(ctx, entry.Identity)
+			if err != nil {
+				return err
+			}
+			place.host = host
+		}
+	}
+	for path, place := range locations {
+		if len(place.ids) == 0 {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return errors.New("browser native host manifest could not be removed")
+			}
+			for _, browser := range place.browsers {
+				if err := unregisterBrowserNativeManifestHook(browser); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		sort.Strings(place.ids)
+		firefox := slices.Contains(place.browsers, "firefox")
+		kind := place.browsers[0]
+		if firefox {
+			kind = "firefox"
+		}
+		raw, err := encodeBrowserNativeManifest(kind, place.ids, place.host)
+		if err != nil {
+			return errors.New("browser native host manifest encoding failed")
+		}
+		directory := filepath.Dir(path)
+		if err := protectedfile.CreateProtectedDirectory(directory); err != nil {
+			return errors.New("browser native host manifest directory is unavailable")
+		}
+		if err := protectedfile.WriteProtectedFile(directory, browserNativeManifestFilename, append(raw, '\n'), 0o600); err != nil {
+			return errors.New("browser native host manifest installation failed")
+		}
+		for _, browser := range place.browsers {
+			if err := browserNativeRegister(browser, path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

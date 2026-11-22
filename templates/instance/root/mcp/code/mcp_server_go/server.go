@@ -17,34 +17,107 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"mime"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
-const maxControlMessageBytes int64 = 4 << 20
+const (
+	maxControlMessageBytes int64 = 4 << 20
+
+	maxSessions           = 32               // SSE clients served at once
+	maxInflightTotal      = 64               // requests being dispatched, all sessions together
+	maxInflightPerSession = 8                // requests being dispatched for one session
+	sessionBuffer         = 256              // frames waiting for a client that reads slowly; past it the client is dropped
+	keepAliveEvery        = 25 * time.Second // a comment on the stream: a dead peer is found by the write that fails
+)
 
 // MCPServer listens for LLM connections over HTTP/SSE and dispatches
 // MCP requests to the two Brique capacities: mcp.initialize and brique.intention.
+//
+// It is the edge of Brique toward its clients, and it is local: it listens on the loopback interface, it answers only the clients that
+// came through it (one session per SSE stream, the answer goes to that session alone), and it refuses what a web page can send to
+// localhost (a Host that is not the loopback, an Origin, a body that is not JSON).
 type MCPServer struct {
 	addr    string
 	handler *MCPHandler
+	guard   guard
 	srv     *http.Server
 }
 
 func NewMCPServer(addr string, handler *MCPHandler) *MCPServer {
-	return &MCPServer{addr: addr, handler: handler}
+	return &MCPServer{addr: addr, handler: handler, guard: newGuard(addr, nil)}
+}
+
+// checkListenAddr refuses an address that is not the loopback, unless the operator said so.
+func checkListenAddr(addr string, allowRemote bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("BRIQUE_MCP_ADDR %q is not host:port: %w", addr, err)
+	}
+	if !isLoopbackHost(host) && !allowRemote {
+		return fmt.Errorf("refusing to listen on %q: it is not the loopback interface (set BRIQUE_MCP_ALLOW_REMOTE=true to open it on purpose)", addr)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// guard refuses the requests that a client of this server never sends and a web page can.
+type guard struct {
+	hosts   map[string]bool // nil: any Host (an address that was opened on purpose)
+	origins map[string]bool // a browser always sends its Origin; Claude Code and the other clients of the protocol do not
+}
+
+func newGuard(addr string, origins []string) guard {
+	g := guard{origins: map[string]bool{}}
+	for _, o := range origins {
+		g.origins[o] = true
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || !isLoopbackHost(host) {
+		return g
+	}
+	g.hosts = map[string]bool{}
+	for _, h := range []string{"127.0.0.1", "localhost", "[::1]"} { // a DNS name that points to the loopback is still not one of these
+		g.hosts[h+":"+port] = true
+	}
+	return g
+}
+
+// check returns the status to refuse with, or 0.
+func (g guard) check(r *http.Request) (int, string) {
+	if g.hosts != nil && !g.hosts[strings.ToLower(r.Host)] {
+		return http.StatusForbidden, "host not allowed"
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && !g.origins[origin] {
+		return http.StatusForbidden, "origin not allowed"
+	}
+	return 0, ""
 }
 
 func (s *MCPServer) Start() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sse", s.handleSSE)
 	mux.HandleFunc("/message", s.handleMessage)
-	s.srv = &http.Server{Addr: s.addr, Handler: mux}
+	// No WriteTimeout: an SSE stream lives as long as its client. A client that stops reading is dropped by the session buffer.
+	s.srv = &http.Server{Addr: s.addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	go func() {
 		log.Printf("[mcp] HTTP server listening on %s", s.addr)
 		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -59,29 +132,48 @@ func (s *MCPServer) Stop() {
 	}
 }
 
-// handleSSE opens an SSE stream toward the LLM client.
+// handleSSE opens an SSE stream toward one client and tells it where to post: /message?session=<its session>.
 func (s *MCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
+	if code, msg := s.guard.check(r); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
-
-	// Send the endpoint URL so the client knows where to POST messages.
-	fmt.Fprintf(w, "event: endpoint\ndata: /message\n\n")
+	sess, err := s.handler.OpenSession()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	fmt.Fprintf(w, "event: endpoint\ndata: /message?session=%s\n\n", sess.id)
 	flusher.Flush()
-
-	s.handler.RegisterSSE(w, flusher, r.Context().Done())
+	s.handler.Serve(sess, w, flusher, r.Context().Done())
 }
 
-// handleMessage receives a JSON-RPC 2.0 request from the LLM and dispatches it.
+// handleMessage receives a JSON-RPC 2.0 request from the LLM and dispatches it for the session that sent it.
 func (s *MCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.guard.check(r); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// A body that is not declared JSON is what a page can send to localhost without the browser asking first.
+	if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || media != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	sess := s.handler.Session(r.URL.Query().Get("session"))
+	if sess == nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxControlMessageBytes)
@@ -95,8 +187,16 @@ func (s *MCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	// Dispatch is async — response goes through SSE.
-	go s.handler.Dispatch(req)
+	if !s.handler.acquire(sess) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many requests in flight", http.StatusTooManyRequests)
+		return
+	}
+	// Dispatch is async — the response goes through the SSE stream of this session, and to no other.
+	go func() {
+		defer s.handler.release(sess)
+		s.handler.Dispatch(sess, req)
+	}()
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -121,19 +221,48 @@ type JSONRPCError struct {
 	Message string `json:"message"`
 }
 
-// --- SSE client registry ---
+// --- sessions ---
 
-type sseClient struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	done    <-chan struct{}
+// session is one SSE client: what it posts is answered on its own stream and on no other.
+type session struct {
+	id       string
+	out      chan []byte
+	done     chan struct{}
+	once     sync.Once
+	inflight chan struct{}
 }
 
-// MCPHandler holds the SSE clients and dispatches MCP requests to Brique capacities.
+func (s *session) close() { s.once.Do(func() { close(s.done) }) }
+
+// send queues one frame for the stream. A client that does not read is dropped, never waited for.
+func (s *session) send(data []byte) {
+	select {
+	case <-s.done:
+	case s.out <- data:
+	default:
+		s.close()
+	}
+}
+
+func (s *session) reply(resp JSONRPCResponse) {
+	if data, err := json.Marshal(resp); err == nil {
+		s.send(data)
+	}
+}
+
+// notify sends a JSON-RPC notification (no id, no answer expected) to this session.
+func (s *session) notify(method string, params any) {
+	if data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params}); err == nil {
+		s.send(data)
+	}
+}
+
+// MCPHandler holds the sessions and dispatches MCP requests to Brique capacities.
 type MCPHandler struct {
 	outbound BriqueOutbound
 	mu       sync.Mutex
-	clients  []*sseClient
+	sessions map[string]*session
+	inflight chan struct{}
 }
 
 // ProgressForwarder is an outbound that can report the `running` acknowledgements of a long capacity.
@@ -154,47 +283,89 @@ type BriqueOutbound interface {
 }
 
 func NewMCPHandler(outbound BriqueOutbound) *MCPHandler {
-	return &MCPHandler{outbound: outbound}
+	return &MCPHandler{outbound: outbound, sessions: map[string]*session{}, inflight: make(chan struct{}, maxInflightTotal)}
 }
 
-func (h *MCPHandler) RegisterSSE(w http.ResponseWriter, flusher http.Flusher, done <-chan struct{}) {
-	client := &sseClient{w: w, flusher: flusher, done: done}
-	h.mu.Lock()
-	h.clients = append(h.clients, client)
-	h.mu.Unlock()
-	<-done
-	h.mu.Lock()
-	for i, c := range h.clients {
-		if c == client {
-			h.clients = append(h.clients[:i], h.clients[i+1:]...)
-			break
-		}
+// OpenSession gives a new client its own session, with an identifier it cannot guess.
+func (h *MCPHandler) OpenSession() (*session, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, err
 	}
-	h.mu.Unlock()
-}
-
-// notify sends a JSON-RPC notification (no id, no answer expected) to the connected clients.
-func (h *MCPHandler) notify(method string, params any) {
-	data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
-	if err != nil {
-		return
-	}
+	s := &session{id: hex.EncodeToString(raw), out: make(chan []byte, sessionBuffer), done: make(chan struct{}),
+		inflight: make(chan struct{}, maxInflightPerSession)}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, c := range h.clients {
-		fmt.Fprintf(c.w, "event: message\ndata: %s\n\n", data)
-		c.flusher.Flush()
+	if len(h.sessions) >= maxSessions {
+		return nil, fmt.Errorf("too many clients connected (%d)", maxSessions)
 	}
+	h.sessions[s.id] = s
+	return s, nil
+}
+
+func (h *MCPHandler) Session(id string) *session {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sessions[id]
+}
+
+func (h *MCPHandler) CloseSession(s *session) {
+	s.close()
+	h.mu.Lock()
+	delete(h.sessions, s.id)
+	h.mu.Unlock()
+}
+
+// Serve writes the frames of a session to its stream until the client goes away, or is dropped.
+func (h *MCPHandler) Serve(s *session, w http.ResponseWriter, flusher http.Flusher, gone <-chan struct{}) {
+	defer h.CloseSession(s)
+	ticker := time.NewTicker(keepAliveEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case data := <-s.out:
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		case <-s.done:
+			return
+		case <-gone:
+			return
+		}
+	}
+}
+
+// acquire takes a place in the requests being dispatched, for the whole server and for this session; false when there is none.
+func (h *MCPHandler) acquire(s *session) bool {
+	select {
+	case h.inflight <- struct{}{}:
+	default:
+		return false
+	}
+	select {
+	case s.inflight <- struct{}{}:
+		return true
+	default:
+		<-h.inflight
+		return false
+	}
+}
+
+func (h *MCPHandler) release(s *session) {
+	<-s.inflight
+	<-h.inflight
 }
 
 // progressReporter turns each `running` acknowledgement into an MCP progress notification, as the
-// protocol defines it: only for a request that carried a progressToken, never as the call's result.
-func (h *MCPHandler) progressReporter(token json.RawMessage) func(count int, elapsed time.Duration) {
+// protocol defines it: only for a request that carried a progressToken, never as the call's result. It goes to the session that asked.
+func (h *MCPHandler) progressReporter(s *session, token json.RawMessage) func(count int, elapsed time.Duration) {
 	if len(token) == 0 || string(token) == "null" {
 		return nil
 	}
 	return func(count int, elapsed time.Duration) {
-		h.notify("notifications/progress", map[string]any{
+		s.notify("notifications/progress", map[string]any{
 			"progressToken": token,
 			"progress":      count,
 			"message":       fmt.Sprintf("capacity still running after %.0fs", elapsed.Seconds()),
@@ -202,21 +373,8 @@ func (h *MCPHandler) progressReporter(token json.RawMessage) func(count int, ela
 	}
 }
 
-func (h *MCPHandler) broadcast(resp JSONRPCResponse) {
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, c := range h.clients {
-		fmt.Fprintf(c.w, "event: message\ndata: %s\n\n", data)
-		c.flusher.Flush()
-	}
-}
-
 // Dispatch routes an incoming MCP JSON-RPC request to the appropriate Brique capacity.
-func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
+func (h *MCPHandler) Dispatch(s *session, req JSONRPCRequest) {
 	switch req.Method {
 
 	// <brique:capacity name="mcp.initialize">
@@ -225,10 +383,10 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 	case "initialize":
 		result, err := h.outbound.Initialize()
 		if err != nil {
-			h.broadcast(errResponse(req.ID, -32603, err.Error()))
+			s.reply(errResponse(req.ID, -32603, err.Error()))
 			return
 		}
-		h.broadcast(okResponse(req.ID, result))
+		s.reply(okResponse(req.ID, result))
 
 	case "notifications/initialized":
 		// Notification — no response.
@@ -246,17 +404,17 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 			} `json:"_meta"`
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {
-			h.broadcast(errResponse(req.ID, -32602, "invalid params"))
+			s.reply(errResponse(req.ID, -32602, "invalid params"))
 			return
 		}
 		switch p.Name {
 		case "brique.bootstrap":
 			path, err := h.outbound.FrameworkPath()
 			if err != nil {
-				h.broadcast(errResponse(req.ID, -32603, err.Error()))
+				s.reply(errResponse(req.ID, -32603, err.Error()))
 				return
 			}
-			h.broadcast(okResponse(req.ID, map[string]any{
+			s.reply(okResponse(req.ID, map[string]any{
 				"content": []any{
 					map[string]any{
 						"type": "text",
@@ -278,29 +436,29 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 			// agent behavior to get right, not something this server can
 			// distinguish from a live session.
 		default:
-			h.broadcast(errResponse(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name)))
+			s.reply(errResponse(req.ID, -32601, fmt.Sprintf("unknown tool: %s", p.Name)))
 			return
 		}
 		var result map[string]any
 		var err error
-		onRunning := h.progressReporter(p.Meta.ProgressToken)
+		onRunning := h.progressReporter(s, p.Meta.ProgressToken)
 		if forwarder, ok := h.outbound.(ProgressForwarder); ok && onRunning != nil {
 			result, err = forwarder.ForwardIntentionWithProgress(p.Arguments, onRunning)
 		} else {
 			result, err = h.outbound.ForwardIntention(p.Arguments)
 		}
 		if err != nil {
-			h.broadcast(errResponse(req.ID, -32603, err.Error()))
+			s.reply(errResponse(req.ID, -32603, err.Error()))
 			return
 		}
 		content, _ := result["content"].([]any)
 		if content == nil {
 			content = []any{map[string]any{"type": "text", "text": fmt.Sprintf("%v", result)}}
 		}
-		h.broadcast(okResponse(req.ID, map[string]any{"content": content, "isError": false}))
+		s.reply(okResponse(req.ID, map[string]any{"content": content, "isError": false}))
 
 	case "tools/list":
-		h.broadcast(okResponse(req.ID, map[string]any{
+		s.reply(okResponse(req.ID, map[string]any{
 			"tools": []any{
 				map[string]any{
 					"name":        "brique.bootstrap",
@@ -338,7 +496,7 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		}))
 
 	case "resources/list":
-		h.broadcast(okResponse(req.ID, map[string]any{
+		s.reply(okResponse(req.ID, map[string]any{
 			"resources": []any{
 				map[string]any{
 					"uri":         "brique://framework",
@@ -352,10 +510,10 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 	case "resources/read":
 		framework, err := h.outbound.Framework()
 		if err != nil {
-			h.broadcast(errResponse(req.ID, -32603, err.Error()))
+			s.reply(errResponse(req.ID, -32603, err.Error()))
 			return
 		}
-		h.broadcast(okResponse(req.ID, map[string]any{
+		s.reply(okResponse(req.ID, map[string]any{
 			"contents": []any{
 				map[string]any{
 					"uri":      "brique://framework",
@@ -366,16 +524,16 @@ func (h *MCPHandler) Dispatch(req JSONRPCRequest) {
 		}))
 
 	case "ping":
-		h.broadcast(okResponse(req.ID, map[string]any{}))
+		s.reply(okResponse(req.ID, map[string]any{}))
 
 	default:
-		h.broadcast(errResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)))
+		s.reply(errResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)))
 	}
 }
 
 // bootstrapText is the whole bootstrap answer: read the framework file in full.
 func bootstrapText(path string) string {
-	return "Lis le framework Brique en entier avant tout appel à `brique` : " + path
+	return "Read the whole Brique framework before any call to `brique`: " + path
 }
 
 func okResponse(id json.RawMessage, result any) JSONRPCResponse {

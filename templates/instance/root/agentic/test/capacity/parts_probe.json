@@ -1,0 +1,106 @@
+{
+  "brique": {
+    "cap_name": "parts_probe",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "parts_probe",
+    "description": "Pilot plan of the prompt-assembly scenarios: one pilot.infer step whose texts, Matters, order and model come from the incoming message.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity with a single step whose prompt is assembled from the parts carried by the message.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message carrying prompt texts, prompt Matters, an order, a model and some data becomes a message holding the word the model answers.",
+        "invariants": [
+          "Exactly one pilot.infer step; the plan assembles nothing itself: the parts are handed to pilot.infer as they came."
+        ],
+        "notes": [
+          "Test infrastructure of the prompt-assembly scenarios: it exercises pilot.infer, not any business behaviour."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "probe",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "probe",
+                  "prompt_parts": "$input.message.content.texts",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "word": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "word"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": "$input.message.content.model",
+                  "prompt_order": "$input.message.content.order",
+                  "framework": "$input.message.content.framework",
+                  "@matter": {
+                    "prompt_matters": "$input.message.content.matters"
+                  }
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$probe.payload.output.word"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,39 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "wait_group",
+    "description": "Defines a group of expected asynchronous results, the condition used to determine satisfaction, the results already received, and the current lifecycle state of the wait."
+  },
+  "functional": {
+    "id": [],
+    "_id_note": "Required. Unique identifier of the wait group within the continuity runtime. Assigned by agentic_core when the pilot output is accepted: the pilot never provides it.",
+    "condition": [
+      "all",
+      "any",
+      "first_success",
+      "n_of_m"
+    ],
+    "_condition_note": "Required. Determines when the wait group becomes satisfied.",
+    "n": [],
+    "_n_note": "Required only when condition is n_of_m. Specifies the number of received items required for satisfaction.",
+    "expected": {
+      "schema_ref": "expected_item",
+      "cardinality": "many"
+    },
+    "_expected_note": "Optional for the pilot, always present once the output is accepted. Collection of asynchronous results or events expected by this wait group. Absent: agentic_core fills it with the intentions of the same output whose await_response is true.",
+    "received": {
+      "schema_ref": "received_item",
+      "cardinality": "many"
+    },
+    "_received_note": "Required. Collection of expected items already resolved by durable incoming messages or results. Assigned by agentic_core: it starts empty and only incoming messages fill it.",
+    "status": [
+      "waiting",
+      "satisfied",
+      "completed"
+    ],
+    "_status_note": "Required. Current lifecycle state of the wait group. Assigned by agentic_core: a new group is waiting."
+  },
+  "subjective": {}
+}

@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1795333779552920000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 863,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "objective": {
+    "description": "Scenario-driven pilot of the integration test: its prompt is only a scenario marker, the fake LLM decides.",
+    "name": "it_pilot",
+    "type": "pilot_definition"
+  },
+  "subjective": {}
+}

@@ -1,0 +1,41 @@
+{
+  "brique": {
+    "cap_name": "test.fail",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "test.fail",
+    "description": "Test tool: always answers with an error."
+  },
+  "functional": {
+    "#root": {
+      "role": "Record the invocation and answer with an error.",
+      "inputs": {
+        "params": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {}
+      },
+      "transformation_contract": {
+        "morphing": "Any invocation becomes an error response.",
+        "failure": [
+          "Always fails with the requested message."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure only: it carries no business logic and exists to exercise the agentic mechanics."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry describing the call to the tool_calls matter."
+      }
+    }
+  },
+  "subjective": {}
+}

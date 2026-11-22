@@ -41,7 +41,7 @@ func FuzzReadFrame(f *testing.F) {
 
 func FuzzSessionHandle(f *testing.F) {
 	f.Add([]byte(`{"format":"brique.browser.bridge/1","kind":"hello","sequence":2}`))
-	f.Add([]byte(`{"format":"brique.browser.bridge/1","kind":"open","sequence":2,"session_id":"` + testSessionID + `","origin":"https://example.test","document_id":"d","frame_id":0,"ui_name":"root","user_activated":true}`))
+	f.Add([]byte(`{"format":"brique.browser.bridge/1","kind":"open","sequence":2,"session_id":"` + testSessionID + `","origin":"https://example.test","document_id":"d","frame_id":0,"ui_name":"root"}`))
 	f.Add([]byte(`{"format":"brique.browser.bridge/1","kind":"message","sequence":2,"session_id":"` + testSessionID + `","channel_id":"` + testChannelID + `","payload_b64":"e30"}`))
 	f.Add([]byte(`{"kind":"open","kind":"hello"}`))
 	f.Add([]byte(`[]`))

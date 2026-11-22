@@ -47,13 +47,12 @@ export function openChannel(input: {
   documentId: string;
   frameId: number;
   uiName: string;
-  userActivated: boolean;
   descriptor?: Uint8Array;
 }): Record<string, unknown> {
   requireSequence(input.sequence);
   if (!generatedSession.test(input.sessionId) || canonicalOrigin(input.origin) !== input.origin ||
       !coordinate.test(input.documentId) || !Number.isSafeInteger(input.frameId) || input.frameId < 0 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.uiName) || input.userActivated !== true ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.uiName) ||
       (input.descriptor !== undefined && (input.descriptor.byteLength === 0 || input.descriptor.byteLength > MAX_BRIDGE_DESCRIPTOR_BYTES))) {
     throw new Error("invalid browser bridge open request");
   }
@@ -66,7 +65,6 @@ export function openChannel(input: {
     document_id: input.documentId,
     frame_id: input.frameId,
     ui_name: input.uiName,
-    user_activated: true,
     ...(input.descriptor === undefined ? {} : { descriptor_b64: encodeBase64URL(input.descriptor) }),
   };
 }

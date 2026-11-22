@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -66,6 +66,33 @@ export function RootView() { return React.createElement("main", null, "Published
   }
 });
 
+test("Spark publishes one React even when the instance installed its own", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "spark-publication-test-"));
+  try {
+    // An instance whose package.json asks for react gets a node_modules/react next to its root. A UI is
+    // resolved from its own folder upward, so without a guard that copy is bundled beside the one the
+    // Pulse adapter uses, and every hook of the page fails with "Cannot read properties of null".
+    const instance = path.join(temporary, "private-instance");
+    await mkdir(path.join(instance, "node_modules", "react"), { recursive: true });
+    await writeFile(path.join(instance, "node_modules", "react", "package.json"), JSON.stringify({ name: "react", version: "0.0.0", main: "index.js" }));
+    await writeFile(path.join(instance, "node_modules", "react", "index.js"),
+      'module.exports = { INSTANCE_OWN_REACT_COPY: true, createElement() { return null; } };\n');
+    await mkdir(path.join(instance, "root"), { recursive: true });
+    const source = path.join(instance, "root", "RootView.tsx");
+    await writeFile(source, `
+import React from "react";
+export function RootView() { return React.createElement("main", null, "Published Brique UI"); }
+`);
+    const plan = projectionPlan(source, path.join(instance, "root", "context.json"), []);
+    const publication = await publishSparkWeb({ plan, sparkRoot: repository, outputDirectory: path.join(temporary, "publication") });
+    const files = (await publicationFiles(publication.directory)).filter((name) => name.endsWith(".js"));
+    const bundled = (await Promise.all(files.map((name) => readFile(path.join(publication.directory, name), "utf8")))).join("\n");
+    assert.equal(bundled.includes("INSTANCE_OWN_REACT_COPY"), false, "the instance's own react was bundled next to the shared one");
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test("Spark publishes deterministic secondary UIs under opaque stable routes", async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "spark-publication-multi-ui-"));
   try {
@@ -85,6 +112,9 @@ test("Spark publishes deterministic secondary UIs under opaque stable routes", a
       outputDirectory: path.join(temporary, "publication"),
     });
     assert.equal(publication.catalog.entries.length, 2);
+    // The manifest lists files in byte order, which is the order the Go verifier requires.
+    const listed = publication.manifest.files.map((file) => file.path);
+    assert.deepEqual(listed, [...listed].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     const secondary = publication.catalog.entries[1];
     assert.equal(secondary.contextPath, "/root/child");
     assert.match(secondary.url, /^\/ui\/ui1_[A-Za-z0-9_-]{43}\/$/u);

@@ -1,0 +1,26 @@
+{
+  "description": "Retry of a call refused because the callee is busy (a refusal comes before execution, so asking again is safe). A timeout is never retried.",
+  "defaults": {"attempts": 8, "base_ms": 20, "cap_ms": 1000},
+  "is_busy": [
+    {"name": "wrapper queue full", "response": {"status": "error", "error": {"code": "refused", "details": {"reason": "busy"}}}, "busy": true},
+    {"name": "engine matter loop", "response": {"status": "error", "error": {"code": "refused", "details": {"reason": "loop busy"}}}, "busy": true},
+    {"name": "other reason", "response": {"status": "error", "error": {"code": "internal", "details": {"reason": "wrapper_capacity_failed"}}}, "busy": false},
+    {"name": "no details", "response": {"status": "error", "error": {"code": "refused", "message": "busy"}}, "busy": false},
+    {"name": "success", "response": {"status": "ok", "payload": {}}, "busy": false},
+    {"name": "running", "response": {"status": "running"}, "busy": false}
+  ],
+  "pause": [
+    {"attempt": 0, "min_ms": 10, "max_ms": 30},
+    {"attempt": 1, "min_ms": 20, "max_ms": 60},
+    {"attempt": 2, "min_ms": 40, "max_ms": 120},
+    {"attempt": 5, "min_ms": 320, "max_ms": 960},
+    {"attempt": 6, "min_ms": 500, "max_ms": 1500},
+    {"attempt": 40, "min_ms": 500, "max_ms": 1500}
+  ],
+  "settings": [
+    {"env": {}, "attempts": 8},
+    {"env": {"BRIQUE_BUSY_ATTEMPTS": "3"}, "attempts": 3},
+    {"env": {"BRIQUE_BUSY_ATTEMPTS": "0"}, "attempts": 8},
+    {"env": {"BRIQUE_BUSY_ATTEMPTS": "abc"}, "attempts": 8}
+  ]
+}

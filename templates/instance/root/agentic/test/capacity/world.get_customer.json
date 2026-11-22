@@ -1,0 +1,53 @@
+{
+  "brique": {
+    "cap_name": "world.get_customer",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "world.get_customer",
+    "description": "Look up a customer of the shop by identifier (name, tier, email, open orders)."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return the customer record for the given customer identifier.",
+      "inputs": {
+        "params": {
+          "customer_id": {
+            "type": "string",
+            "description": "Customer identifier such as C1."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "customer": {
+            "type": "object"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A customer identifier becomes the customer record held by the shop.",
+        "invariants": [
+          "The lookup is case-insensitive on the identifier.",
+          "An unknown identifier fails with a not-found error."
+        ],
+        "success": [
+          "The response carries the customer with name, tier, email and open_orders."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper over a fixed in-memory shop world (test infrastructure, deterministic)."
+        ],
+        "failure": [
+          "customer_id missing or customer not found."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry to the tool_calls matter."
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "correlation",
+    "description": "Defines the correlation data carried by a message to express causal, intentional, wait-group, or continuity relationships."
+  },
+  "functional": {
+    "causation_id": [],
+    "_causation_id_note": "Optional. Identifies the message or event that directly caused the current message.",
+    "intention_id": [],
+    "_intention_id_note": "Optional. Identifies the Brique intention to which the current message is related.",
+    "wait_group_id": [],
+    "_wait_group_id_note": "Optional. Identifies the wait group to which the current message contributes.",
+    "continuity_id": [],
+    "_continuity_id_note": "Optional. Identifies a related continuity, for example the source or delegated child continuity associated with the message."
+  },
+  "subjective": {}
+}

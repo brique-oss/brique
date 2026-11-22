@@ -1,0 +1,53 @@
+{
+  "brique": {
+    "cap_name": "world.get_order",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "world.get_order",
+    "description": "Look up an order of the shop by its identifier (status, carrier, delivery estimate, items, total)."
+  },
+  "functional": {
+    "#root": {
+      "role": "Return the order record for the given order identifier.",
+      "inputs": {
+        "params": {
+          "order_id": {
+            "type": "string",
+            "description": "Order identifier such as A100."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "order": {
+            "type": "object"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "An order identifier becomes the order record held by the shop.",
+        "invariants": [
+          "The lookup is case-insensitive on the identifier.",
+          "An unknown identifier fails with a not-found error instead of returning an empty record."
+        ],
+        "success": [
+          "The response carries the order with status, carrier, items and total_eur, and eta or delivered_on when applicable."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper over a fixed in-memory shop world (test infrastructure, deterministic)."
+        ],
+        "failure": [
+          "order_id missing or order not found."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry to the tool_calls matter."
+      }
+    }
+  },
+  "subjective": {}
+}

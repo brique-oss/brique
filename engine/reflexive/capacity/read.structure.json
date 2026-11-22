@@ -26,6 +26,14 @@
           "max_per_path": {
             "type": "integer",
             "_comment": "Optional maximum number of items returned per directory node. Defaults to an engine limit when absent."
+          },
+          "format": {
+            "type": "string",
+            "_comment": "Optional: 'full' (default) or 'compact'. 'compact' is about four times smaller: a node is {name, kind, total, truncated, leaf_kind, children}; there is no path (it is the names from the root down, the root's own path is the scope); a child that is a plain leaf is only its name string, of kind leaf_kind of its parent; total is the real number of children (more than the children listed when truncated is true)."
+          },
+          "max_nodes": {
+            "type": "integer",
+            "_comment": "Optional maximum number of nodes in the whole answer (default 150, at most 5000). The levels nearest the root are kept whole before any deeper one; a node that lost children has children_truncated true and its children_total stays the real number. Narrow the question (scope, a smaller depth) rather than raising it."
           }
         }
       },
@@ -37,7 +45,19 @@
           },
           "params": {
             "type": "object",
-            "_comment": "Effective traversal parameters applied: { scope (string), depth (integer), max_per_path (integer) }."
+            "_comment": "Effective traversal parameters applied: { scope (string), depth (integer), max_per_path (integer), max_nodes (integer) }."
+          },
+          "nodes_total": {
+            "type": "integer",
+            "_comment": "Number of nodes the traversal found, before the max_nodes limit."
+          },
+          "nodes_returned": {
+            "type": "integer",
+            "_comment": "Number of nodes in root."
+          },
+          "truncated": {
+            "type": "boolean",
+            "_comment": "True when the answer was cut at max_nodes: it is not the whole tree, so the absence of an element in it proves nothing."
           }
         }
       },

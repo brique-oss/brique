@@ -1,0 +1,112 @@
+{
+  "brique": {
+    "cap_name": "tiny_word",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "tiny_word",
+    "description": "Pilot plan of the tiny real-LLM tests: one one-word prompt, one one-word answer.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity with a single one-word prompt.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message naming a thing becomes a message holding the colour word that the model gives for it.",
+        "invariants": [
+          "Exactly one pilot.infer step; no other action."
+        ],
+        "notes": [
+          "Test infrastructure of the tiny real-LLM scenarios: prompts and answers are one word, to spend as few tokens as possible."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "w",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "word",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "word": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "word"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 40,
+                      "temperature": 0,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "Reply with one lowercase word: the usual colour of the thing in the input.",
+                    "$input.message.content"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$w.payload.output.word"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

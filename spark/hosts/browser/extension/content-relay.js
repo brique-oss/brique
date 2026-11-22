@@ -4,26 +4,23 @@
   const marker = "brique.browser.page/1";
   const port = chrome.runtime.connect({ name: "brique.browser.bridge/1" });
   let pendingOpen;
-  let activated = false;
   let closed = false;
-  // The instance descriptor is renewed every ~90 seconds and the hello binds the
-  // current one, so a descriptor fetched at page load is stale by the time the user
-  // clicks. When the page asks for a refresh, the relay releases the open only with a
-  // descriptor the page fetched after the trusted click, within this window.
+  // The instance descriptor is renewed every ~90 seconds and the hello binds the current one, so the relay asks the
+  // page for a fresh one at the moment of the open and accepts the answer only within this window.
   const DESCRIPTOR_WINDOW_MS = 3000;
   let descriptorWindowEnd = 0;
 
   const toPage = (message) => window.postMessage({ marker, direction: "extension", message }, location.origin);
+  // No click is asked. A page of the local instance carries no descriptor and the native host accepts only the exact
+  // address of the web server of an associated instance. A page that carries a descriptor (another instance, reached
+  // with the identity of the person) can act only if its browser origin is in the descriptor's signed ui_origins:
+  // the instance of the person checks it before signing anything.
+  const askDescriptor = () => { descriptorWindowEnd = Date.now() + DESCRIPTOR_WINDOW_MS; toPage({ kind: "descriptor-request" }); };
   const tryOpen = () => {
-    if (closed || !activated || !pendingOpen) return;
-    if (pendingOpen.refreshDescriptor) {
-      descriptorWindowEnd = Date.now() + DESCRIPTOR_WINDOW_MS;
-      toPage({ kind: "descriptor-request" });
-      return;
-    }
+    if (closed || !pendingOpen) return;
+    if (pendingOpen.refreshDescriptor) { askDescriptor(); return; }
     port.postMessage(pendingOpen);
     pendingOpen = undefined;
-    activated = false;
   };
   const releaseWithDescriptor = (descriptorB64) => {
     if (closed || !pendingOpen?.refreshDescriptor || Date.now() > descriptorWindowEnd) return;
@@ -32,15 +29,6 @@
     descriptorWindowEnd = 0;
     port.postMessage(open);
   };
-  const activation = (event) => {
-    if (event.isTrusted && navigator.userActivation?.isActive) {
-      activated = true;
-      tryOpen();
-      activated = false;
-    }
-  };
-  addEventListener("pointerdown", activation, true);
-  addEventListener("keydown", activation, true);
   addEventListener("pagehide", () => port.disconnect(), { once: true });
 
   port.onMessage.addListener((message) => {

@@ -1,0 +1,174 @@
+{
+  "brique": {
+    "cap_name": "infer.openai",
+    "kind": "interpreted",
+    "lang": "python",
+    "rel_ctx": "",
+    "wrapper": "llm_llm"
+  },
+  "functional": {
+    "#root": {
+      "effects": {},
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object",
+            "_comment": "Transit parameter, consumed by this capacity. It may arrive as a value or as a transit reference; the contract declares only its name and schema (/root/llm/schema/request), and it is read through the parameter resolver."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object",
+            "_comment": "Transit result, consumed by the caller (/root/llm/schema/response). Never persisted by this capacity."
+          }
+        }
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#adapt_request": {
+                "inputs": {
+                  "params": {
+                    "request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Build the OpenAI Responses API HTTP request from the canonical request.",
+                "transformation_contract": {
+                  "morphing": "A canonical inference request becomes an OpenAI Responses API request.",
+                  "notes": [
+                    "HTTP method: POST.",
+                    "API URL: https://api.openai.com/v1/responses.",
+                    "Header Authorization: Bearer ${OPENAI_API_KEY}.",
+                    "Header Content-Type: application/json.",
+                    "request.model -> body.model.",
+                    "request.messages -> body.input, preserving message order, role and content.",
+                    "request.parameters.temperature -> body.temperature when present.",
+                    "request.parameters.top_p -> body.top_p when present.",
+                    "request.parameters.max_output_tokens -> body.max_output_tokens when present.",
+                    "request.requirements.reasoning -> body.reasoning.effort when present and supported by the requested model.",
+                    "When request.output.format is absent or 'text', body.text.format = {\"type\":\"text\"}.",
+                    "When request.output.format is 'json', body.text.format = {\"type\":\"json_object\"}.",
+                    "When request.output.format is 'json_schema', body.text.format = {\"type\":\"json_schema\",\"name\":\"brique_response\",\"schema\":request.output.schema,\"strict\":true}.",
+                    "request.parameters.stop has no direct mapping in the Responses API contract used by this capacity; if supplied, the capacity fails rather than silently changing its meaning.",
+                    "No canonical field is silently converted into provider-specific semantic instructions."
+                  ]
+                }
+              }
+            },
+            {
+              "#execute": {
+                "inputs": {
+                  "params": {
+                    "provider_request": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Execute the OpenAI Responses API request asynchronously.",
+                "transformation_contract": {
+                  "morphing": "An OpenAI API request becomes an OpenAI API response.",
+                  "notes": [
+                    "Measure duration immediately around the remote API call.",
+                    "HTTP authentication errors, transport errors and provider failures propagate as Brique errors.",
+                    "Credential values are never copied into returned diagnostic information."
+                  ]
+                }
+              }
+            },
+            {
+              "#normalize_response": {
+                "inputs": {
+                  "params": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "provider_response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "response": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Normalize the OpenAI Responses API result into /root/llm/schema/response.",
+                "transformation_contract": {
+                  "morphing": "An OpenAI Responses API result becomes a canonical inference response.",
+                  "notes": [
+                    "Collect text from provider_response.output message content blocks whose type is 'output_text'.",
+                    "For format 'text', response.output.content is the resulting text.",
+                    "For format 'json' or 'json_schema', parse the generated JSON text and place the parsed value in response.output.content.",
+                    "response.output.format is the effective canonical output format.",
+                    "response.resolved.provider = 'openai'.",
+                    "response.resolved.model = provider_response.model.",
+                    "response.usage.input_tokens = provider_response.usage.input_tokens.",
+                    "response.usage.output_tokens = provider_response.usage.output_tokens.",
+                    "response.usage.total_tokens = provider_response.usage.total_tokens.",
+                    "When provider_response.status is 'completed', response.finish_reason = 'stop'.",
+                    "When provider_response.status is 'incomplete', response.finish_reason = provider_response.incomplete_details.reason.",
+                    "A provider status of 'failed' or 'cancelled' becomes a Brique error instead of a successful canonical response.",
+                    "response.duration_ms = duration_ms."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "role": "Adapt a canonical LLM request to the OpenAI Responses API, execute it asynchronously, and normalize the result to the canonical response schema.",
+      "transformation_contract": {
+        "failure": [
+          "OPENAI_API_KEY is unavailable.",
+          "The request contains a canonical feature that cannot be represented by the OpenAI Responses API.",
+          "The OpenAI request fails.",
+          "The OpenAI response cannot be normalized to /root/llm/schema/response."
+        ],
+        "invariants": [
+          "request.provider equals 'openai'.",
+          "request.model is forwarded unchanged as the requested OpenAI model.",
+          "The canonical cognitive content is not rewritten.",
+          "OpenAI-specific representation remains internal to this capacity.",
+          "Authentication is read from OPENAI_API_KEY.",
+          "The API call is asynchronous.",
+          "The capacity is stateless between invocations.",
+          "The request and the response are transit values: no Matter is read, written or created, and nothing is persisted.",
+          "A transient failure of the provider (a rate limit 429, an overload 529, a server error 5xx, a request timeout 408, a broken connection) is asked again up to three times, waiting longer each time (the Retry-After of the provider when it gives one); any other error is returned at once."
+        ],
+        "morphing": "A canonical inference request becomes a canonical inference response produced through OpenAI."
+      }
+    }
+  },
+  "objective": {
+    "description": [
+      "Execute a canonical inference request through OpenAI and return a canonical inference response.",
+      "Execute a canonical inference request through the OpenAI Responses API and return a canonical inference response."
+    ],
+    "name": "infer.openai"
+  },
+  "subjective": {}
+}

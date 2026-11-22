@@ -506,3 +506,62 @@ func TestSupervisorRevalidatesWebPublicationBeforeStart(t *testing.T) {
 		t.Fatalf("changed publication start = %#v, %v", status, err)
 	}
 }
+
+// An engine that is already running (started by VS Code, another launcher...) is simply active
+// for a managed instance: shown as ready, never owned, never stopped by this supervisor, and
+// forgotten as soon as it is gone.
+func TestSupervisorShowsAnAlreadyRunningEngineAsActive(t *testing.T) {
+	engine := buildSupervisorTestEngine(t)
+	root := supervisorTestRoot(t)
+	store := Store{Directory: filepath.Join(t.TempDir(), "launcher")}
+	if _, err := store.Add(context.Background(), AddOptions{Alias: "managed", RootPath: root, EnginePath: engine}); err != nil {
+		t.Fatal(err)
+	}
+	runtimeDirectory, err := os.MkdirTemp("/tmp", "brique-launcher-adopt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDirectory) })
+	newSupervisor := func() *Supervisor {
+		supervisor, err := NewSupervisor(SupervisorOptions{Store: store, RuntimeDirectory: runtimeDirectory,
+			StartTimeout: 15 * time.Second, StopTimeout: 10 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = supervisor.Shutdown(ctx)
+		})
+		return supervisor
+	}
+	owner, other := newSupervisor(), newSupervisor()
+	started, err := owner.Start(context.Background(), "managed")
+	if err != nil || started.State != StateReady || !started.Owned {
+		t.Fatalf("owner start = %#v, %v", started, err)
+	}
+
+	status, err := other.Status(context.Background(), "managed")
+	if err != nil || status.State != StateReady || status.Owned || status.Error != "" || status.PID != started.PID {
+		t.Fatalf("status of a running engine = %#v, %v", status, err)
+	}
+	adopted, err := other.Start(context.Background(), "managed")
+	if err != nil || adopted.State != StateReady || adopted.Owned || adopted.PID != started.PID {
+		t.Fatalf("start of a running engine = %#v, %v", adopted, err)
+	}
+	refused, err := other.Stop(context.Background(), "managed")
+	if err == nil || refused.State != StateReady || !strings.Contains(err.Error(), "started outside the launcher") {
+		t.Fatalf("stop of a foreign engine = %#v, %v", refused, err)
+	}
+	if again, err := owner.Status(context.Background(), "managed"); err != nil || again.State != StateReady {
+		t.Fatalf("the foreign stop reached the engine: %#v, %v", again, err)
+	}
+
+	if _, err := owner.Stop(context.Background(), "managed"); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := other.Status(context.Background(), "managed")
+	if err != nil || gone.State != StateStopped {
+		t.Fatalf("status after the engine is gone = %#v, %v", gone, err)
+	}
+}

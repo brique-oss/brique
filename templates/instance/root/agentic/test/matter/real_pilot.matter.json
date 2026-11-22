@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1791637487965093000,
+    "substance_mode": "brique",
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "objective": {
+    "description": "Pilot of the real-LLM tests: customer-support assistant of a fictional online shop, driven by a real model through the recorded provider.",
+    "name": "real_pilot",
+    "type": "pilot_definition"
+  },
+  "subjective": {}
+}

@@ -1,0 +1,218 @@
+{
+  "brique": {
+    "cap_name": "investigate_orders_real",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "investigate_orders_real",
+    "description": "Capacity pilot of the integration tests: ordinary lookups feed a triage prompt, a sub-continuity investigates the chosen order, and its result feeds the concluding prompt.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity by combining ordinary capacities, prompts and a sub-continuity.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message naming a customer becomes an answer built from a lookup, a triage prompt, a sub-continuity investigation and a concluding prompt.",
+        "invariants": [
+          "Lookups and the opening of the sub-continuity are deterministic actions and leave no trace in the continuity.",
+          "Each prompt goes through pilot.infer, and its input is built from what the previous steps returned."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/world.get_customer",
+                "as": "customer",
+                "with": {
+                  "customer_id": "$input.message.content.customer_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/investigate_orders_real.fetch_orders",
+                "as": "orders",
+                "with": {
+                  "order_ids": "$customer.payload.customer.open_orders"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "triage",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "triage",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "order_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "order_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 300,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "You help a customer-support agent. Among these open orders of one customer, pick the one that deserves an investigation because it is delayed or at risk. Answer with its order_id.",
+                    "$orders.payload.items"
+                  ]
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.create",
+                "as": "opened",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "parent_id": "$input.continuity_id",
+                  "pilot_ref": {
+                    "context": "/root/agentic/test",
+                    "matter_id": "real_pilot"
+                  },
+                  "initial_intention": "Investigate one order."
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/mailbox.send",
+                "as": "handed",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "message": {
+                    "id": "$input.message.content.child_message_id",
+                    "from": "plan:investigate_orders_real",
+                    "kind": "user",
+                    "content": {
+                      "task": "Investigate this order: look it up and report its status and any risk of delay for the customer.",
+                      "order_id": "$triage.payload.output.order_id"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.activate",
+                "as": "finished",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.project",
+                "as": "child_view",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "projection": {
+                    "include_kinds": [
+                      "pilot"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "conclude",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "conclude",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "answer": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "answer"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 300,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "You are the customer-support assistant. From this investigation report, answer the customer in French in two sentences: the order, its status and the delay risk.",
+                    "$child_view.payload.projection"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$conclude.payload.output.answer"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

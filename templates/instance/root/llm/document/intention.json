@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "kind": "document",
+    "file": "document/intention.md",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "name": "intention",
+    "description": "Architectural intention of the /root/llm context: make language-model inference accessible in Brique."
+  },
+  "subjective": {}
+}

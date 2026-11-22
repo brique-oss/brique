@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -27,6 +28,57 @@ class _Lease:
 _current_lease: contextvars.ContextVar[_Lease | None] = contextvars.ContextVar("brique_work_lease", default=None)
 
 
+class KeyedLocks:
+    """Locks by key, for a short "read, compute, guarded write" on shared state.
+
+    The keys of one block are taken in sorted order, so two blocks that name the same keys in a different order cannot wait for each
+    other. A lock is local to this process and reduces conflicts; the guard on the write (an expected revision) stays the guarantee.
+    Do not hold one across a long wait (an inference, a call that may last).
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[str, list[Any]] = {}      # key -> [lock, number of blocks that hold it or wait for it]
+
+    @contextlib.asynccontextmanager
+    async def critical(self, *keys: str, yielding: Callable[[], Any] | None = None) -> AsyncIterator[None]:
+        """``yielding`` (the scheduler's): given, a wait for a lock that is taken does not hold the execution slot of the wrapper. Without that,
+        as many blocks waiting for the same key as there are slots would stop the wrapper, the one that holds the lock needing a slot itself
+        to make progress."""
+        ordered = sorted({str(key) for key in keys})
+        acquired: list[str] = []
+        try:
+            for key in ordered:
+                entry = self.entries.get(key)
+                if entry is None:
+                    entry = self.entries[key] = [asyncio.Lock(), 0]
+                entry[1] += 1
+                try:
+                    if yielding is not None and entry[0].locked():
+                        async with yielding():
+                            await entry[0].acquire()
+                    else:
+                        await entry[0].acquire()
+                except BaseException:
+                    self._leave(key, entry)
+                    raise
+                acquired.append(key)
+            yield
+        finally:
+            for key in reversed(acquired):
+                entry = self.entries[key]
+                entry[0].release()
+                self._leave(key, entry)
+
+    def _leave(self, key: str, entry: list[Any]) -> None:
+        entry[1] -= 1
+        if entry[1] <= 0 and not entry[0].locked():
+            self.entries.pop(key, None)
+
+
+# The schedulers alive in this process, for the diagnostic on demand (wrapper.diagnostic).
+schedulers: weakref.WeakSet["WorkScheduler"] = weakref.WeakSet()
+
+
 class WorkScheduler:
     """Bounded global execution, with FIFO task chains for the work that asks to be ordered."""
 
@@ -42,6 +94,9 @@ class WorkScheduler:
         self._tails: dict[str, asyncio.Task[None]] = {}
         self._active = 0
         self._accepting = True
+        self.locks = KeyedLocks()
+        self.refused = 0                                # works refused because the queue was full, since the start
+        schedulers.add(self)
 
     def start(self) -> None:
         self._accepting = True
@@ -50,6 +105,7 @@ class WorkScheduler:
         """Queue work. With ordered=True it runs after the work already queued under the same key;
         with ordered=False it only waits for a free slot, like any other work."""
         if not self._accepting or len(self._pending) >= self.max_concurrency + self.queue_limit:
+            self.refused += 1
             raise SchedulerFullError("wrapper pending-work queue is full")
         previous = self._tails.get(key) if ordered else None
         task = asyncio.create_task(self._run(key, previous, work), name=f"brique-wrapper-work:{key}")
@@ -94,6 +150,26 @@ class WorkScheduler:
                 else:
                     lease.holding = True
                     self._active += 1
+
+    def critical(self, *keys: str) -> contextlib.AbstractAsyncContextManager[None]:
+        """Hold the lock of every key for the length of the block (see ``KeyedLocks``). A wait for a taken lock gives the slot back."""
+        return self.locks.critical(*keys, yielding=self.yielding)
+
+    def stats(self) -> dict[str, Any]:
+        """A snapshot of the execution slots, for a diagnostic or a metric: nothing here changes the scheduler."""
+        return {
+            "max_concurrency": self.max_concurrency,
+            "queue_limit": self.queue_limit,
+            "free_slots": self._slots._value,
+            "active": self._active,
+            "pending": len(self._pending),
+            "queued": self.queued,
+            "refused": self.refused,
+            "ordered_chains": len(self._tails),
+            "ordered_keys": sorted(self._tails)[:6],
+            "locks": len(self.locks.entries),
+            "accepting": self._accepting,
+        }
 
     @property
     def queued(self) -> int:

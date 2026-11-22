@@ -1,0 +1,115 @@
+{
+  "brique": {
+    "cap_name": "review_orders_real.analyse_all",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "review_orders_real.analyse_all",
+    "description": "Looks up each order and has one prompt analyse it, with a real model."
+  },
+  "functional": {
+    "#root": {
+      "role": "Analyse each order of a list with one prompt per order.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "order_ids": {
+            "type": "array"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "items": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A list of order identifiers becomes the list of their analyses.",
+        "invariants": [
+          "Each order is looked up deterministically and analysed by exactly one prompt through pilot.infer."
+        ]
+      },
+      "resolution": {
+        "\u003efor_each": {
+          "collection": "$input.order_ids",
+          "as": "item",
+          "limit": 2,
+          "on_error": "fail",
+          "\u003edo": {
+            "\u003esequence": {
+              "items": [
+                {
+                  "invoke": {
+                    "@capacity": "/root/agentic/test/world.get_order",
+                    "as": "order",
+                    "with": {
+                      "order_id": "$item"
+                    }
+                  }
+                },
+                {
+                  "invoke": {
+                    "@capacity": "/root/agentic/pilot.infer",
+                    "as": "analysis",
+                    "with": {
+                      "continuity_id": "$input.continuity_id",
+                      "run_id": "$input.run_id",
+                      "step": "analyse",
+                      "output_schema": {
+                        "type": "object",
+                        "properties": {
+                          "order_id": {
+                            "type": "string"
+                          },
+                          "verdict": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "risk"
+                            ]
+                          },
+                          "why": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "order_id",
+                          "verdict",
+                          "why"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "model": {
+                        "provider": "recorded",
+                        "model": "claude-haiku-4-5-20251001",
+                        "parameters": {
+                          "max_output_tokens": 300,
+                          "upstream_provider": "anthropic"
+                        }
+                      },
+                      "prompt_parts": [
+                        "You review one order of an online shop. Say whether it is at risk of not reaching the customer on time (status delayed, customs, long delay) with verdict ok or risk, and a one-sentence reason. Repeat the order_id.",
+                        "$order.payload.order"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

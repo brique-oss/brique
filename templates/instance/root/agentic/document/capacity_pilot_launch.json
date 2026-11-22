@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/capacity_pilot_launch.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of the pilot launcher: a Capacity that creates a Continuity associated with a Matter or Capacity pilot, gives it a task, and activates it for the interface (root chat) or another pilot (child Continuity). Includes the contract and open points.",
+    "name": "capacity_pilot_launch"
+  },
+  "subjective": {}
+}

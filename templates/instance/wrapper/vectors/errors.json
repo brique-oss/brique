@@ -1,0 +1,20 @@
+{
+  "description": "How the error object of an engine response (code, message, details.reason) is classified by the runtimes. The reason decides first; the code decides when the reason says nothing known. A kind is what a caller reacts to: busy (nothing was done, ask again), revision_mismatch and line_count_mismatch (read again), connection_lost (the outcome is unknown: never ask again blindly), not_found, other. outcome_unknown is true when the call may have been executed.",
+  "cases": [
+    {"error": {"code": "refused", "message": "m", "details": {"reason": "busy"}}, "kind": "busy", "outcome_unknown": false},
+    {"error": {"code": "unavailable", "message": "m", "details": {"reason": "loop busy"}}, "kind": "busy", "outcome_unknown": false},
+    {"error": {"code": "refused", "message": "m", "details": {"reason": "revision_mismatch"}}, "kind": "revision_mismatch", "outcome_unknown": false},
+    {"error": {"code": "refused", "message": "m", "details": {"reason": "revision not coherent"}}, "kind": "revision_mismatch", "outcome_unknown": false},
+    {"error": {"code": "refused", "message": "m", "details": {"reason": "line_count_mismatch"}}, "kind": "line_count_mismatch", "outcome_unknown": false},
+    {"error": {"code": "unavailable", "message": "delivery target is unavailable", "details": {"reason": "connection_lost"}}, "kind": "connection_lost", "outcome_unknown": true},
+    {"error": {"code": "not_found", "message": "m"}, "kind": "not_found", "outcome_unknown": false},
+    {"error": {"code": "not_found", "message": "m", "details": {"reason": "unknown_cap"}}, "kind": "not_found", "outcome_unknown": false},
+    {"error": {"code": "refused", "message": "m", "details": {"reason": "something_else"}}, "kind": "other", "outcome_unknown": false},
+    {"error": {"code": "internal", "message": "m", "details": {}}, "kind": "other", "outcome_unknown": false},
+    {"error": {"code": "internal"}, "kind": "other", "outcome_unknown": false},
+    {"error": {"details": {"reason": 12}}, "kind": "other", "outcome_unknown": false},
+    {"error": null, "kind": "other", "outcome_unknown": false},
+    {"error": "text", "kind": "other", "outcome_unknown": false}
+  ],
+  "defaults": {"code": "internal", "message": "engine error"}
+}

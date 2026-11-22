@@ -1,0 +1,22 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "pilot_intention",
+    "description": "Defines one Brique intention decided by a pilot: its identifier, the capacity it addresses, and the parameters it carries, before the runtime enriches it for dispatch."
+  },
+  "functional": {
+    "id": [],
+    "_id_note": "Required. Unique identifier of the intention within the continuity. Assigned by agentic_core: the pilot never provides it and never designates an intention by it; a wait_group waits for all the awaited intentions of its output; the answer to the intention carries the identifier back.",
+    "target_capacity": [],
+    "_target_capacity_note": "Required. Explicit absolute reference to the Brique capacity addressed by the intention.",
+    "parameters": [],
+    "_parameters_note": "Required. Parameters passed to the target capacity according to its retrieved contract.",
+    "await_response": [],
+    "_await_response_note": "Required. Boolean chosen by the pilot. false: fire-and-forget, the invoke is non-blocking and no result is expected or tracked; the intention can never be referenced by a wait_group. true: the Response is expected and may be referenced by a wait_group through expected.ref equal to id.",
+    "target_type": [],
+    "_target_type_note": "Required. Family of the target capacity (user, matter, reflexive, execution or control). Assigned by agentic_core from the pilot_definition and from the names of the engine capacities: the pilot never provides it; user is the default for an unknown capacity."
+  },
+  "subjective": {}
+}

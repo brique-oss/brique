@@ -115,17 +115,29 @@ No external dependencies beyond the standard library and `golang.org/x/net/webso
 ## Runtime guarantees
 
 - current Brique `response.status` and structured-error contract
-- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`)
+- `BRIQUE_MAX_CONCURRENCY` (default `16`) and `BRIQUE_QUEUE_LIMIT` (default `256`); all the numeric settings are declared once (`settings.go`, `DescribeSettings`, `DeclareSetting`) and are the same as in the other runtimes (Wrapper.md §14.1.3)
 - FIFO ordering per matter; capacities run their calls in parallel unless a binding sets `Serial: true`, which runs one call at a time in arrival order
 - responses and `wrapper_stop` outside the work queue
 - strict binding validation before connection
 - 4 MiB control-message ceiling and five bounded connection attempts
 - matter commit before notification, relative notification origins and isolated delivery failures
 - idempotent subscriptions with owner-checked unsubscription
-- `running` responses renew the outbound inactivity budget
+- `running` responses renew the outbound inactivity budget, and a capacity sends its own with `params.NotifyRunning()` or, for a heartbeat until the end of the block, `stop := params.Keepalive(); defer stop()` (`BRIQUE_HEARTBEAT_MS`; never automatic)
+- a call refused `busy` is asked again with bounded backoff and jitter (`EmitAndWait`, `Call`, `SendRawIntention`; `OutboundParams.BusyAttempts` to insist longer)
+- an error response is a `*CallError` (`Code`, `Message`, `Details`, `Kind()`, `OutcomeUnknown()`; `IsBusy`, `IsRevisionMismatch`, `IsLineCountMismatch`, `IsNotFound`, `IsOutcomeUnknown`)
+- the payload of a response keeps an integer above 2^53 exact (`json.Number`), every other number is a `float64`: a Matter revision would not survive a `float64`
+- `SIGUSR1` writes `$TMPDIR/brique_wrapper_tasks_<pid>.txt` (slots, settings not at their default, every goroutine with its stack)
 - correlation and `intention.matters` are preserved by the message model
 
 Run validation with `go test -race ./...` from `lib/`.
+
+## Shared mechanisms
+
+Wrapper.md §14.1 describes the mechanisms the three runtimes share; in Go:
+
+- `params.Critical(keys...)` returns the release function of a critical section on those keys (sorted, a wait gives the execution slot back); `defer release()`
+- `params.Store(context)` returns the `*MatterClient` of a context: `Read`, `ReadText`, `ReadMany`, `ReadLines`, `Stat`, `Exists`, `Objective`, `Create`, `Write(id, content, &revision)`, `AppendLines`, `Delete`, `Update(id, compute)`, with the typed errors above (`ErrConcurrencyExhausted` after `BRIQUE_CAS_ATTEMPTS` lost races)
+- `Runtime.Scheduler().Stats()` is a snapshot of the execution slots
 
 ## Placement and transit
 

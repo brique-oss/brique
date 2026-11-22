@@ -31,9 +31,9 @@ await build({
   logLevel: "silent",
 });
 
-// Le relais WebSocket local est chargé par import() depuis le process Electron : il doit être
-// autonome, comme extension.cjs. On y embarque ws (et le code partagé de Pulse) plutôt que de
-// livrer node_modules. Les accélérateurs natifs optionnels de ws sont absents par conception.
+// The local WebSocket relay is loaded by import() from the Electron process: it must be
+// self-contained, like extension.cjs. ws (and the shared Pulse code) are bundled into it rather than
+// shipping node_modules. The optional native accelerators of ws are absent by design.
 await build({
   entryPoints: ["spark/hosts/LocalWebSocketRelay.ts"],
   outfile: "dist/spark/hosts/LocalWebSocketRelay.js",

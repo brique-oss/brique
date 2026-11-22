@@ -28,3 +28,5 @@ func defaultBrowserNativeManifestPath(browser, _ string) (string, error) {
 }
 
 func registerBrowserNativeManifest(string, string) error { return nil }
+
+func unregisterBrowserNativeManifest(string) error { return nil }

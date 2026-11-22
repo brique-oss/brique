@@ -141,7 +141,7 @@ func (sink *BrowserSink) add(binding browserbridge.Binding, connection BrowserCo
 	loop := sink.options.Loop
 	loop.browserUIMu.Lock()
 	loop.browserUI[interfaceName] = func(message circulation.Message) error {
-		payload, err := json.Marshal(message)
+		payload, err := boundedBridgePayload(message)
 		if err != nil {
 			return ErrBrowserSink
 		}
@@ -325,3 +325,25 @@ func decodeBrowserIntention(payload []byte) (circulation.Message, error) {
 }
 
 const maxBridgeControlPayloadBytes = 180 << 10
+
+// boundedBridgePayload is the JSON of a message for a page, which the bridge carries up to browserbridge.MaxPayloadBytes. A response
+// that is larger is not dropped without a word, which would leave the page waiting for ever: the page receives, instead, a response of
+// the same intention that says the answer was too large and how large.
+func boundedBridgePayload(message circulation.Message) ([]byte, error) {
+	payload, err := json.Marshal(message)
+	if err != nil || len(payload) <= browserbridge.MaxPayloadBytes {
+		return payload, err
+	}
+	if message.Kind != circulation.ValueKindResponse {
+		return nil, ErrBrowserSink
+	}
+	replaced := message
+	replaced.Response.Status = circulation.ValueStatusError
+	replaced.Response.Payload = nil
+	replaced.Response.Error = &circulation.ResponseProblem{
+		Origin: "engine", Code: "response_too_large",
+		Message: fmt.Sprintf("the answer is %d bytes and the browser bridge carries at most %d: ask for less (a shorter range, fewer lines)", len(payload), browserbridge.MaxPayloadBytes),
+		Details: map[string]any{"size_bytes": len(payload), "limit_bytes": browserbridge.MaxPayloadBytes},
+	}
+	return json.Marshal(replaced)
+}

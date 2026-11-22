@@ -1,0 +1,54 @@
+{
+  "brique": {
+    "cap_name": "test.open_gate",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "test.open_gate",
+    "description": "Test tool: opens a named gate."
+  },
+  "functional": {
+    "#root": {
+      "role": "Add the named gate to the open gates of the gates matter.",
+      "inputs": {
+        "params": {
+          "gate": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "gate": {
+            "type": "string"
+          },
+          "opened": {
+            "type": "boolean"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A gate name becomes an open gate.",
+        "invariants": [
+          "Opening an already open gate is an idempotent success."
+        ],
+        "success": [
+          "The gate is open and every waiting test.slow call may answer."
+        ],
+        "failure": [
+          "The gate parameter is missing."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure only: it carries no business logic and exists to exercise the agentic mechanics."
+        ]
+      },
+      "effects": {
+        "gates": "The named gate is added to the open list, idempotently."
+      }
+    }
+  },
+  "subjective": {}
+}

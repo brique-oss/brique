@@ -1,0 +1,170 @@
+{
+  "brique": {
+    "cap_name": "pilot.recover",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "pilot.recover",
+    "description": "Explicit start of the continuities whose run died: examines the continuities of the Structure and wakes those that cannot go on by themselves, without creating any message or replaying any intention."
+  },
+  "functional": {
+    "#root": {
+      "role": "Explicit start of the continuities whose run died: find those that cannot go on by themselves, then wake each with pilot.activate wake true.",
+      "inputs": {
+        "params": {
+          "continuity_ids": {
+            "type": "array",
+            "_comment": "Optional. Limits the examination to these continuities. Absent: every continuity of the Structure."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "examined": {
+            "type": "integer"
+          },
+          "woken": {
+            "type": "array"
+          },
+          "skipped": {
+            "type": "array"
+          }
+        }
+      },
+      "effects": {
+        "continuities": "Each woken continuity receives a wake activation; nothing else is written by this capacity."
+      },
+      "transformation_contract": {
+        "morphing": "A set of continuities, some of which lost their run, becomes the list of those that were woken.",
+        "invariants": [
+          "Nothing is woken unless this capacity is called: there is no start-up hook and no periodic pass.",
+          "Which continuities are woken is decided by continuity.stranded alone; this capacity decides nothing.",
+          "Waking is pilot.activate with wake true: no message is created and no intention is replayed.",
+          "When continuity_ids is given, only these continuities are examined."
+        ],
+        "success": [
+          "woken lists the continuities that were woken, in the order of the Structure."
+        ],
+        "failure": [
+          "Fails if continuity.stranded fails.",
+          "A continuity that cannot be read is skipped and named in skipped; it does not stop the others."
+        ],
+        "notes": [
+          "DSL orchestration: the calculation is continuity.stranded, the action is pilot.activate.",
+          "The DSL cannot derive a continuity_id from a Structure reference (no string operation), which is why finding the continuities is a capacity of its own."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#find": {
+                "role": "Find the continuities that cannot go on by themselves.",
+                "inputs": {
+                  "params": {
+                    "continuity_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_ids": {
+                      "type": "array"
+                    },
+                    "examined": {
+                      "type": "integer"
+                    },
+                    "skipped": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "The continuities of the Structure become the identifiers of those that need a run.",
+                  "invariants": [
+                    "Only continuity.stranded decides who is stranded."
+                  ]
+                },
+                "resolution": {
+                  ">if": {
+                    "when": {
+                      "left": "$input.continuity_ids",
+                      "op": "exists"
+                    },
+                    ">then": {
+                      "invoke": {
+                        "@capacity": "/root/agentic/continuity.stranded",
+                        "as": "stranded",
+                        "with": {
+                          "continuity_ids": "$input.continuity_ids"
+                        }
+                      }
+                    },
+                    ">else": {
+                      "invoke": {
+                        "@capacity": "/root/agentic/continuity.stranded",
+                        "as": "stranded",
+                        "with": {}
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "#wake": {
+                "role": "Wake each stranded continuity without waiting for it.",
+                "inputs": {
+                  "params": {
+                    "continuity_ids": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {}
+                },
+                "transformation_contract": {
+                  "morphing": "A list of identifiers becomes as many wake activations.",
+                  "invariants": [
+                    "Each wake is fire and forget: pilot.recover never waits for a run."
+                  ]
+                },
+                "resolution": {
+                  ">for_each": {
+                    "collection": "$stranded.payload.continuity_ids",
+                    "as": "item",
+                    "limit": 4,
+                    "on_error": "continue",
+                    ">do": {
+                      "invoke": {
+                        "@capacity": "/root/agentic/pilot.activate",
+                        "await_response": false,
+                        "with": {
+                          "continuity_id": "$item",
+                          "wake": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "output": {
+                "examined": "$stranded.payload.examined",
+                "woken": "$stranded.payload.continuity_ids",
+                "skipped": "$stranded.payload.skipped"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

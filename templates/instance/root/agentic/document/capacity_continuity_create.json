@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/capacity_continuity_create.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Intention of the continuity.create Capacity in the agentic context.",
+    "name": "capacity_continuity_create"
+  },
+  "subjective": {}
+}

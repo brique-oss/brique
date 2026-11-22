@@ -1,0 +1,51 @@
+{
+  "brique": {
+    "cap_name": "infer.recorded",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "infer.recorded",
+    "description": "Inference provider of the real-LLM tests: forwards the request to the real provider and records the exchange."
+  },
+  "functional": {
+    "#root": {
+      "role": "Forward a canonical inference request to the real provider and keep what was sent and received.",
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object",
+            "description": "Canonical inference request; parameters.upstream_provider selects the real provider (default anthropic)."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A canonical request becomes the real provider answer, and the exchange becomes an entry of real_calls.",
+        "invariants": [
+          "The answer returned is exactly the one of the real provider; recording never alters it.",
+          "The request is recorded as forwarded, with provider replaced by the upstream provider and upstream_provider removed from its parameters.",
+          "A provider failure is recorded then re-raised."
+        ],
+        "success": [
+          "The answer is returned and one entry (request, response, usage, elapsed time or error) is appended to real_calls."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper over a fixed in-memory shop world (test infrastructure, deterministic). It is reached through the provider case 'recorded' of /root/llm/infer."
+        ]
+      },
+      "effects": {
+        "real_calls": "Appends one entry per inference."
+      }
+    }
+  },
+  "subjective": {}
+}

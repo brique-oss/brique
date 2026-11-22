@@ -1,0 +1,57 @@
+{
+  "brique": {
+    "cap_name": "infer.fake",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "infer.fake",
+    "description": "Fake inference provider: answers according to scripted rules instead of a model."
+  },
+  "functional": {
+    "#root": {
+      "role": "Match the received inference request against the scripted rules and return the rule's decided output as a canonical inference response.",
+      "inputs": {
+        "params": {
+          "request": {
+            "type": "object"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "response": {
+            "type": "object"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "An inference request becomes the canonical response decided by the first matching scripted rule.",
+        "invariants": [
+          "The first rule whose conditions all hold is selected.",
+          "No applicable rule is an error: the fake never improvises an answer.",
+          "Every request is recorded in llm_calls before the answer is returned.",
+          "The answer carries the decided output unchanged in response.output.content."
+        ],
+        "success": [
+          "The response conforms to /root/llm/schema/response."
+        ],
+        "failure": [
+          "No rule matches the request.",
+          "The script matter is missing or invalid.",
+          "The selected rule asks for an error."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure only: it carries no business logic and exists to exercise the agentic mechanics."
+        ]
+      },
+      "effects": {
+        "llm_calls": "Appends the request summary and the matched rule to the llm_calls matter.",
+        "llm_script": "Read only."
+      }
+    }
+  },
+  "subjective": {}
+}

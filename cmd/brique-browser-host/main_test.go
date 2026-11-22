@@ -38,3 +38,19 @@ func TestFirefoxInvocationArgumentsAreAcceptedButBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestTheHostKnowsWhichExtensionStartedIt(t *testing.T) {
+	id := "abcdefghijklmnopabcdefghijklmnop"
+	for args, want := range map[string]string{"chrome": id, "firefox": firefoxExtensionID, "none": ""} {
+		var given []string
+		switch args {
+		case "chrome":
+			given = []string{"chrome-extension://" + id + "/", "--parent-window=7"}
+		case "firefox":
+			given = []string{"/Users/x/Library/Application Support/Mozilla/NativeMessagingHosts/com.brique.browser.json", firefoxExtensionID}
+		}
+		if got := extensionIDFromArgs(given); got != want {
+			t.Fatalf("%s: extension id %q, want %q", args, got, want)
+		}
+	}
+}

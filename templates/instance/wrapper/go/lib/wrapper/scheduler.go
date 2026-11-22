@@ -5,7 +5,10 @@
 
 package wrapper
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // WorkScheduler bounds global execution and chains FIFO the work that asks to be ordered.
 type WorkScheduler struct {
@@ -19,6 +22,14 @@ type WorkScheduler struct {
 	tails          map[string]chan struct{}
 	leases         sync.Map // owner -> *WorkLease, while its work runs
 	wg             sync.WaitGroup
+	critical       map[string]*criticalEntry
+	refused        int
+}
+
+// criticalEntry is the lock of one key and the number of goroutines that hold it or wait for it.
+type criticalEntry struct {
+	lock    chan struct{}
+	holders int
 }
 
 func NewWorkScheduler(maxConcurrency, queueLimit int) (*WorkScheduler, error) {
@@ -31,6 +42,7 @@ func NewWorkScheduler(maxConcurrency, queueLimit int) (*WorkScheduler, error) {
 		accepting:      true,
 		sem:            make(chan struct{}, maxConcurrency),
 		tails:          make(map[string]chan struct{}),
+		critical:       make(map[string]*criticalEntry),
 	}, nil
 }
 
@@ -50,6 +62,7 @@ func (s *WorkScheduler) SubmitParallel(key string, work func()) bool {
 func (s *WorkScheduler) SubmitFor(owner any, key string, ordered bool, work func()) bool {
 	s.mu.Lock()
 	if !s.accepting || s.pending >= s.maxConcurrency+s.queueLimit {
+		s.refused++
 		s.mu.Unlock()
 		return false
 	}
@@ -180,4 +193,98 @@ func (s *WorkScheduler) Close() {
 	s.accepting = false
 	s.mu.Unlock()
 	s.wg.Wait()
+}
+
+// Critical holds the lock of every key until the returned function is called: a short "read, compute, guarded write" on
+// shared state. owner is the message the work serves (the owner given to SubmitFor), or nil outside scheduled work.
+//
+// The keys are taken in sorted order, so two sections that name the same keys in a different order cannot wait for each other.
+// A wait for a lock that is taken does not hold an execution slot: without that, as many sections waiting for the same key as
+// there are slots would stop the wrapper, the one that holds the lock needing a slot itself to make progress. A lock is local to
+// this process and reduces conflicts; the guard on the write stays the guarantee. Do not hold it across a long wait.
+func (s *WorkScheduler) Critical(owner any, keys ...string) (release func()) {
+	unique := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		unique[key] = struct{}{}
+	}
+	ordered := make([]string, 0, len(unique))
+	for key := range unique {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	entries := make([]*criticalEntry, 0, len(ordered))
+	for _, key := range ordered {
+		s.mu.Lock()
+		entry := s.critical[key]
+		if entry == nil {
+			entry = &criticalEntry{lock: make(chan struct{}, 1)}
+			s.critical[key] = entry
+		}
+		entry.holders++
+		s.mu.Unlock()
+		select {
+		case entry.lock <- struct{}{}:
+		default:
+			resume := s.LeaseOf(owner).Yield()
+			entry.lock <- struct{}{}
+			resume()
+		}
+		entries = append(entries, entry)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for i := len(entries) - 1; i >= 0; i-- {
+				<-entries[i].lock
+				s.mu.Lock()
+				entries[i].holders--
+				if entries[i].holders == 0 && s.critical[ordered[i]] == entries[i] {
+					delete(s.critical, ordered[i])
+				}
+				s.mu.Unlock()
+			}
+		})
+	}
+}
+
+// Critical holds the lock of every key until the returned function is called; see WorkScheduler.Critical. The wait for a taken
+// lock gives back the execution slot of the capacity these parameters belong to.
+func (p *Params) Critical(keys ...string) (release func()) {
+	return p.runtime.scheduler.Critical(p.origin, keys...)
+}
+
+// SchedulerStats is a snapshot of the execution slots, for a diagnostic or a metric.
+type SchedulerStats struct {
+	MaxConcurrency int
+	QueueLimit     int
+	FreeSlots      int
+	Active         int
+	Pending        int
+	Queued         int
+	Refused        int // works refused because the queue was full, since the start
+	OrderedChains  int
+	Locks          int
+	Accepting      bool
+}
+
+// Stats returns a snapshot of the scheduler; it changes nothing.
+func (s *WorkScheduler) Stats() SchedulerStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	queued := s.pending - s.active
+	if queued < 0 {
+		queued = 0
+	}
+	return SchedulerStats{
+		MaxConcurrency: s.maxConcurrency,
+		QueueLimit:     s.queueLimit,
+		FreeSlots:      s.maxConcurrency - len(s.sem),
+		Active:         s.active,
+		Pending:        s.pending,
+		Queued:         queued,
+		Refused:        s.refused,
+		OrderedChains:  len(s.tails),
+		Locks:          len(s.critical),
+		Accepting:      s.accepting,
+	}
 }

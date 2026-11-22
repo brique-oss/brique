@@ -1,0 +1,42 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "request",
+    "description": "Provider-agnostic contract of an inference request addressed to this LLM context."
+  },
+  "functional": {
+    "messages": [],
+    "_messages_comment": "Ordered array of already-prepared messages forming the inference input. Each message carries a role and content. The LLM context receives the cognitive input already prepared. A message may carry cache: true, a provider-neutral hint that it ends a stable prefix reused across inferences; a provider without explicit caching ignores it.",
+    "metadata": [],
+    "_metadata_comment": "Optional free object describing the request for whoever observes it (for example the continuity and the step that asked). No provider adapter reads it: it is never sent to a provider.",
+    "parameters": {
+      "temperature": [],
+      "_temperature_comment": "Optional generation temperature when supported by the resolved model.",
+      "top_p": [],
+      "_top_p_comment": "Optional nucleus-sampling parameter when supported by the resolved model.",
+      "max_output_tokens": [],
+      "_max_output_tokens_comment": "Optional maximum number of tokens requested for the generated output.",
+      "stop": [],
+      "_stop_comment": "Optional stop sequences."
+    },
+    "requirements": {
+      "provider": [],
+      "_provider_comment": "Optional provider constraint. When absent, any compatible provider may be resolved.",
+      "model": [],
+      "_model_comment": "Optional explicit model constraint. When absent, an appropriate model may be resolved.",
+      "capabilities": [],
+      "_capabilities_comment": "Optional characteristics required from the model and used during model resolution.",
+      "reasoning": [],
+      "_reasoning_comment": "Optional requested reasoning characteristic or level, translated by the provider adapter when supported."
+    },
+    "output": {
+      "format": [],
+      "_format_comment": "Requested representation of the generated output.",
+      "schema": [],
+      "_schema_comment": "Optional structured-output contract when constrained structured generation is required."
+    }
+  },
+  "subjective": {}
+}

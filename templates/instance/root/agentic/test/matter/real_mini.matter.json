@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794043531847069000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 479,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "objective": {
+    "description": "Smallest pilot of the real-LLM tests: answers one word, with no capacity, to spend as few tokens as possible.",
+    "name": "real_mini",
+    "type": "pilot_definition"
+  },
+  "subjective": {}
+}

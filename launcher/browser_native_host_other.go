@@ -11,3 +11,7 @@ func defaultBrowserNativeManifestPath(string, string) (string, error) {
 func registerBrowserNativeManifest(string, string) error {
 	return errors.New("unsupported browser platform")
 }
+
+func unregisterBrowserNativeManifest(string) error {
+	return errors.New("unsupported browser platform")
+}

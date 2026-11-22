@@ -9,12 +9,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"brique_engine/platform/locking"
 )
 
-func TestInstanceResolverReadsTheSelectedGatewayStrictly(t *testing.T) {
+func TestInstanceResolverReadsTheAssociationOfAnExtensionStrictly(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -29,18 +30,20 @@ func TestInstanceResolverReadsTheSelectedGatewayStrictly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolver.Selected(); err == nil {
-		t.Fatal("a launcher without browser gateway must not select an instance")
+	extension := strings.Repeat("a", 32)
+	if _, err := resolver.Association(extension); err == nil {
+		t.Fatal("an extension nobody associated must not reach an instance")
 	}
 	if _, err := store.Add(context.Background(), AddOptions{Alias: "alpha", RootPath: root,
 		EnginePath: executable, Supervision: SupervisionExternal}); err != nil {
 		t.Fatal(err)
 	}
-	gateway, err := store.SetBrowserGateway("alpha")
-	if err != nil {
+	if err := store.updateBrowserAssociations(func(a *BrowserAssociations) {
+		a.Entries = append(a.Entries, BrowserAssociation{Browser: "chrome", ExtensionID: extension, Instances: []string{"alpha", "gone"}, Identity: "alpha"})
+	}); err != nil {
 		t.Fatal(err)
 	}
-	selection, err := resolver.Selected()
+	association, err := resolver.Association(extension)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +51,21 @@ func TestInstanceResolverReadsTheSelectedGatewayStrictly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Alias != "alpha" || selection.Revision != gateway.Revision || selection.RootPath != root ||
-		selection.RootObject != rootObject || selection.HasPublication {
+	// An instance that is no longer registered is no longer vouched for; the others are read from the registry.
+	if association.Identity != "alpha" || len(association.Instances) != 1 || association.Revision == 0 {
+		t.Fatalf("association: %+v", association)
+	}
+	selection := association.Instances[0]
+	if selection.Alias != "alpha" || selection.RootPath != root || selection.RootObject != rootObject || selection.HasPublication {
 		t.Fatalf("selection differs from the registry: %+v", selection)
 	}
 	if _, err := resolver.WebStatus("alpha"); err == nil {
 		t.Fatal("the web status must be unavailable without a launcher control endpoint")
+	}
+	if _, err := store.Remove("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.Association(extension); err == nil {
+		t.Fatal("an association whose identity instance is gone must be refused")
 	}
 }

@@ -17,24 +17,40 @@ const [{ resolveUI }, { buildContextUI }, { publishSparkWeb }] = await Promise.a
   import(pathToModule("dist/spark/ui/build/ContextUIBuilder.js")),
   import(pathToModule("dist/spark/hosts/web/WebPublisher.js")),
 ]);
-const plans = await discoverWebPlans(contextPath, "/root");
-if (plans.length === 0 || plans[0].ui.rootView.name === "BriqueEditorRoot") {
+const plans = await discoverWebPlans(contextPath, "/root", options.webRoot !== undefined);
+// The web root is the UI the visitor lands on. By default it is the instance root; an instance whose
+// root UI is the editor (never published) names a child with --web-root, and every other publishable
+// UI of the tree is published next to it, so one publication covers the whole instance.
+let primary = plans[0];
+let others = plans.slice(1);
+if (options.webRoot !== undefined) {
+  const chosen = plans.find((plan) => plan.uiRuntime.rootContextId === options.webRoot);
+  if (!chosen) throw new Error(`--web-root ${options.webRoot} is not a context with a publishable web UI`);
+  primary = chosen;
+  others = plans.filter((plan) => plan !== chosen);
+}
+if (!primary || primary.ui.rootView.name === "BriqueEditorRoot") {
   throw new Error("Root context has no publishable web UI");
 }
 const publication = await publishSparkWeb({
   sparkRoot: repository,
   outputDirectory: path.resolve(options.output),
-  plan: plans[0],
-  additionalPlans: plans.slice(1),
+  plan: primary,
+  additionalPlans: others,
 });
 process.stdout.write(`${JSON.stringify({
   directory: publication.directory,
   publication_id: publication.manifest.publication_id,
   files: publication.manifest.files.length,
   uis: publication.catalog.entries.length,
+  interfaces: [primary, ...others].map((plan) => ({
+    context_path: plan.uiRuntime.rootContextId,
+    ui_name: plan.uiRuntime.uiName,
+    inputs: plan.buildInputs ?? [],
+  })),
 }, null, 2)}\n`);
 
-async function discoverWebPlans(rootContextPath, rootContextId) {
+async function discoverWebPlans(rootContextPath, rootContextId, editorRootAllowed = false) {
   const result = [];
   await visit(rootContextPath, rootContextId, true);
   return result;
@@ -51,14 +67,14 @@ async function discoverWebPlans(rootContextPath, rootContextId) {
     }
     const uiConfig = context.brique.ui_config;
     const publishable = uiConfig && uiConfig.root_view !== "BriqueEditorRoot" && uiConfig.adapter === "react";
-    if (isRoot && uiConfig && !publishable) {
+    if (isRoot && uiConfig && !publishable && !(editorRootAllowed && uiConfig.root_view === "BriqueEditorRoot")) {
       throw new Error("Root context UI is internal or not compatible with the web publisher");
     }
     if (publishable) {
       const plan = await buildPlan(canonicalPath, logicalPath, context, uiConfig);
       if (isRoot) result.unshift(plan);
       else result.push(plan);
-    } else if (isRoot) {
+    } else if (isRoot && !editorRootAllowed) {
       throw new Error("Root context has no brique.ui_config");
     }
     const children = context.brique.children_list ?? [];
@@ -91,6 +107,9 @@ async function buildPlan(candidatePath, logicalPath, context, uiConfig) {
     ui: { ...ui, rootView: { ...ui.rootView, path: built.rootViewBuiltUrl } },
     uiRuntime: { uiName, uiAddressPrefix: `@ui_${uiName}`, rootContextId: logicalPath, transportUrl: "" },
     uiTransportUrl: "",
+    // The source files this UI was built from: the launcher records them to tell, later, which
+    // interface of the instance changed since the publication.
+    buildInputs: built.inputs ?? [],
   };
 }
 
@@ -106,12 +125,15 @@ function pathToModule(relative) {
 function parseArgs(args) {
   let context;
   let output;
+  let webRoot;
   for (let index = 0; index < args.length; index++) {
     const value = args[index];
     if (value === "--context") context = args[++index];
     else if (value === "--output") output = args[++index];
+    else if (value === "--web-root") webRoot = args[++index];
     else throw new Error(`Unknown argument: ${value}`);
   }
-  if (!context || !output) throw new Error("Usage: publish-spark-web --context <context.json> --output <new-directory>");
-  return { context, output };
+  if (!context || !output) throw new Error("Usage: publish-spark-web --context <context.json> --output <new-directory> [--web-root </root/child>]");
+  if (webRoot !== undefined && !/^\/root(\/[A-Za-z0-9_.-]+)+$/u.test(webRoot)) throw new Error(`Invalid --web-root: ${webRoot}`);
+  return { context, output, webRoot };
 }

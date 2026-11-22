@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/token_measurement.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Measurement of agentic plumbing cost in absolute tokens: exact provider count, categories, invariants, and report.",
+    "name": "token_measurement"
+  },
+  "subjective": {}
+}

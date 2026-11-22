@@ -203,6 +203,12 @@ async function buildWebBundle(input: {
     alias: {
       "@spark/pulse/react": path.join(input.sparkRoot, "pulse", "adapters", "react", "index.ts"),
       "@spark/pulse/runtime": path.join(input.sparkRoot, "pulse", "runtime", "index.ts"),
+      // One React for the whole page. A UI is resolved from its own folder, upward: an instance that
+      // installed its own react (its package.json asks for one) would otherwise bring a second copy next
+      // to the one the Pulse adapter and the renderer use, and every hook of the page would fail with
+      // "Cannot read properties of null". Subpaths (react/jsx-runtime, react-dom/client) follow.
+      "react": path.join(input.sparkRoot, "node_modules", "react"),
+      "react-dom": path.join(input.sparkRoot, "node_modules", "react-dom"),
     },
     plugins: [{
       name: "spark-web-entry",
@@ -376,7 +382,9 @@ async function inventory(directory: string): Promise<SparkPublicationFile[]> {
     }
   }
   await walk(directory);
-  result.sort((left, right) => left.path.localeCompare(right.path));
+  // Byte order, not locale order: the manifest is verified file by file in byte order (Go compares
+  // strings that way), and localeCompare puts "root-ui1_…" before "root-YH…" while bytes put it after.
+  result.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return result;
 }
 

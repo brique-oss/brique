@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1795334409819088000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 16,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json"
+  },
+  "objective": {
+    "description": "Journal of the inference requests received by the fake LLM.",
+    "name": "llm_calls"
+  },
+  "subjective": {}
+}

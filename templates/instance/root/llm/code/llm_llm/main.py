@@ -1,0 +1,66 @@
+# Copyright 2026 Nicolas Cassan
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+_LIB_MARKER = Path("wrapper") / "python" / "lib" / "wrapper" / "__init__.py"
+
+
+def _find_lib() -> Path:
+    """Locate the instance-wide runtime library.
+
+    BRIQUE_WRAPPER_LIB overrides the lookup; otherwise walk up from this file
+    to the first ancestor holding wrapper/python/lib.
+    """
+    override = os.environ.get("BRIQUE_WRAPPER_LIB", "").strip()
+    if override:
+        return Path(override).resolve()
+    here = Path(__file__).resolve().parent
+    for ancestor in (here, *here.parents):
+        if (ancestor / _LIB_MARKER).is_file():
+            return ancestor / "wrapper" / "python" / "lib"
+    raise RuntimeError(
+        "python wrapper library not found: expected <instance>/wrapper/python/lib "
+        "above this directory (or set BRIQUE_WRAPPER_LIB)"
+    )
+
+
+sys.path.insert(0, str(_find_lib()))
+
+from wrapper.runtime import WrapperRuntime  # noqa: E402
+
+
+async def _amain() -> int:
+    runtime = WrapperRuntime()
+    return await runtime.run()
+
+
+def main() -> int:
+    try:
+        return asyncio.run(_amain())
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:  # pragma: no cover - startup/teardown race path
+        sys.stderr.write(f"python wrapper fatal error: {exc}\n")
+        sys.stderr.flush()
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

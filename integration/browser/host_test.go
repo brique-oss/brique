@@ -36,6 +36,44 @@ func newResolver(t *testing.T, directory string) browserhost.InstanceResolver {
 	return resolver
 }
 
+// testExtensionID is the extension these tests pretend started the native host.
+const testExtensionID = "abcdefghijklmnopabcdefghijklmnop"
+
+type gatewayChoice struct{ Revision uint64 }
+
+// setGateway makes the instance the one the owner associated with the extension (its identity too): it writes the association file of
+// the launcher, which the host reads when it starts. A new revision is a new choice; hosts already running keep the one they started with.
+func setGateway(store launcher.Store, alias string) (gatewayChoice, error) {
+	return writeAssociations(store, []launcher.BrowserAssociation{{Browser: "chrome", ExtensionID: testExtensionID, Instances: []string{alias}, Identity: alias}})
+}
+
+func clearGateway(store launcher.Store) (gatewayChoice, error) {
+	return writeAssociations(store, nil)
+}
+
+func writeAssociations(store launcher.Store, entries []launcher.BrowserAssociation) (gatewayChoice, error) {
+	current, err := store.BrowserAssociations()
+	if err != nil {
+		return gatewayChoice{}, err
+	}
+	next := launcher.BrowserAssociations{Format: current.Format, Revision: current.Revision + 1, Entries: entries}
+	if next.Format == "" {
+		next.Format = "brique.browser-associations/1"
+	}
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return gatewayChoice{}, err
+	}
+	directory := filepath.Join(store.Directory, "browser")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return gatewayChoice{}, err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "associations.json"), encoded, 0o600); err != nil {
+		return gatewayChoice{}, err
+	}
+	return gatewayChoice{Revision: next.Revision}, nil
+}
+
 type hostTestSink struct {
 	mu       sync.Mutex
 	opened   map[string]browserbridge.Binding
@@ -90,7 +128,7 @@ func TestNativeHostBridgesSelectedRunningInstanceWithoutKeys(t *testing.T) {
 		EnginePath: executable, Supervision: launcher.SupervisionExternal}); err != nil {
 		t.Fatal(err)
 	}
-	gateway, err := store.SetBrowserGateway("alpha")
+	gateway, err := setGateway(store, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +158,7 @@ func TestNativeHostBridgesSelectedRunningInstanceWithoutKeys(t *testing.T) {
 	hostDone := make(chan error, 1)
 	go func() {
 		hostDone <- browserhost.Run(browserhost.Options{Input: hostInput, Output: hostOutput,
-			Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory})
+			Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory})
 	}()
 	defer extensionOutput.Close()
 	defer extensionInput.Close()
@@ -137,7 +175,7 @@ func TestNativeHostBridgesSelectedRunningInstanceWithoutKeys(t *testing.T) {
 	writeHostRequest(t, extensionOutput, map[string]any{
 		"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2, "session_id": hello.SessionID,
 		"origin": "https://ui.example", "document_id": "document-1", "frame_id": 0,
-		"ui_name": "root", "user_activated": true, "descriptor_b64": descriptor,
+		"ui_name": "root", "descriptor_b64": descriptor,
 	})
 	var opened browserbridge.Response
 	readHostValue(t, extensionInput, &opened)
@@ -262,7 +300,7 @@ func TestNativeHostGatewayChangeAppliesOnlyToNewSessions(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			done <- browserhost.Run(browserhost.Options{Input: hostInput, Output: hostOutput,
-				Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory})
+				Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory})
 		}()
 		return runningHost{input: extensionOutput, output: extensionInput, done: done}
 	}
@@ -279,7 +317,7 @@ func TestNativeHostGatewayChangeAppliesOnlyToNewSessions(t *testing.T) {
 		writeHostRequest(t, host.input, map[string]any{
 			"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2,
 			"session_id": hello.SessionID, "origin": "https://ui.example", "document_id": "document-1",
-			"frame_id": 0, "ui_name": "root", "user_activated": true,
+			"frame_id": 0, "ui_name": "root",
 			"descriptor_b64": base64.RawURLEncoding.EncodeToString([]byte("remote descriptor")),
 		})
 		var opened browserbridge.Response
@@ -325,7 +363,7 @@ func TestNativeHostGatewayChangeAppliesOnlyToNewSessions(t *testing.T) {
 		host.output.Close()
 	}
 
-	firstGateway, err := store.SetBrowserGateway("alpha")
+	firstGateway, err := setGateway(store, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +373,7 @@ func TestNativeHostGatewayChangeAppliesOnlyToNewSessions(t *testing.T) {
 		t.Fatalf("alpha revision = %d, want %d", alphaHello.GatewayRevision, firstGateway.Revision)
 	}
 
-	secondGateway, err := store.SetBrowserGateway("beta")
+	secondGateway, err := setGateway(store, "beta")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,15 +404,39 @@ func TestNativeHostGatewayChangeAppliesOnlyToNewSessions(t *testing.T) {
 	if err := betaControl.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := browserhost.Run(browserhost.Options{Input: io.NopCloser(bytes.NewReader(nil)), Output: io.Discard,
-		Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory}); !errors.Is(err, browserhost.ErrHostUnavailable) {
-		t.Fatalf("host with unavailable selected gateway = %v", err)
+	// The engine the owner chose is gone: the host starts (it dials an engine when a page opens) and refuses the page.
+	staleInput, staleExtensionOutput := io.Pipe()
+	staleExtensionInput, staleOutput := io.Pipe()
+	staleDone := make(chan error, 1)
+	go func() {
+		staleDone <- browserhost.Run(browserhost.Options{Input: staleInput, Output: staleOutput,
+			Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory})
+	}()
+	writeHostRequest(t, staleExtensionOutput, map[string]any{"format": browserbridge.BridgeProtocol, "kind": "hello", "sequence": 1})
+	var staleHello browserbridge.Response
+	readHostValue(t, staleExtensionInput, &staleHello)
+	writeHostRequest(t, staleExtensionOutput, map[string]any{
+		"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2, "session_id": staleHello.SessionID,
+		"origin": "https://ui.example", "document_id": "document-1", "frame_id": 0, "ui_name": "root",
+		"descriptor_b64": base64.RawURLEncoding.EncodeToString([]byte("remote descriptor")),
+	})
+	var staleOpen browserbridge.Response
+	readHostValue(t, staleExtensionInput, &staleOpen)
+	if !staleHello.OK || staleOpen.OK {
+		t.Fatalf("host with unavailable selected gateway: hello=%+v open=%+v", staleHello, staleOpen)
 	}
-	if _, err := store.ClearBrowserGateway(); err != nil {
+	_ = staleExtensionOutput.Close()
+	_ = staleExtensionInput.Close()
+	select {
+	case <-staleDone:
+	case <-time.After(time.Second):
+		t.Fatal("the host did not stop")
+	}
+	if _, err := clearGateway(store); err != nil {
 		t.Fatal(err)
 	}
 	if err := browserhost.Run(browserhost.Options{Input: io.NopCloser(bytes.NewReader(nil)), Output: io.Discard,
-		Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory}); !errors.Is(err, browserhost.ErrHostUnavailable) {
+		Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory}); !errors.Is(err, browserhost.ErrHostUnavailable) {
 		t.Fatalf("host without selected gateway = %v", err)
 	}
 }
@@ -401,7 +463,7 @@ func TestNativeHostStopsWhenEngineIPCDisappearsWhileBrowserIsIdle(t *testing.T) 
 		EnginePath: executable, Supervision: launcher.SupervisionExternal}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetBrowserGateway("alpha"); err != nil {
+	if _, err := setGateway(store, "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	rootObject, _ := locking.DirectoryObjectIdentity(root)
@@ -429,7 +491,7 @@ func TestNativeHostStopsWhenEngineIPCDisappearsWhileBrowserIsIdle(t *testing.T) 
 	hostDone := make(chan error, 1)
 	go func() {
 		hostDone <- browserhost.Run(browserhost.Options{Input: hostInput, Output: hostOutput,
-			Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory})
+			Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory})
 	}()
 	defer extensionOutput.Close()
 	defer extensionInput.Close()
@@ -441,6 +503,17 @@ func TestNativeHostStopsWhenEngineIPCDisappearsWhileBrowserIsIdle(t *testing.T) 
 	readHostValue(t, extensionInput, &hello)
 	if !hello.OK {
 		t.Fatalf("hello = %+v", hello)
+	}
+	// The host dials an engine when a page opens: a page that carries a descriptor goes to the identity instance.
+	writeHostRequest(t, extensionOutput, map[string]any{
+		"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2, "session_id": hello.SessionID,
+		"origin": "https://ui.example", "document_id": "document-1", "frame_id": 0, "ui_name": "root",
+		"descriptor_b64": base64.RawURLEncoding.EncodeToString([]byte("remote descriptor")),
+	})
+	var opened browserbridge.Response
+	readHostValue(t, extensionInput, &opened)
+	if !opened.OK {
+		t.Fatalf("open = %+v", opened)
 	}
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
@@ -476,7 +549,7 @@ func TestNativeHostRefusesBridgeFromAnotherGeneration(t *testing.T) {
 		EnginePath: executable, Supervision: launcher.SupervisionExternal}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetBrowserGateway("alpha"); err != nil {
+	if _, err := setGateway(store, "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	rootObject, err := locking.DirectoryObjectIdentity(root)
@@ -511,10 +584,30 @@ func TestNativeHostRefusesBridgeFromAnotherGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = browserhost.Run(browserhost.Options{Input: io.NopCloser(bytes.NewReader(nil)), Output: io.Discard,
-		Resolver: newResolver(t, launcherDirectory), RuntimeDirectory: runtimeDirectory})
-	if !errors.Is(err, browserhost.ErrHostUnavailable) {
-		t.Fatalf("host accepted a bridge from another generation: %v", err)
+	hostInput, extensionOutput := io.Pipe()
+	extensionInput, hostOutput := io.Pipe()
+	hostDone := make(chan error, 1)
+	go func() {
+		hostDone <- browserhost.Run(browserhost.Options{Input: hostInput, Output: hostOutput,
+			Resolver: newResolver(t, launcherDirectory), ExtensionID: testExtensionID, RuntimeDirectory: runtimeDirectory})
+	}()
+	defer extensionOutput.Close()
+	defer extensionInput.Close()
+	writeHostRequest(t, extensionOutput, map[string]any{"format": browserbridge.BridgeProtocol, "kind": "hello", "sequence": 1})
+	var hello browserbridge.Response
+	readHostValue(t, extensionInput, &hello)
+	if !hello.OK {
+		t.Fatalf("hello = %+v", hello)
+	}
+	writeHostRequest(t, extensionOutput, map[string]any{
+		"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2, "session_id": hello.SessionID,
+		"origin": "https://ui.example", "document_id": "document-1", "frame_id": 0, "ui_name": "root",
+		"descriptor_b64": base64.RawURLEncoding.EncodeToString([]byte("remote descriptor")),
+	})
+	var opened browserbridge.Response
+	readHostValue(t, extensionInput, &opened)
+	if opened.OK {
+		t.Fatalf("host accepted a bridge from another generation: %+v", opened)
 	}
 	foreignSink.mu.Lock()
 	defer foreignSink.mu.Unlock()

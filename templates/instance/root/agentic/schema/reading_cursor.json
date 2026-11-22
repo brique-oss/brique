@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "reading_cursor",
+    "description": "Defines how far one reader has read one conversation: the line of the journal of the lineage up to which the reader has read."
+  },
+  "functional": {
+    "reader": [],
+    "_reader_note": "Required. Identifier of the reader (user:1 for the person using the interface).",
+    "lineage_id": [],
+    "_lineage_id_note": "Required. Identifier of the lineage read: the first continuity of the conversation, the one a parent knows, whatever the generation.",
+    "seq": [],
+    "_seq_note": "Required. Number of the last line read (a non-negative integer). It only grows."
+  },
+  "subjective": {}
+}

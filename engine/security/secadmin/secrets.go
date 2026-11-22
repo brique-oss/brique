@@ -125,3 +125,58 @@ func (d *Dir) SecretList() ([]SecretInfo, error) {
 	}
 	return out, nil
 }
+
+// SecretAllow gives a wrapper the right to receive a secret (the `secrets` section of the access source, signed by apply). It says nothing
+// about the value: that is what SecretAdd stores. Allowing twice is not an error.
+func (d *Dir) SecretAllow(name, wrapper string) error {
+	if !policysrc.ValidSecretName(name) {
+		return fmt.Errorf("secret name %q: expected a name like [a-z][a-z0-9._-]{0,63}", name)
+	}
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	if src.Secrets == nil {
+		src.Secrets = map[string]*policysrc.SecretGrant{}
+	}
+	grant := src.Secrets[name]
+	if grant == nil {
+		grant = &policysrc.SecretGrant{}
+		src.Secrets[name] = grant
+	}
+	for _, existing := range grant.Wrappers {
+		if existing == wrapper {
+			return nil
+		}
+	}
+	grant.Wrappers = append(grant.Wrappers, wrapper)
+	return d.SaveSource(src)
+}
+
+// SecretDeny withdraws that right; the section of a secret that no wrapper may receive any more is removed. Denying what was not allowed is an
+// error, so a typo does not look like a success.
+func (d *Dir) SecretDeny(name, wrapper string) error {
+	src, err := d.LoadSource()
+	if err != nil {
+		return err
+	}
+	grant := src.Secrets[name]
+	if grant == nil {
+		return fmt.Errorf("no wrapper may receive secret %q", name)
+	}
+	kept := grant.Wrappers[:0:0]
+	for _, existing := range grant.Wrappers {
+		if existing != wrapper {
+			kept = append(kept, existing)
+		}
+	}
+	if len(kept) == len(grant.Wrappers) {
+		return fmt.Errorf("wrapper %q may not receive secret %q", wrapper, name)
+	}
+	if len(kept) == 0 {
+		delete(src.Secrets, name)
+	} else {
+		grant.Wrappers = kept
+	}
+	return d.SaveSource(src)
+}

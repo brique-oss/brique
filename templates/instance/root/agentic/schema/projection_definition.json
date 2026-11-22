@@ -1,0 +1,46 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "projection_definition",
+    "description": "Defines the deterministic rules used to select, filter, order, and limit continuity messages when building a projected cognitive context."
+  },
+  "functional": {
+    "include_kinds": [],
+    "_include_kinds_note": "Optional. Restricts the projection to messages whose kind belongs to the provided set.",
+    "exclude_kinds": [],
+    "_exclude_kinds_note": "Optional. Excludes messages whose kind belongs to the provided set.",
+    "from": [],
+    "_from_note": "Optional. Restricts the projection to messages originating from the specified source or sources.",
+    "to": [],
+    "_to_note": "Optional. Restricts the projection to messages addressed to the specified destination or destinations.",
+    "min_seq": [],
+    "_min_seq_note": "Optional. Lowest message sequence number eligible for inclusion.",
+    "max_seq": [],
+    "_max_seq_note": "Optional. Highest message sequence number eligible for inclusion.",
+    "correlation": {
+      "schema_ref": "correlation"
+    },
+    "_correlation_note": "Optional. Restricts the projection to messages matching the specified correlation dimensions.",
+    "message_ids": [],
+    "_message_ids_note": "Optional. Explicit set of message identifiers to include.",
+    "limit": [],
+    "_limit_note": "Optional. Maximum number of messages selected by the projection.",
+    "selection": [
+      "all",
+      "first",
+      "last"
+    ],
+    "_selection_note": "Optional. Deterministic selection strategy applied after filtering. Defaults to all when absent.",
+    "include_parent": [],
+    "_include_parent_note": "Optional. Indicates whether explicitly related parent-continuity messages may be included.",
+    "include_children": [],
+    "_include_children_note": "Optional. Indicates whether explicitly related child-continuity messages may be included.",
+    "continuity_ids": [],
+    "_continuity_ids_note": "Optional. Explicit additional continuity identifiers whose messages may participate in the projection.",
+    "budget": [],
+    "_budget_note": "Optional. Maximum projection budget according to the convention used by the consuming LLM or wrapper."
+  },
+  "subjective": {}
+}

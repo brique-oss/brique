@@ -1,0 +1,24 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "known_capacity",
+    "description": "Defines a capacity reference and the concise description exposed to a pilot as part of its stable known capabilities."
+  },
+  "functional": {
+    "ref": [],
+    "_ref_note": "Required. Canonical reference to the Brique Capacity.",
+    "description": [],
+    "_description_note": "Required. Concise description of what the Capacity allows the pilot to do.",
+    "target_type": [
+      "user",
+      "matter",
+      "reflexive",
+      "execution",
+      "control"
+    ],
+    "_target_type_note": "Optional. Family of the Capacity, which routes the intentions that aim at it: user (default), matter, reflexive, execution or control. Declared by the architect; agentic_core applies it whatever the model wrote."
+  },
+  "subjective": {}
+}

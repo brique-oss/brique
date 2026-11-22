@@ -178,6 +178,10 @@ func (supervisor *Supervisor) startLocked(ctx context.Context, alias string) (St
 // alias. handled is false when a fresh start must go on.
 func (supervisor *Supervisor) existingEntryOutcome(alias string) (Status, error, bool) {
 	supervisor.mu.Lock()
+	if entry := supervisor.entries[alias]; entry != nil && !entry.status.Owned && entry.status.State != StateFailed {
+		// An adopted engine is not trusted from memory: whoever owns it may have stopped it.
+		delete(supervisor.entries, alias)
+	}
 	if entry := supervisor.entries[alias]; entry != nil {
 		if entry.status.State != StateStopped && entry.status.State != StateFailed {
 			status := entry.status
@@ -206,17 +210,12 @@ func (supervisor *Supervisor) existingEntryOutcome(alias string) (Status, error,
 // this supervisor must launch the engine itself.
 func (supervisor *Supervisor) adoptRunningOrRefuse(instance Instance, alias string) (Status, error, bool) {
 	if descriptor, discoveryErr := supervisor.discover(instance); discoveryErr == nil {
+		// An engine that is already running is simply active: the launcher shows it as such and
+		// does not own it (Owned false), so it never stops or restarts it.
 		status := statusFromDescriptor(instance, descriptor, false)
-		if instance.Supervision == SupervisionManaged {
-			status.State = StateInterrupted
-			status.Error = "engine is running outside this supervisor"
-		}
 		supervisor.mu.Lock()
 		supervisor.entries[alias] = &supervisedProcess{status: status, descriptor: descriptor, done: closedChannel()}
 		supervisor.mu.Unlock()
-		if instance.Supervision == SupervisionManaged {
-			return status, errors.New(status.Error), true
-		}
 		return status, nil, true
 	}
 	if instance.Supervision == SupervisionExternal {
@@ -300,7 +299,7 @@ func (supervisor *Supervisor) stopLocked(ctx context.Context, alias string) (Sta
 		supervisor.mu.Unlock()
 		if descriptor, discoverErr := supervisor.discover(instance); discoverErr == nil {
 			status := statusFromDescriptor(instance, descriptor, false)
-			status.State, status.Error = StateInterrupted, "running engine is not owned by this supervisor"
+			status.Error = "the engine was started outside the launcher: stop it where it was started"
 			return status, errors.New(status.Error)
 		}
 		return Status{Alias: alias, State: StateStopped, Supervision: instance.Supervision}, nil
@@ -525,6 +524,10 @@ func (supervisor *Supervisor) Status(_ context.Context, alias string) (Status, e
 	}
 	supervisor.mu.Lock()
 	entry := supervisor.entries[alias]
+	if entry != nil && !entry.status.Owned && entry.status.State != StateFailed {
+		delete(supervisor.entries, alias) // an adopted engine is looked up again below
+		entry = nil
+	}
 	if entry != nil && entry.status.State == StateFailed && entry.status.Owned && entry.command != nil {
 		select {
 		case <-entry.done:
@@ -541,11 +544,7 @@ func (supervisor *Supervisor) Status(_ context.Context, alias string) (Status, e
 	}
 	supervisor.mu.Unlock()
 	if descriptor, discoverErr := supervisor.discover(instance); discoverErr == nil {
-		status := statusFromDescriptor(instance, descriptor, false)
-		if instance.Supervision == SupervisionManaged {
-			status.State, status.Error = StateInterrupted, "engine is running outside this supervisor"
-		}
-		return status, nil
+		return statusFromDescriptor(instance, descriptor, false), nil
 	}
 	if entry != nil {
 		return supervisor.status(entry), nil

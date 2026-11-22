@@ -1,0 +1,26 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "pilot_message",
+    "description": "Defines an addressed message emitted by a pilot, containing the destination, semantic kind, payload, and optional correlation before durable message metadata is assigned."
+  },
+  "functional": {
+    "to": [],
+    "_to_note": "Required. Explicit destination of the message.",
+    "kind": [
+      "user",
+      "pilot",
+      "continuity"
+    ],
+    "_kind_note": "Required. High-level semantic category of the message requested by the pilot.",
+    "content": [],
+    "_content_note": "Required. Payload of the message.",
+    "correlation": {
+      "schema_ref": "correlation"
+    },
+    "_correlation_note": "Optional. Correlation data to preserve causal or continuity relationships when the runtime materializes the durable message."
+  },
+  "subjective": {}
+}

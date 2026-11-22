@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brique Launcher</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Brique Launcher</h1>
+  <span id="supervisor" class="badge"></span>
+  <button id="stop-all" type="button" style="margin-left:auto" title="Stop every instance this launcher runs, then the launcher itself">Stop everything</button>
+</header>
+<main>
+  <p id="message" class="message" hidden></p>
+
+  <section>
+    <h2>Instances</h2>
+    <table>
+      <thead><tr><th>Alias</th><th>State</th><th>Web interface</th><th>With the launcher</th><th>Actions</th><th>MCP</th></tr></thead>
+      <tbody id="instances"></tbody>
+    </table>
+    <p id="empty" class="muted" hidden>No instance registered.</p>
+    <details id="create-details" class="actions">
+      <summary class="button">Create an instance</summary>
+      <form id="create-form">
+        <p id="create-reason" class="muted"></p>
+        <label>Name <input name="name" required pattern="[a-z][a-z0-9._-]*" maxlength="64" placeholder="my-instance"></label>
+        <label>Parent folder <input name="parent" id="create-parent"></label>
+        <p class="muted">The instance is created in "parent folder / name" from the template, with its own security.</p>
+        <button type="submit" id="create-submit">Create</button>
+      </form>
+    </details>
+    <details>
+      <summary>Register an existing instance</summary>
+      <form id="add-form">
+        <label>Alias <input name="alias" required pattern="[a-z0-9][a-z0-9._-]*" maxlength="64"></label>
+        <label>Root folder <input name="root" required placeholder="/path/to/instance/root"></label>
+        <details>
+          <summary>Engine (advanced)</summary>
+          <p class="muted">By default the instance uses the engine built by the setup. For another engine, fill only one of the two fields.</p>
+          <label>Engine binary <input name="engine" placeholder="/path/to/brique"></label>
+          <label>or runtime folder (package from <code>npm run build:runtime</code>) <input name="runtime" placeholder="/path/to/runtime"></label>
+        </details>
+        <label class="inline"><input type="checkbox" name="autostart"> Start automatically when the launcher starts</label>
+        <button type="submit">Register</button>
+      </form>
+    </details>
+  </section>
+
+  <section>
+    <h2>Browser extension</h2>
+    <p class="muted">The Brique extension connects your browser to your instances. A page of an associated instance is admitted as <code>local.ui</code>; for instances that are not local, the identity instance signs on your behalf. Each browser has its own extension, and each can have its own instances.</p>
+    <details>
+      <summary>How to install it in a browser</summary>
+      <ol class="muted">
+        <li>Tick the instances to associate with the browser, pick the one that carries the identity, then "Associate": the launcher prepares the extension and registers what is needed.</li>
+        <li>Click "Open the extensions page", turn on <em>developer mode</em>, then "Load unpacked" and choose the folder shown.</li>
+        <li>Then open the page of an instance with its button: the page connects by itself, without a click.</li>
+      </ol>
+    </details>
+    <table id="browsers" hidden>
+      <thead><tr><th>Browser</th><th>Associated instances</th><th>Actions</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p><button id="other-browsers" type="button" hidden></button></p>
+  </section>
+
+  <section id="logs-section" hidden>
+    <h2>Logs of <span id="logs-alias"></span></h2>
+    <pre id="logs"></pre>
+  </section>
+
+  <details class="section-details">
+    <summary><strong>Connection diagnosis</strong></summary>
+    <p class="muted">Tests whether a remote peer is reachable: name resolution, connection, certificate and HTTP answer. It does not depend on any of your instances.</p>
+    <form id="diagnose-form" class="row">
+      <label>Peer address <input name="address" required maxlength="255" placeholder="peer.example.org or peer.example.org:8443"></label>
+      <button type="submit">Diagnose</button>
+    </form>
+    <table id="diagnosis" hidden>
+      <thead><tr><th>Step</th><th>Status</th><th>Duration</th><th>Code</th><th>Detail</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

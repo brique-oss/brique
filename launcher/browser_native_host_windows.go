@@ -35,3 +35,15 @@ func registerBrowserNativeManifest(browser, manifestPath string) error {
 	}
 	return nil
 }
+
+func unregisterBrowserNativeManifest(browser string) error {
+	company := map[string]string{"brave": "BraveSoftware\\Brave-Browser", "chrome": "Google\\Chrome", "chromium": "Chromium", "firefox": "Mozilla"}[browser]
+	if company == "" {
+		return errors.New("unsupported browser")
+	}
+	err := registry.DeleteKey(registry.CURRENT_USER, `Software\`+company+`\NativeMessagingHosts\`+BrowserNativeHostName)
+	if err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return errors.New("browser native host registry key could not be removed")
+	}
+	return nil
+}

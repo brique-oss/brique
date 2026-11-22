@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/capacity_reading_mark.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of reading.mark, the Capacity that advances a reader cursor on a lineage in the reading_cursors Matter so the agentic interface can identify what is new.",
+    "name": "capacity_reading_mark"
+  },
+  "subjective": {}
+}

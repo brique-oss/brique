@@ -485,3 +485,34 @@ func TestRegistryMigratesVersion3AndRefusesWebProfileInOlderFormats(t *testing.T
 		t.Fatal("version 3 registry carrying a web profile accepted")
 	}
 }
+
+func TestSetAutostartChangesOnlyTheFlag(t *testing.T) {
+	store, root, engine := testStore(t)
+	if _, err := store.Add(context.Background(), AddOptions{Alias: "demo", RootPath: root, EnginePath: engine}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := store.List()
+	on, err := store.SetAutostart("demo", true)
+	if err != nil || !on.Autostart {
+		t.Fatalf("on: %+v %v", on, err)
+	}
+	after, _ := store.List()
+	if after.Revision != before.Revision+1 || after.Instances[0].EnginePath != before.Instances[0].EnginePath {
+		t.Fatalf("revision/engine: %d→%d", before.Revision, after.Revision)
+	}
+	if again, err := store.SetAutostart("demo", true); err != nil || !again.Autostart {
+		t.Fatalf("idempotent: %+v %v", again, err)
+	}
+	if unchanged, _ := store.List(); unchanged.Revision != after.Revision {
+		t.Fatal("an unchanged flag bumped the revision")
+	}
+	if off, err := store.SetAutostart("demo", false); err != nil || off.Autostart {
+		t.Fatalf("off: %+v %v", off, err)
+	}
+	if _, err := store.SetAutostart("missing", true); err == nil {
+		t.Fatal("unknown instance accepted")
+	}
+	if _, err := store.SetAutostart("../x", true); err == nil {
+		t.Fatal("bad alias accepted")
+	}
+}

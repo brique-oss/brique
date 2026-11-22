@@ -1,0 +1,21 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "received_item",
+    "description": "Defines the durable reference to an incoming result that has satisfied or contributed to an expected item in a wait group."
+  },
+  "functional": {
+    "expected_ref": [],
+    "_expected_ref_note": "Required. Reference to the expected item that this received result resolves or contributes to.",
+    "message_id": [],
+    "_message_id_note": "Required. Identifier of the durable message carrying the received result in the continuity history.",
+    "outcome": [
+      "success",
+      "error"
+    ],
+    "_outcome_note": "Required. Operational outcome associated with the received result."
+  },
+  "subjective": {}
+}

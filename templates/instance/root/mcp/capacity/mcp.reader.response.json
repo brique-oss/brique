@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "cap_name": "mcp.reader.response",
+    "kind": "compiled",
+    "wrapper": "mcp_reader",
+    "rel_ctx": "",
+    "lang": "go"
+  },
+  "objective": {
+    "name": "mcp.reader.response",
+    "description": "Routing anchor capacity — allows Brique to route outbound intention responses back to the mcp_reader wrapper boundary (the read-only MCP endpoint)."
+  },
+  "functional": {
+    "#root": {
+      "role": "Receive responses routed back to the wrapper from Brique engine families.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      }
+    }
+  },
+  "subjective": {}
+}

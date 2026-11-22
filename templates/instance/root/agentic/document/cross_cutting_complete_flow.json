@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/cross_cutting_complete_flow.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Cross-cutting document describing the complete agentic-context flow end to end.",
+    "name": "cross_cutting_complete_flow"
+  },
+  "subjective": {}
+}

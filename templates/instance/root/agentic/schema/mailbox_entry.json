@@ -1,0 +1,32 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "mailbox_entry",
+    "description": "Defines one mailbox entry used to track the priority and ownership state of a message awaiting or undergoing consumption."
+  },
+  "functional": {
+    "message_id": [],
+    "_message_id_note": "Required. Identifier of the durable message stored in the associated continuity.",
+    "priority": [
+      "control",
+      "expected",
+      "normal"
+    ],
+    "_priority_note": "Required. Priority assigned when the message enters the mailbox.",
+    "status": [
+      "pending",
+      "claimed",
+      "failed"
+    ],
+    "_status_note": "Required. Current consumption state of the mailbox entry. failed: the treatment of the message failed three times; the entry is parked, never claimed again, and no longer blocks the messages after it.",
+    "claimed_by": [],
+    "_claimed_by_note": "Optional. Run identifier owning the entry when status is claimed. Null or absent when status is pending or failed.",
+    "attempts": [],
+    "_attempts_note": "Optional. Number of treatments of the message that failed (a release reporting a failure counts one). Absent: none.",
+    "message_fingerprint": [],
+    "_message_fingerprint_note": "Optional. Fingerprint of the content of the message that the entry reserves or tracks (sha256 of from, kind, content and correlation). It lets a retry of the same message_id be told from a different message that reuses the id."
+  },
+  "subjective": {}
+}

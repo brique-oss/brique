@@ -1,0 +1,37 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "pilot_output",
+    "description": "Defines the structured set of cognitive decisions a pilot may request after an inference."
+  },
+  "functional": {
+    "intention_update": [],
+    "_intention_update_note": "Optional. New current intention to apply to the continuity before subsequent effects and future inference.",
+    "projection_request": {
+      "schema_ref": "projection_request"
+    },
+    "_projection_request_note": "Optional. Requests a deterministic projection change followed by a new inference. When present, it is exclusive with intentions, wait_group, messages and succession.",
+    "intentions": {
+      "cardinality": "many",
+      "schema_ref": "pilot_intention"
+    },
+    "_intentions_note": "Optional. Ordered collection of Brique intentions decided by the pilot. Each intention is a pilot_intention carrying its own await_response; the pilot never chooses any transport detail.",
+    "wait_group": {
+      "schema_ref": "wait_group"
+    },
+    "_wait_group_note": "Optional. Wait group materialized before the awaited intentions it references are invoked. It may reference only intentions of the same output whose await_response is true. At most one new wait group may be requested by a single pilot output.",
+    "messages": {
+      "schema_ref": "pilot_message",
+      "cardinality": "many"
+    },
+    "_messages_note": "Optional. Addressed messages to materialize after preceding requested effects have been applied.",
+    "succession": {
+      "_summary_note": "Required. Synthesis of the continuity written for its successor: it becomes the first message of the next continuity, so it must carry what cognition needs to continue.",
+      "summary": []
+    },
+    "_succession_note": "Optional. Decides to continue the work in a new continuity whose first message is the summary; the current continuity is archived. It is exclusive with intentions, wait_group, messages and projection_request, and is applied only when the continuity has no active wait group."
+  },
+  "subjective": {}
+}

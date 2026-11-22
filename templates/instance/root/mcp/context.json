@@ -20,6 +20,17 @@
           },
           {
             "config": {
+              "_comment": "Logical wrapper route on the root shared listener. Wrapper code uses BRIQUE_WS_URL/BRIQUE_WS_ADDR injected by the engine plus this path.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/wrapper/mcp_reader"
+            },
+            "driver": "ws",
+            "name": "mcp_reader",
+            "type": "wrapper"
+          },
+          {
+            "config": {
               "_comment": "Logical UI route on the root shared listener. The physical address is resolved dynamically from the instance root's communication.websocket_listener.addr.",
               "egress_enabled": true,
               "ingress_enabled": true,
@@ -42,7 +53,8 @@
           "scattered_max_items": 8
         },
         "wrapper_boundary": [
-          "mcp_server_go"
+          "mcp_server_go",
+          "mcp_reader"
         ]
       },
       "execution": {
@@ -80,6 +92,42 @@
             },
             "stop_timeout_ms": 500,
             "wrapper_name": "mcp_server_go"
+          },
+          {
+            "build": {
+              "artifact": "build/mcp_reader/mcp_server_go",
+              "artifact_kind": "file",
+              "cmd": [
+                "go",
+                "build",
+                "-o",
+                "../../build/mcp_reader/mcp_server_go",
+                "."
+              ],
+              "shell": false,
+              "timeout_ms": 30000,
+              "watch": [
+                "../../../../wrapper/go/lib"
+              ]
+            },
+            "mode": "compiled",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "./mcp_server_go"
+              ],
+              "env": {
+                "BRIQUE_MCP_ADDR": "127.0.0.1:18201",
+                "BRIQUE_MCP_RESPONSE_CAP": "mcp.reader.response",
+                "BRIQUE_WRAPPER_NAME": "mcp_reader"
+              },
+              "log": {
+                "enabled": false
+              },
+              "shell": false
+            },
+            "stop_timeout_ms": 500,
+            "wrapper_name": "mcp_reader"
           }
         ]
       },
@@ -91,7 +139,7 @@
         "enabled": false,
         "flush_every_interval": 20,
         "flush_every_n": 8,
-        "level": "debug",
+        "level": "minimal",
         "ring_capacity": 64,
         "segment_max_bytes": 1048576
       }
@@ -112,7 +160,8 @@
   "functional": {
     "role": "mcp_bridge",
     "owns_wrappers": [
-      "mcp_server_go"
+      "mcp_server_go",
+      "mcp_reader"
     ]
   },
   "subjective": {}

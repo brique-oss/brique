@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794121660117003000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 3023,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "txt"
+  },
+  "objective": {
+    "description": "Prompt fragment, to assemble into a larger prompt: how to search the Brique world (vocabulary.query, then meaning.query, then read.meaning) and how to report the elements found (kind, context, name, why).",
+    "name": "brique_search"
+  },
+  "subjective": {}
+}

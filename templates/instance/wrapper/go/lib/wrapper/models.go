@@ -16,7 +16,10 @@
 
 package wrapper
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // Params gives typed and transit-aware access to an intention's parameters.
 // Raw keeps compatibility for code that needs to enumerate the original map;
@@ -60,8 +63,14 @@ func (p *Params) String(key string) string {
 }
 
 func (p *Params) Float(key string) float64 {
-	v, _ := p.values[key].(float64)
-	return v
+	switch v := p.values[key].(type) {
+	case float64:
+		return v
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	}
+	return 0
 }
 
 func (p *Params) Bool(key string) bool {

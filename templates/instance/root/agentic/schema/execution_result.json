@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "execution_result",
+    "description": "Defines the structured operational result returned to cognition when some requested effects succeeded and a subsequent effect failed."
+  },
+  "functional": {
+    "succeeded": [],
+    "_succeeded_note": "Ordered collection of references or descriptors for effects that were successfully applied before execution stopped.",
+    "failed": [],
+    "_failed_note": "Required when execution failed. Identifies the effect that could not be applied.",
+    "error": [],
+    "_error_note": "Required when execution failed. Structured or textual error describing why the failed effect could not be applied.",
+    "remaining": [],
+    "_remaining_note": "Optional. Ordered collection of effects from the validated pilot output that were not attempted after execution stopped."
+  },
+  "subjective": {}
+}

@@ -44,7 +44,7 @@ func TestBridgeSessionOwnsSessionChannelAndSequence(t *testing.T) {
 	descriptor := []byte(`{"format":"brique.instance-descriptor/1"}`)
 	opened := session.Handle(request("open", 2, map[string]any{
 		"session_id": testSessionID, "origin": "https://example.test", "document_id": "doc-1",
-		"frame_id": 0, "ui_name": "root", "user_activated": true,
+		"frame_id": 0, "ui_name": "root",
 		"descriptor_b64": base64.RawURLEncoding.EncodeToString(descriptor),
 	}))
 	if !opened.OK || opened.ChannelID != testChannelID || len(sink.opened) != 1 {
@@ -105,7 +105,7 @@ func TestBridgeOpenRejectsPageChosenAuthorityAndUnsafeOrigins(t *testing.T) {
 				t.Fatal(response)
 			}
 			fields := map[string]any{"session_id": testSessionID, "origin": test.origin, "document_id": "doc",
-				"frame_id": 0, "ui_name": "root", "user_activated": true}
+				"frame_id": 0, "ui_name": "root"}
 			for key, value := range test.extra {
 				fields[key] = value
 			}
@@ -125,7 +125,7 @@ func TestBridgeRequiresHelloActivationAndExactSession(t *testing.T) {
 	sink := &recordingSink{}
 	session := testSession(t, sink)
 	openFields := map[string]any{"session_id": testSessionID, "origin": "https://example.test", "document_id": "doc",
-		"frame_id": 0, "ui_name": "root", "user_activated": true}
+		"frame_id": 0, "ui_name": "root"}
 	if response := session.Handle(request("open", 1, openFields)); response.OK {
 		t.Fatalf("open before hello = %#v", response)
 	}
@@ -138,12 +138,13 @@ func TestBridgeRequiresHelloActivationAndExactSession(t *testing.T) {
 		t.Fatalf("wrong session = %#v", response)
 	}
 	openFields["session_id"] = testSessionID
-	openFields["user_activated"] = false
-	if response := session.Handle(request("open", 4, openFields)); response.OK {
-		t.Fatalf("inactive open = %#v", response)
+	// Neither the page of the local instance nor a page with a descriptor needs a click.
+	delete(openFields, "descriptor_b64")
+	if response := session.Handle(request("open", 4, openFields)); !response.OK {
+		t.Fatalf("open without a gesture = %#v", response)
 	}
-	if len(sink.opened) != 0 {
-		t.Fatal("a refused open reached the sink")
+	if len(sink.opened) != 1 {
+		t.Fatal("the open of the local instance did not reach the sink")
 	}
 }
 
@@ -169,7 +170,7 @@ func TestBridgeLossClosesEveryChannelAndCannotResume(t *testing.T) {
 		t.Fatal(response)
 	}
 	if response := session.Handle(request("open", 2, map[string]any{"session_id": testSessionID,
-		"origin": "https://example.test", "document_id": "doc", "frame_id": 0, "ui_name": "root", "user_activated": true})); !response.OK {
+		"origin": "https://example.test", "document_id": "doc", "frame_id": 0, "ui_name": "root"})); !response.OK {
 		t.Fatal(response)
 	}
 	session.Close() // native port EOF / MV3 loss
@@ -194,7 +195,7 @@ func TestBridgeSinkRefusalDoesNotPublishAChannel(t *testing.T) {
 	session := testSession(t, sink)
 	_ = session.Handle(request("hello", 1, nil))
 	response := session.Handle(request("open", 2, map[string]any{"session_id": testSessionID,
-		"origin": "https://example.test", "document_id": "doc", "frame_id": 0, "ui_name": "root", "user_activated": true}))
+		"origin": "https://example.test", "document_id": "doc", "frame_id": 0, "ui_name": "root"}))
 	if response.OK || response.ErrorCode != "open_refused" {
 		t.Fatalf("sink refusal = %#v", response)
 	}
@@ -210,7 +211,7 @@ func TestBridgeEngineInvalidationClosesChannelExactlyOnce(t *testing.T) {
 	_ = session.Handle(request("hello", 1, nil))
 	opened := session.Handle(request("open", 2, map[string]any{"session_id": testSessionID,
 		"origin": "https://example.test", "document_id": "doc", "frame_id": 0,
-		"ui_name": "root", "user_activated": true}))
+		"ui_name": "root"}))
 	if !opened.OK || !session.Invalidate(opened.ChannelID) || session.Invalidate(opened.ChannelID) || len(sink.closed) != 1 {
 		t.Fatalf("invalidation = open %#v, closed %#v", opened, sink.closed)
 	}

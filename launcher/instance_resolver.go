@@ -33,18 +33,9 @@ func NewInstanceResolver(directory, controlRuntimeDirectory string) (*InstanceRe
 		controlRuntimeDirectory: controlRuntimeDirectory}, nil
 }
 
-func (resolver *InstanceResolver) Selected() (instanceselection.Selection, error) {
-	gateway, err := resolver.store.BrowserGateway()
-	if err != nil {
-		return instanceselection.Selection{}, err
-	}
-	instance, err := resolver.store.Get(gateway.Alias)
-	if err != nil {
-		return instanceselection.Selection{}, err
-	}
-	return instanceselection.Selection{Alias: gateway.Alias, Revision: gateway.Revision,
-		RootObject: instance.RootObject, RootPath: instance.RootPath,
-		HasPublication: instance.PublicationPath != ""}, nil
+// Association is what the owner chose for the extension that started a native host.
+func (resolver *InstanceResolver) Association(extensionID string) (instanceselection.Association, error) {
+	return resolver.store.associationFor(extensionID)
 }
 
 func (resolver *InstanceResolver) WebStatus(alias string) (instanceselection.WebStatus, error) {

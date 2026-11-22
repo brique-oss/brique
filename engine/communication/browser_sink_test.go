@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -490,7 +491,7 @@ func TestBrowserSessionIPCCarriesSignedIntentionAndResponseOverRealPinnedTLSRout
 	openRaw, err := json.Marshal(map[string]any{
 		"format": browserbridge.BridgeProtocol, "kind": "open", "sequence": 2,
 		"session_id": hello.SessionID, "origin": "https://ui.example", "document_id": "document-1",
-		"frame_id": 0, "ui_name": "root", "user_activated": true,
+		"frame_id": 0, "ui_name": "root",
 		"descriptor_b64": base64.RawURLEncoding.EncodeToString(descriptor.Bytes()),
 	})
 	if err != nil {
@@ -573,5 +574,27 @@ func TestBrowserSessionIPCCarriesSignedIntentionAndResponseOverRealPinnedTLSRout
 		t.Fatalf("browser session delivery = %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("remote signed response did not return to the browser channel")
+	}
+}
+
+func TestBoundedBridgePayloadAnswersAnOversizedResponseWithAnError(t *testing.T) {
+	big := circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{
+		IntentionID: "i1", Status: circulation.ValueStatusOK, Payload: map[string]any{"text": strings.Repeat("x", browserbridge.MaxPayloadBytes)}}}
+	payload, err := boundedBridgePayload(big)
+	if err != nil || len(payload) > browserbridge.MaxPayloadBytes {
+		t.Fatalf("payload = %d bytes, %v", len(payload), err)
+	}
+	var back circulation.Message
+	if err := json.Unmarshal(payload, &back); err != nil || back.Response.IntentionID != "i1" ||
+		back.Response.Status != circulation.ValueStatusError || back.Response.Error == nil || back.Response.Error.Code != "response_too_large" {
+		t.Fatalf("an oversized response must come back as an error of the same intention: %#v, %v", back.Response, err)
+	}
+	small := circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{IntentionID: "i2", Status: circulation.ValueStatusOK}}
+	if payload, err := boundedBridgePayload(small); err != nil || !strings.Contains(string(payload), `"ok"`) {
+		t.Fatalf("a small response is left as it is: %s, %v", payload, err)
+	}
+	trace := circulation.Message{Kind: circulation.ValueKindTrace, Trace: circulation.TraceWire{TraceKind: strings.Repeat("x", browserbridge.MaxPayloadBytes)}}
+	if _, err := boundedBridgePayload(trace); err == nil {
+		t.Fatal("an oversized message that is not a response is refused")
 	}
 }

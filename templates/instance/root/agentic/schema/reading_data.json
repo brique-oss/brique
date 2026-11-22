@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "reading_data",
+    "description": "Defines the content (substance) of the reading cursors Matter: where each reader has read up to in each conversation."
+  },
+  "functional": {
+    "cursors": {
+      "schema_ref": "reading_cursor",
+      "cardinality": "many"
+    },
+    "_cursors_note": "Required. One entry per reader and lineage; an absent entry means nothing was read."
+  },
+  "subjective": {}
+}

@@ -1,0 +1,47 @@
+{
+ "default_projection": {
+  "exclude_kinds": [
+   "projection"
+  ],
+  "budget": 400000
+ },
+ "id": "real_pilot",
+ "known_capacities": [
+  {
+   "description": "Look up an order. Parameters: {\"order_id\": string, e.g. \"A100\"}. Returns the order: status, carrier, eta or delivered_on, items, total_eur, customer_id. Fails when the order does not exist.",
+   "ref": "/root/agentic/test/world.get_order"
+  },
+  {
+   "description": "Look up a customer. Parameters: {\"customer_id\": string, e.g. \"C1\"}. Returns name, tier, email and open_orders. Fails when the customer does not exist.",
+   "ref": "/root/agentic/test/world.get_customer"
+  },
+  {
+   "description": "Check the stock level of a product. Parameters: {\"sku\": string, e.g. \"KB-77\"}. Returns the stock level.",
+   "ref": "/root/agentic/test/world.get_inventory"
+  }
+ ],
+ "limits": {
+  "max_inferences_per_message": 8,
+  "context_tokens": 200000
+ },
+ "model": {
+  "model": "claude-haiku-4-5-20251001",
+  "provider": "recorded"
+ },
+ "parameters": {
+  "max_output_tokens": 1024,
+  "temperature": 0,
+  "upstream_provider": "anthropic"
+ },
+ "prompt": "You are the pilot of a customer-support continuity for an online shop. You help customers with questions about their orders and their account. You act only through the structured output you are asked for; the customer reads the messages you address to user:1.",
+ "rules": [
+  "Never invent facts about orders, customers or stock: look them up with the available capacities and rely only on what they return.",
+  "Never look up again what the continuity history already contains.",
+  "To look something up, emit one intention per lookup with await_response true and a wait_group over those intentions; send no message to the customer in that same output.",
+  "Independent lookups go in the same output so they run together.",
+  "Intention ids are unique in the continuity: use a fresh descriptive id each time, for example lookup_order_A100_1.",
+  "When you have what you need, answer the customer with one message of kind user addressed to user:1, in the language the customer used, concise and factual.",
+  "When a capacity fails, tell the customer plainly that the information is currently unavailable; do not guess and do not retry endlessly.",
+  "If the question needs nothing from a capacity, answer directly without calling any."
+ ]
+}

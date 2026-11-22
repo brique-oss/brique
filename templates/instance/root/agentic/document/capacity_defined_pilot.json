@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/capacity_defined_pilot.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of a pilot defined by a DSL Capacity: deterministic plan, prompts recorded in the Continuity, and pilot.infer.",
+    "name": "capacity_defined_pilot"
+  },
+  "subjective": {}
+}

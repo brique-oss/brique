@@ -1,0 +1,56 @@
+{
+  "brique": {
+    "cap_name": "investigate_orders.fetch_orders",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "investigate_orders.fetch_orders",
+    "description": "Looks up each order of a list with an ordinary capacity; returns the orders in order."
+  },
+  "functional": {
+    "#root": {
+      "role": "Fetch each order of a list.",
+      "inputs": {
+        "params": {
+          "order_ids": {
+            "type": "array"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "items": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A list of order identifiers becomes the list of their records.",
+        "invariants": [
+          "Each order is looked up deterministically; nothing is recorded in any continuity."
+        ]
+      },
+      "resolution": {
+        "\u003efor_each": {
+          "collection": "$input.order_ids",
+          "as": "item",
+          "limit": 2,
+          "on_error": "fail",
+          "\u003edo": {
+            "invoke": {
+              "@capacity": "/root/agentic/test/world.get_order",
+              "as": "order",
+              "with": {
+                "order_id": "$item"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

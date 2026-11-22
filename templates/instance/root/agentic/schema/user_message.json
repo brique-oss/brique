@@ -1,0 +1,14 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "user_message",
+    "description": "Defines the block of the news of an inference that designates the user messages absorbed by the chain in progress since the previous inference."
+  },
+  "functional": {
+    "message_ids": [],
+    "_message_ids_note": "Required. Identifiers of the absorbed user messages, in arrival order. The messages themselves are lines of the journal and are read in the conversation; the block only says which of them are new. It is separate from the active stimulus, which may be pending at the same time."
+  },
+  "subjective": {}
+}

@@ -1,0 +1,61 @@
+{
+  "brique": {
+    "cap_name": "test.slow",
+    "kind": "interpreted",
+    "wrapper": "test_tools",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "test.slow",
+    "description": "Test tool: waits until its gate is opened, then answers."
+  },
+  "functional": {
+    "#root": {
+      "role": "Wait until the named gate is open in the gates matter, then answer.",
+      "inputs": {
+        "params": {
+          "gate": {
+            "type": "string"
+          },
+          "value": {
+            "type": "any"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "gate": {
+            "type": "string"
+          },
+          "value": {
+            "type": "any"
+          },
+          "call_index": {
+            "type": "integer"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A gate name and a value become the same value once the gate is open.",
+        "invariants": [
+          "The call never answers before the gate is open.",
+          "The gate state is read from the gates matter, never kept in memory, so a wrapper restart does not lose it."
+        ],
+        "success": [
+          "The response carries the gate, the value and the call rank once the gate is open."
+        ],
+        "failure": [
+          "The gate parameter is missing."
+        ],
+        "notes": [
+          "Executed by the test_tools Python wrapper. Test infrastructure only: it carries no business logic and exists to exercise the agentic mechanics."
+        ]
+      },
+      "effects": {
+        "tool_calls": "Appends one entry when the call starts and one when it is released."
+      }
+    }
+  },
+  "subjective": {}
+}

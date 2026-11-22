@@ -133,7 +133,7 @@ func TestRealProcesses_AWrapperIsGivenOnlyTheSecretsItIsGranted(t *testing.T) {
 	mustBeRefused("nothing granted", envOf("back"), "not granted")
 
 	// 2. The value is stored on the machine: that alone gives nothing.
-	if out := a.secWithInput(t, e2eSecretValue+"\n", "secret", "add", "anthropic"); !strings.Contains(out, "Secret anthropic enregistré") {
+	if out := a.secWithInput(t, e2eSecretValue+"\n", "secret", "add", "anthropic"); !strings.Contains(out, "Secret anthropic registered") {
 		t.Fatalf("secret add:\n%s", out)
 	}
 	if out := a.sec(t, "secret", "list"); !strings.HasPrefix(out, "anthropic  ") || strings.Contains(out, e2eSecretValue) {

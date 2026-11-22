@@ -1,0 +1,163 @@
+{
+  "brique": {
+    "cap_name": "tiny_relay",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "tiny_relay",
+    "description": "Pilot plan of the tiny real-LLM tests: delegates to a sub-continuity named by the message, then repeats its word.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity by delegating to a sub-continuity whose id, pilot and message come from the incoming message, then repeating its answer.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message naming a child, its pilot and its content becomes a message holding the child's word in uppercase.",
+        "invariants": [
+          "The child is piloted by whatever pilot_ref the message carries (a Matter or a Capacity).",
+          "Exactly one pilot.infer step of its own; the child's work is in the child's journal."
+        ],
+        "notes": [
+          "Test infrastructure of the tiny real-LLM scenarios: prompts and answers are one word, to spend as few tokens as possible."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.create",
+                "as": "opened",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "parent_id": "$input.continuity_id",
+                  "pilot_ref": "$input.message.content.child_pilot",
+                  "initial_intention": "Relay."
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/mailbox.send",
+                "as": "handed",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "message": {
+                    "id": "$input.message.content.child_message_id",
+                    "from": "plan:tiny_relay",
+                    "kind": "user",
+                    "content": "$input.message.content.child_content"
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.activate",
+                "as": "finished",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.project",
+                "as": "child_view",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "projection": {
+                    "include_kinds": [
+                      "pilot"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "r",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "relay",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "word": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "word"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "recorded",
+                    "model": "claude-haiku-4-5-20251001",
+                    "parameters": {
+                      "max_output_tokens": 40,
+                      "temperature": 0,
+                      "upstream_provider": "anthropic"
+                    }
+                  },
+                  "prompt_parts": [
+                    "The JSON below is the answer of a sub-continuity: its pilot message holds one word. Repeat that word in uppercase.",
+                    "$child_view.payload.projection"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$r.payload.output.word"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

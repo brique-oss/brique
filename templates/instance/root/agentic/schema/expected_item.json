@@ -1,0 +1,24 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "expected_item",
+    "description": "Defines one event, intention result, or continuity return expected by a wait group."
+  },
+  "functional": {
+    "type": [
+      "intention",
+      "continuity",
+      "event"
+    ],
+    "_type_note": "Required. Identifies the kind of expected event.",
+    "ref": [],
+    "_ref_note": "Required. Canonical reference identifying the expected continuity or external event. An intention of the same output is not listed: the pilot cannot know its identifier, and the wait group waits for all of the awaited intentions of its output by default. A pilot that you launch with pilot.launch and a task is NOT listed either: the answer of the launch is its result, so the awaited launch intention is what the group waits for (leave expected empty). The type continuity is only for a continuity launched earlier that reports back by message.",
+    "correlation": {
+      "schema_ref": "correlation"
+    },
+    "_correlation_note": "Required correlation data used to match an incoming message or result with this expected item."
+  },
+  "subjective": {}
+}

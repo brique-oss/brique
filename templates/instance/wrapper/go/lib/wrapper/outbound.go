@@ -19,7 +19,9 @@ package wrapper
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 )
@@ -41,6 +43,7 @@ type OutboundParams struct {
 	AwaitResponse bool
 	Correlation   Correlation
 	OnRunning     RunningFunc
+	BusyAttempts  int // attempts in all for a call refused because its callee is busy; 0 for BRIQUE_BUSY_ATTEMPTS
 }
 
 // SendRawIntention sends a complete Brique intention map and waits for its
@@ -51,7 +54,33 @@ func (o *OutboundAPI) SendRawIntention(intention map[string]any) (map[string]any
 
 // SendRawIntentionWithProgress also exposes intermediate running
 // acknowledgements without treating them as the final response.
+//
+// An intention that awaits its response and is refused because its callee is busy is sent again (BRIQUE_BUSY_ATTEMPTS in all), like a call
+// made with EmitAndWait: the refusal comes before the execution. The first attempt keeps the intention_id given; each new attempt has an id of
+// its own, since the refused one is spent.
 func (o *OutboundAPI) SendRawIntentionWithProgress(intention map[string]any, onRunning RunningFunc) (map[string]any, error) {
+	if awaiting, _ := intention["await_response"].(bool); !awaiting {
+		return o.sendRawOnce(intention, onRunning)
+	}
+	attempts := busyAttempts()
+	for attempt := 0; ; attempt++ {
+		next := intention
+		if attempt > 0 {
+			next = maps.Clone(intention)
+			delete(next, "intention_id")
+		}
+		payload, err := o.sendRawOnce(next, onRunning)
+		var refused *CallError
+		if err == nil || attempt >= attempts-1 || !errors.As(err, &refused) || !refused.IsBusy() {
+			return payload, err
+		}
+		resume := o.yieldSlot() // the pause does not hold an execution slot
+		time.Sleep(randomPause(attempt))
+		resume()
+	}
+}
+
+func (o *OutboundAPI) sendRawOnce(intention map[string]any, onRunning RunningFunc) (map[string]any, error) {
 	id, _ := intention["intention_id"].(string)
 	if id == "" {
 		id = newID()
@@ -166,6 +195,26 @@ func (o *OutboundAPI) EmitAndWait(p OutboundParams) (map[string]any, error) {
 }
 
 func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
+	if !p.AwaitResponse {
+		return o.emitOnce(p)
+	}
+	attempts := busyAttempts()
+	if p.BusyAttempts > 0 {
+		attempts = p.BusyAttempts
+	}
+	for attempt := 0; ; attempt++ {
+		payload, err := o.emitOnce(p)
+		var refused *CallError
+		if err == nil || attempt >= attempts-1 || !errors.As(err, &refused) || !refused.IsBusy() {
+			return payload, err
+		}
+		resume := o.yieldSlot() // the pause does not hold an execution slot
+		time.Sleep(randomPause(attempt))
+		resume()
+	}
+}
+
+func (o *OutboundAPI) emitOnce(p OutboundParams) (map[string]any, error) {
 	id := newID()
 	fromCtx := p.FromContext
 	fromCap := p.FromCap
@@ -231,11 +280,15 @@ func (o *OutboundAPI) emitInternal(p OutboundParams) (map[string]any, error) {
 
 func responsePayload(resp *ResponseMsg) (map[string]any, error) {
 	if resp == nil || resp.Status != StatusOK {
-		errMsg := "outbound intention failed"
-		if resp != nil && resp.Error != nil && resp.Error.Message != "" {
-			errMsg = resp.Error.Message
+		failure := callErrorFrom(nil)
+		failure.Message = "outbound intention failed"
+		if resp != nil && resp.Error != nil {
+			failure = callErrorFrom(map[string]any{"code": resp.Error.Code, "message": resp.Error.Message, "details": resp.Error.Details})
+			if resp.Error.Message == "" {
+				failure.Message = "outbound intention failed"
+			}
 		}
-		return nil, fmt.Errorf("%s", errMsg)
+		return nil, failure
 	}
 	return resp.Payload, nil
 }

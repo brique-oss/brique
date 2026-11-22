@@ -1,0 +1,18 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1794063499550123000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 72,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "txt"
+  },
+  "objective": {
+    "description": "Prompt of the weather scenarios: what to wear this morning, from a weather observation given as the data of the step.",
+    "name": "weather_advice_prompt"
+  },
+  "subjective": {}
+}

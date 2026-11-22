@@ -1,0 +1,409 @@
+{
+  "brique": {
+    "cap_name": "pilot.infer",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "pilot.infer",
+    "description": "Runs one prompt of a Capacity pilot through the continuity: records the prompt and the completion, memoizes the step and returns the structured output."
+  },
+  "functional": {
+    "#root": {
+      "role": "Run one prompt of a Capacity pilot through the continuity: record it, ask the model for a structured output, validate and record the answer, and return it to the deterministic plan.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string",
+            "_comment": "Required. Stable name of the step, a literal of the plan."
+          },
+          "instructions": {
+            "type": "string",
+            "_comment": "The prompt of the step as one text. Required unless prompt_parts or prompt_matters is given; never together with them."
+          },
+          "output_schema": {
+            "type": "object",
+            "_comment": "Required. JSON Schema of the structured output: the contract between the reasoning and the deterministic rest of the plan."
+          },
+          "model": {
+            "type": "object",
+            "_comment": "Required. { provider, model, parameters? }."
+          },
+          "projection": {
+            "type": "object",
+            "_comment": "Optional. A projection_definition: the view of the journal added to the context of the step."
+          },
+          "max_inferences": {
+            "type": "integer",
+            "_comment": "Optional. Ceiling of prompts for the current message."
+          },
+          "prompt_parts": {
+            "_comment": "The prompt of the step as an ordered list of parts, assembled as is. A part is a non-empty text, or any other JSON value (an object, a list, a number, a boolean): it is written as compact JSON with its keys in order, which is how the data of a step joins its prompt. null is not a part. A list parameter: each element travels as a parameter would. May be given with prompt_matters, in which case prompt_order says which comes first. Never together with instructions.",
+            "type": "array"
+          },
+          "prompt_order": {
+            "_comment": "matters_first or parts_first: which of prompt_matters and prompt_parts comes first in the assembled prompt. Required when both are given.",
+            "type": "string"
+          },
+          "framework": {
+            "_comment": "Optional boolean, false by default. Whether the cognitive frame of the continuity (its first journal line, kind framework) opens the system text of the step. It matters only without projection: a step with a projection always has the frame, a step without one has only its prompt unless it asks. The frame is not part of the recorded prompt, which stays the assembled prompt.",
+            "type": "boolean"
+          }
+        },
+        "@matter": {
+          "prompt_matters": {
+            "_comment": "The Matters whose substance, read as text, makes the prompt, in the order given. Never together with instructions.",
+            "cardinality": "many",
+            "required": false
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "output": {
+            "type": "any"
+          },
+          "usage": {
+            "type": "object"
+          },
+          "step": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "journal": {
+              "schema": "/root/agentic/schema/message"
+            }
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Appends a prompt entry and a completion entry to the journal, and an inference_measured event when the step saw the journal, or nothing when the step was already completed. The step holds the inference window of the continuity from the reading of the projection to the completion, and releases it in every case.",
+        "model": "One inference, unless the step is already recorded."
+      },
+      "transformation_contract": {
+        "morphing": "A prompt (a text, or an ordered list of texts, JSON values and Matters) and an output schema become the structured output of a model, recorded in the continuity.",
+        "invariants": [
+          "Only the run that owns the continuity may infer for it.",
+          "A step is identified by its message, name, prompt, output schema and model: the same step is the same inference.",
+          "A prompt given as lists is assembled as is: the Matters of prompt_matters (each its substance read as text) and the parts of prompt_parts (a text as it is, any other JSON value as compact JSON with its keys in order), each list in the order given, the two in the order prompt_order asks, a blank line between all of them; nothing else is interpreted, extracted or rewritten.",
+          "The prompt of a step is the text that was sent, however it was given: identification and the journal use that text, not the references, so a changed Matter is a new step and the journal keeps what was really asked.",
+          "A step already completed in the journal is returned without calling the model and adds nothing to the journal.",
+          "The prompt is recorded before the model is asked and the completion after its output is validated; both have deterministic identifiers, so a repeated call is an idempotent retry.",
+          "The output is validated against output_schema; an invalid output is refused and recorded as an error, never as a completion.",
+          "The number of prompts of one message is bounded; beyond the bound the step is refused.",
+          "An output_schema must be sendable to a strict structured-output provider (closed objects, bounded optional and union parameters); otherwise it is refused before any model call.",
+          "Without projection the step sees only its prompt; with projection it also sees the requested view of the journal.",
+          "A content is written as is in its journal line, whatever its size, with no carrying by reference; the returned output is always the whole value.",
+          "The inference_measured event is written only by a step whose context contains the projection.",
+          "When the provider reports the usage, the inference_measured event also carries the breakdown, each field only if known: cache_read_tokens, cache_creation_tokens, uncached_input_tokens (input_tokens minus the two, never negative, absent when the provider says nothing of the cache), output_tokens, model, duration_ms and window_tokens (limits.context_tokens of the pilot when given). input_tokens keeps meaning the total context.",
+          "Prompt and completion are history only: they have no mailbox entry and never wake the continuity.",
+          "Every write to a mutable Matter carries expected_revision, read just before the write.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks indexed by continuity_id.",
+          "The request sent to the model is a transit value, never written to the journal; the journal keeps the prompt of the step (the assembled text and the model) and its completion.",
+          "From the reading of the projection to the writing of the completion the step holds the inference window of the continuity: no other line is written between its prompt and its completion, and no other inference runs for the continuity. A replayed step takes none."
+        ],
+        "success": [
+          "The response carries the validated output, the usage reported by the provider, the step name and whether the step was replayed."
+        ],
+        "failure": [
+          "Fails when a required input is missing or malformed.",
+          "Fails when the prompt is given twice or not at all, when a list is malformed, when both lists are given without prompt_order, when input is given (the data of a step is a part of its prompt), or when a Matter of prompt_matters does not exist or is empty; nothing is recorded and the model is not asked.",
+          "Fails when the continuity does not exist.",
+          "Fails when run_id is not the run owning the continuity.",
+          "Fails when output_schema cannot be sent to a structured-output provider.",
+          "Fails when the message already used its allowed inferences.",
+          "Fails when the model output does not conform to output_schema.",
+          "Fails when the model provider fails; nothing is recorded as completed.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "It is the cognition phase of pilot.activate made callable: a Capacity pilot reaches the model only through it.",
+          "The design is the document capacity_defined_pilot; the concurrency model is the document agentic_core_concurrency_model.",
+          "Implementation constraint: the memoization of a step looks up its prompt and completion in the in-memory object that duplicates the journal for performance; their writes are an append to the journal followed by the update of the object."
+        ]
+      },
+      "resolution": {
+        "\u003esequence": {
+          "items": [
+            {
+              "#validate": {
+                "inputs": {
+                  "params": {
+                    "step": {
+                      "type": "string"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    },
+                    "output_schema": {
+                      "type": "object"
+                    },
+                    "model": {
+                      "type": "object"
+                    },
+                    "prompt_parts": {
+                      "type": "array"
+                    },
+                    "prompt_order": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "valid": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Check the shape of the request and of the output schema.",
+                "transformation_contract": {
+                  "morphing": "A step request becomes a validated request.",
+                  "invariants": [
+                    "An output_schema is closed, typed and within the optional and union limits of the strictest provider."
+                  ],
+                  "failure": [
+                    "Fails when a required input is missing or malformed.",
+                    "Fails when the prompt is given twice or not at all, when a list is malformed, when both lists are given without prompt_order, when input is given (the data of a step is a part of its prompt), or when a Matter of prompt_matters does not exist or is empty; nothing is recorded and the model is not asked.",
+                    "Fails when output_schema cannot be sent to a structured-output provider."
+                  ]
+                }
+              }
+            },
+            {
+              "#own": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Check that the run owns the continuity.",
+                "transformation_contract": {
+                  "morphing": "A run identifier becomes the current message of the continuity it owns.",
+                  "invariants": [
+                    "Only the run that owns the continuity may infer for it."
+                  ],
+                  "failure": [
+                    "Fails when the continuity does not exist.",
+                    "Fails when run_id is not the run owning the continuity."
+                  ]
+                }
+              }
+            },
+            {
+              "#memoize": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "step": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "output": {
+                      "type": "any"
+                    }
+                  }
+                },
+                "role": "Return a step already completed in the journal.",
+                "transformation_contract": {
+                  "morphing": "A step identity becomes its recorded output, when there is one.",
+                  "invariants": [
+                    "A step is identified by its message, name, prompt, output schema and model: the same step is the same inference.",
+                    "A step already completed in the journal is returned without calling the model and adds nothing to the journal."
+                  ]
+                }
+              }
+            },
+            {
+              "#bound": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "max_inferences": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "allowed": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Refuse a message that used its inferences.",
+                "transformation_contract": {
+                  "morphing": "The prompts already recorded for a message become the decision to allow one more.",
+                  "failure": [
+                    "Fails when the message already used its allowed inferences."
+                  ]
+                }
+              }
+            },
+            {
+              "#prompt": {
+                "inputs": {
+                  "params": {
+                    "step": {
+                      "type": "string"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    },
+                    "projection": {
+                      "type": "object"
+                    },
+                    "prompt_parts": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "prompt_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Record the prompt before the model is asked.",
+                "transformation_contract": {
+                  "morphing": "A step becomes a prompt entry of the journal.",
+                  "invariants": [
+                    "Without projection the step sees only its prompt; with projection it also sees the requested view of the journal.",
+                    "The prompt line records the step as is (the assembled prompt and the model), whatever its size; the returned output is always the whole value.",
+                    "Prompt and completion are history only: they have no mailbox entry and never wake the continuity."
+                  ]
+                }
+              }
+            },
+            {
+              "#infer": {
+                "inputs": {
+                  "params": {
+                    "output_schema": {
+                      "type": "object"
+                    },
+                    "model": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "output": {
+                      "type": "any"
+                    },
+                    "usage": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Ask the model for the structured output.",
+                "transformation_contract": {
+                  "morphing": "A prompt becomes the model structured output.",
+                  "invariants": [
+                    "The output is validated against output_schema; an invalid output is refused and recorded as an error, never as a completion."
+                  ],
+                  "failure": [
+                    "Fails when the model output does not conform to output_schema.",
+                    "Fails when the model provider fails; nothing is recorded as completed."
+                  ]
+                }
+              }
+            },
+            {
+              "#complete": {
+                "inputs": {
+                  "params": {
+                    "output": {
+                      "type": "any"
+                    },
+                    "usage": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "completion_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Record the completion after validation.",
+                "transformation_contract": {
+                  "morphing": "A validated output becomes a completion entry of the journal.",
+                  "invariants": [
+                    "The prompt is recorded before the model is asked and the completion after its output is validated; both have deterministic identifiers, so a repeated call is an idempotent retry."
+                  ]
+                }
+              }
+            },
+            {
+              "#measure": {
+                "inputs": {
+                  "params": {
+                    "usage": {
+                      "type": "object"
+                    },
+                    "projection": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "measured": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Record the context size as an inference_measured event when the step saw the journal.",
+                "transformation_contract": {
+                  "morphing": "The reported input tokens become an inference_measured event of the journal, only for a step whose context contains the projection."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

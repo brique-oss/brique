@@ -1,0 +1,70 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "continuity_data",
+    "description": "Defines the content (substance) of a continuity header Matter: its identity, intentions, pilot reference, lineage and the reference to its journal. The durable message stream is not part of it: it lives in the journal Matter."
+  },
+  "functional": {
+    "id": [],
+    "_id_note": "Required. Stable identifier of the continuity.",
+    "created_at": [],
+    "_created_at_note": "Required. Timestamp at which the continuity was created.",
+    "parent_id": [],
+    "_parent_id_note": "Optional. Identifier of the parent continuity. Null or absent for a root continuity.",
+    "children": [],
+    "_children_note": "Required. Collection of identifiers of direct child continuities.",
+    "initial_intention": [],
+    "_initial_intention_note": "Required and immutable. Founding direction of the continuity and persistent semantic reference for all later cognition.",
+    "current_intention": [],
+    "_current_intention_note": "Required. Current local direction of the continuity. Initially equal to initial_intention and explicitly updated when cognition changes direction.",
+    "pilot_ref": {
+      "_context_note": "Absolute context path that owns the pilot: the context where the pilot_definition Matter lives (any context), or the context of the Capacity for a Capacity pilot.",
+      "_matter_id_note": "Matter form only. Matter ID of the pilot_definition inside the addressed context. Exclusive with capacity.",
+      "context": [],
+      "matter_id": [],
+      "capacity": [],
+      "_capacity_note": "Capacity form only. Name of the Capacity whose plan decides for the continuity. Exclusive with matter_id.",
+      "limits": {
+        "max_inferences_per_message": [],
+        "timeout_s": [],
+        "wait_timeout_s": [],
+        "context_tokens": [],
+        "compaction_advised_ratio": [],
+        "compaction_required_ratio": []
+      },
+      "_limits_note": "Optional, Capacity form only. max_inferences_per_message lowers the default ceiling (100) of prompts allowed for one message; timeout_s bounds one turn of the Capacity (default 600). wait_timeout_s (default 3600) bounds the wait of a wait group for answers that never come. context_tokens (and, optionally, compaction_advised_ratio and compaction_required_ratio, as in a pilot_definition) lets agentic_core compute the context pressure of a Capacity pilot and give it to the plan; the succession stays the plan's decision.",
+      "allowed_capacities": [],
+      "_allowed_capacities_note": "Optional, Capacity form only: the same patterns as in a pilot_definition (a pilot_definition carries its own).",
+      "forbidden_capacities": [],
+      "_forbidden_capacities_note": "Optional, Capacity form only: the same patterns as in a pilot_definition; they win over allowed_capacities.",
+      "allowed_contexts": [],
+      "_allowed_contexts_note": "Optional, Capacity form only: the same as in a pilot_definition.",
+      "forbidden_contexts": [],
+      "_forbidden_contexts_note": "Optional, Capacity form only: the same as in a pilot_definition; they win over the allowed lists."
+    },
+    "_pilot_ref_note": "Required. Explicit reference to what decides for this continuity: a pilot_definition Matter { context, matter_id } or a Capacity { context, capacity, limits? }, never both.",
+    "status": [
+      "active",
+      "archived"
+    ],
+    "_status_note": "Required. active while the continuity can be activated; archived, read-only, once a successor continues it. A lineage has exactly one active continuity.",
+    "lineage_id": [],
+    "_lineage_id_note": "Required. Identifier of the first continuity of the chain of successions this continuity belongs to; it is the identifier its delegating parent knows.",
+    "generation": [],
+    "_generation_note": "Required. Rank in the lineage: 1 for the first continuity, then incremented at each succession.",
+    "predecessor_id": [],
+    "_predecessor_id_note": "Optional. Identifier of the continuity this one continues. Absent for the first continuity of a lineage.",
+    "successor_id": [],
+    "_successor_id_note": "Optional. Identifier of the continuity that continues this one. Present if and only if status is archived.",
+    "journal_ref": {
+      "_context_note": "Absolute context path that owns the journal Matter. Currently /root/agentic.",
+      "_matter_id_note": "Matter ID of the journal in that context (journal_<continuity id>).",
+      "context": [],
+      "matter_id": []
+    },
+    "_journal_ref_note": "Required. Reference to the journal Matter holding the complete ordered immutable stream of durable messages of the continuity (JSON Lines, one message per line, canonical order = message.seq = line number). Written at creation and never modified. The messages are not part of this document."
+  },
+  "subjective": {}
+}

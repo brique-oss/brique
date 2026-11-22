@@ -1,0 +1,163 @@
+{
+  "brique": {
+    "cap_name": "delegate_to_plan",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "delegate_to_plan",
+    "description": "Capacity pilot of the integration tests: hands the whole task to a sub-continuity that is itself piloted by a Capacity, then wraps its result with a prompt.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity by delegating to a sub-continuity piloted by another plan.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message becomes an answer built from the result of a sub-continuity whose pilot is another Capacity.",
+        "invariants": [
+          "The sub-continuity is piloted by a Capacity, never by a pilot_definition.",
+          "Its result is the input of the wrapping prompt."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.create",
+                "as": "opened",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "parent_id": "$input.continuity_id",
+                  "pilot_ref": {
+                    "context": "/root/agentic/test",
+                    "capacity": "review_orders"
+                  },
+                  "initial_intention": "Review the open orders."
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/mailbox.send",
+                "as": "handed",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "message": {
+                    "id": "$input.message.content.child_message_id",
+                    "from": "plan:delegate_to_plan",
+                    "kind": "user",
+                    "content": {
+                      "customer_id": "$input.message.content.customer_id"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.activate",
+                "as": "finished",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/continuity.project",
+                "as": "child_view",
+                "with": {
+                  "continuity_id": "$input.message.content.child_id",
+                  "projection": {
+                    "include_kinds": [
+                      "pilot"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "wrap",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "wrap",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "answer": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "answer"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "fake",
+                    "model": "scripted",
+                    "parameters": {
+                      "max_output_tokens": 200
+                    }
+                  },
+                  "prompt_parts": [
+                    "Rephrase the review for the customer.",
+                    "$child_view.payload.projection"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$wrap.payload.output.answer"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

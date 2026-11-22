@@ -1,0 +1,45 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "message",
+    "description": "Defines one immutable ordered message in a continuity, that is one line of its journal, including its origin, destination, semantic kind, payload, creation time, and correlation data."
+  },
+  "functional": {
+    "id": [],
+    "_id_note": "Required. Unique identifier of the message.",
+    "seq": [],
+    "_seq_note": "Required. Monotonic sequence number of the continuity: the line number of the message in its journal (1 for the first line). It equals the number of lines already committed plus one, and the append is guarded by expected_line_count, so two concurrent appends cannot obtain the same seq. It is the canonical ordering key and is never derived from revision.",
+    "from": [],
+    "_from_note": "Required. Explicit origin of the message.",
+    "to": [],
+    "_to_note": "Required. Explicit destination of the message.",
+    "kind": [
+      "framework",
+      "user",
+      "pilot",
+      "capacity_intention",
+      "capacity_response",
+      "continuity",
+      "control",
+      "projection",
+      "error",
+      "summary",
+      "prompt",
+      "completion",
+      "event"
+    ],
+    "_kind_note": "Required. Stable high-level semantic category of the message, and the characterization that decides whether a line belongs to the thread of the LLM (the continuity) or to the follow-up of the machinery. The tool that writes the line sets it, because it knows where the line comes from; the LLM never sets it. Thread of the LLM, kept by default in the continuity: framework (the cognitive frame, the first line of every continuity, copied at its creation from a Matter), user, pilot, capacity_intention, capacity_response, continuity (a message coming from another continuity), summary, prompt, completion. Follow-up, kept in the journal and outside the continuity by default: event (wait_group_created, wait_group_completed, run_recovered, intention_update, inference_measured), projection, error, control. framework, summary, prompt, completion, event, projection and error are history only: only agentic_core writes them, they never reach a mailbox and are never accepted from outside. prompt and completion are the two halves of one inference step of a Capacity pilot. A framework line is pinned: every projection carries it, whatever its filters, limit or budget, and it is never compacted. The detail belongs to content.",
+    "content": [],
+    "_content_note": "Required. Message payload. Its internal shape depends on the message kind and remains open at this schema level. The content is written as is in the line, whatever its size: there is no carrying by reference, no overflow Matter and no size limit imposed by agentic. A summary message carries the synthesis written by the predecessor continuity.",
+    "created_at": [],
+    "_created_at_note": "Required. Creation timestamp of the message. Ordering is determined by seq, not by this timestamp.",
+    "correlation": {
+      "schema_ref": "correlation"
+    },
+    "_correlation_note": "Correlation data linking the message to causal messages, Brique intentions, wait groups, or related continuities.",
+    "_line_note": "Each journal line is one message serialized as a single-line JSON document ending with LF. For a JSON Lines Matter, schema_ref designates the schema of one line, which is this one."
+  },
+  "subjective": {}
+}

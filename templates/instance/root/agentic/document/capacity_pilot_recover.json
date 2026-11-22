@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/capacity_pilot_recover.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Intention of the pilot.recover Capacity in the agentic context.",
+    "name": "capacity_pilot_recover"
+  },
+  "subjective": {}
+}

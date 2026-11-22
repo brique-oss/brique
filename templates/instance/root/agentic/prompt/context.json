@@ -1,0 +1,35 @@
+{
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "",
+    "ctx_name": "prompt",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {},
+      "execution": {
+        "default_invoke_timeout_ms": 0
+      },
+      "matter": {
+        "inline_max_bytes": 262144,
+        "lease_ttl_ms": 30000,
+        "max_upload_bytes": 268435456
+      },
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "minimal",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.0"
+  },
+  "objective": {
+    "name": "prompt",
+    "description": "Groups agentic prompts as text Matters to assemble into an inference prompt through prompt_matters."
+  },
+  "functional": {},
+  "subjective": {}
+}

@@ -33,7 +33,9 @@ from .constants import (
     TYPE_MATTER,
     TYPE_USER,
 )
+from . import diagnostic, settings
 from .correlator import AwaitCorrelator
+from .keepalive import keepalive
 from .execution import CapacityExecutor, MatterManager, current_activity, current_delegation, current_intention
 from .outbound import OutboundIntentionAPI
 from .registry import RuntimeRegistry
@@ -65,8 +67,8 @@ class WrapperRuntime:
             self.wrapper_name,
             self.wrapper_work_dir / "transit",
             allowed_file_root=self.context_tree_dir(),
-            max_bytes=self._positive_env("BRIQUE_TRANSIT_MAX_BYTES", 64 * 1024 * 1024),
-            ttl_seconds=self._positive_env("BRIQUE_TRANSIT_TTL_SECONDS", 60 * 60),
+            max_bytes=settings.value("BRIQUE_TRANSIT_MAX_BYTES"),
+            ttl_seconds=settings.value("BRIQUE_TRANSIT_TTL_SECONDS"),
             runtime=self,
         )
         self.transit_matters = TransientMatterClient(self)
@@ -81,8 +83,8 @@ class WrapperRuntime:
         self.subscriptions: dict[str, dict[str, Any]] = {}
         self.inflight: set[asyncio.Task[Any]] = set()
         self.scheduler = WorkScheduler(
-            self._positive_env("BRIQUE_MAX_CONCURRENCY", 16),
-            self._positive_env("BRIQUE_QUEUE_LIMIT", 256),
+            settings.value("BRIQUE_MAX_CONCURRENCY"),
+            settings.value("BRIQUE_QUEUE_LIMIT"),
         )
 
     async def load(self) -> None:
@@ -102,19 +104,6 @@ class WrapperRuntime:
         await self.registry.load_bindings()
         self.transport = TransportClient(self.boundary_url())
         await self.transport.connect()
-
-    @staticmethod
-    def _positive_env(name: str, default: int) -> int:
-        raw = os.environ.get(name, "").strip()
-        if not raw:
-            return default
-        try:
-            value = int(raw)
-        except ValueError as exc:
-            raise RuntimeError(f"{name} must be a positive integer") from exc
-        if value < 1:
-            raise RuntimeError(f"{name} must be a positive integer")
-        return value
 
     def boundary_url(self) -> str:
         from .util import load_json
@@ -161,6 +150,10 @@ class WrapperRuntime:
         await self.load()
         assert self.transport is not None
         self.scheduler.start()
+        changed = settings.not_default()
+        if changed:
+            self.log_event("settings_not_default", **changed)      # what the process really uses, to compare with what was meant
+        diagnostic.install(default=True)        # kill -USR1 <pid> writes what every task awaits (wrapper/diagnostic.py)
         await self.transport.send(self.wrapper_ready_message())
         try:
             await self.transport.receive_loop(self._schedule_raw_message)
@@ -200,6 +193,10 @@ class WrapperRuntime:
         if intention is None or self.transport is None:
             return
         await self.send_message(self.router.running_response(intention))
+
+    def keepalive(self, every_s: float | None = None):
+        """``async with runtime.keepalive():`` acknowledges the capacity being executed as long-running for the length of the block (see keepalive.py)."""
+        return keepalive(self, every_s)
 
     async def send_message(self, message: dict[str, Any], delegation: str | None = None) -> None:
         if self.transport is None:
@@ -371,7 +368,7 @@ class WrapperRuntime:
         raw_context = str(intention.get("to", {}).get("context", "")).strip()
         prefix = f"@wrapper_{self.wrapper_name}:/"
         if raw_context.startswith(prefix):
-            return raw_context[len(prefix) :]
+            return raw_context[len(prefix) :].strip("/")
         return ""
 
     def extract_write_value(self, intention: dict[str, Any]) -> Any:

@@ -1,0 +1,273 @@
+{
+  "brique": {
+    "cap_name": "mailbox.release",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "mailbox.release",
+    "description": "Releases a mailbox entry claimed by its owning run and returns it to pending state without undoing any already materialized effect."
+  },
+  "functional": {
+    "#root": {
+      "role": "Abandon one incomplete mailbox consumption by verifying ownership and returning the claimed entry to pending state through one guarded mailbox write, while preserving all durable history and real effects.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "failed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "released": {
+            "type": "boolean"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "parked": {
+            "type": "boolean"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            }
+          }
+        }
+      },
+      "effects": {
+        "mailbox": "Changes exactly one mailbox entry from claimed to pending and clears its ownership."
+      },
+      "transformation_contract": {
+        "morphing": "An incompletely consumed mailbox entry owned by a run becomes pending again without reverting any durable or external effect.",
+        "invariants": [
+          "Only the run owning the claimed entry may release it.",
+          "A pending entry cannot be released.",
+          "Release changes mailbox consumption state only.",
+          "The durable message is never deleted or mutated.",
+          "Release never means rollback.",
+          "Already emitted intentions are never automatically replayed.",
+          "Already materialized external effects remain real.",
+          "The entry keeps its original message_id, priority, and referenced message seq.",
+          "A release that reports a failed treatment (failed true) counts one attempt on the entry (attempts).",
+          "An entry whose treatment failed for the third time is parked: its status becomes failed instead of pending, it is never claimed again, and the messages after it are no longer blocked by it.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "The operation mutates a single Matter through one matter.write guarded by expected_revision, and is atomic at the engine level for that Matter only."
+        ],
+        "success": [
+          "The targeted entry is verified as claimed by run_id.",
+          "status becomes pending, or failed when the release reports the third failed treatment.",
+          "claimed_by becomes empty.",
+          "The entry becomes eligible for a later mailbox.read according to its existing priority and message seq, unless it is parked."
+        ],
+        "failure": [
+          "Fails if the mailbox does not belong to continuity_id.",
+          "Fails if the entry does not exist.",
+          "Fails if the entry is already pending.",
+          "Fails if the entry is parked (status failed): a parked message is not released again.",
+          "Fails if claimed_by differs from run_id.",
+          "Failure leaves mailbox state unchanged.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "mailbox.release delegates no architectural behavior to another capacity.",
+          "Clearing runtime.current_message_id belongs to pilot.activate after a safe release.",
+          "Expected-message recovery may require coordinated runtime reconstruction; mailbox.release alone must not reinterpret an expected result as normal work.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the three Matters owned by the target continuity from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if one of the three derived Matters does not exist."
+                  ],
+                  "invariants": [
+                    "Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs of its continuity, mailbox, and runtime."
+                }
+              }
+            },
+            {
+              "#locate": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "entry": {
+                      "type": "object"
+                    },
+                    "found": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Resolve the mailbox entry targeted by message_id.",
+                "transformation_contract": {
+                  "invariants": [
+                    "Lookup does not mutate mailbox state."
+                  ],
+                  "morphing": "A mailbox message identifier becomes its current mailbox entry or an explicit absence result."
+                }
+              }
+            },
+            {
+              "#authorize": {
+                "inputs": {
+                  "params": {
+                    "entry": {
+                      "type": "object"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "authorized": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Verify that the targeted entry is currently claimed by the requesting run.",
+                "transformation_contract": {
+                  "failure": [
+                    "Pending, unowned, or differently owned entries reject release."
+                  ],
+                  "invariants": [
+                    "entry.status must equal claimed.",
+                    "entry.claimed_by must equal run_id."
+                  ],
+                  "morphing": "A claimed mailbox entry and run identity become an authorized or rejected release request.",
+                  "success": [
+                    "Only the current owner of the consumption may proceed."
+                  ]
+                }
+              }
+            },
+            {
+              "#release_claim": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "released": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Clear the ownership of the authorized entry and return it to pending state through one guarded mailbox write.",
+                "transformation_contract": {
+                  "failure": [
+                    "If the guarded write cannot be completed, the original claim remains intact."
+                  ],
+                  "invariants": [
+                    "status becomes pending and claimed_by is cleared in one mailbox write guarded by expected_revision.",
+                    "priority does not change.",
+                    "message_id does not change.",
+                    "No other mailbox entry is modified."
+                  ],
+                  "morphing": "An authorized claimed mailbox entry becomes pending and unowned again.",
+                  "success": [
+                    "The entry becomes available for future eligible consumption."
+                  ]
+                }
+              }
+            },
+            {
+              "#preserve_effects": {
+                "inputs": {
+                  "params": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "released": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Preserve the distinction between releasing mailbox ownership and reverting already materialized execution effects.",
+                "transformation_contract": {
+                  "invariants": [
+                    "No external effect is compensated implicitly.",
+                    "No intention is automatically re-emitted.",
+                    "Any future retry is a new explicit cognitive decision."
+                  ],
+                  "morphing": "A released consumption claim becomes explicitly reusable work while all prior real effects remain part of history."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

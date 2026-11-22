@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from wrapper import errors
 from wrapper.calls import CapacityCallError, CapacityCaller
 from wrapper.execution import CapacityExecutor, current_intention
 from wrapper.models import CapacityBinding
@@ -309,8 +310,16 @@ class EngineCallTests(CallTestCase):
                 await rt.calls.call(to_context="/root/other", to_cap="cap.missing", params={"large": large})
             self.assertEqual(ctx.exception.code, "not_found")
             self.assertEqual(ctx.exception.details, {"reason": "unknown_cap"})
+            self.assertIsInstance(ctx.exception, errors.NotFound)
             sent_file = Path(rt.outbound.waited[0]["params"]["large"][MARK_FILE])
             self.assertFalse(sent_file.exists())
+
+    async def test_a_refusal_comes_back_as_the_typed_error_of_its_reason(self) -> None:
+        for reason, kind in (("busy", errors.Busy), ("revision_mismatch", errors.RevisionMismatch), ("connection_lost", errors.ConnectionLost)):
+            with tempfile.TemporaryDirectory() as tmp:
+                rt = build(tmp, {"status": "error", "error": {"code": "refused", "message": "no", "details": {"reason": reason}}})
+                with self.assertRaises(kind):
+                    await rt.calls.call(to_context="/root/other", to_cap="cap.remote", params={})
 
     async def test_an_object_posted_for_a_missing_local_looking_target_is_released(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

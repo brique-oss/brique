@@ -48,6 +48,12 @@ export type ContextUIBuildOutput = {
   rootViewBuiltPath: string;
   rootViewBuiltUrl: string;
   outputDir: string;
+  /**
+   * The source files this UI was built from, as absolute paths (dependencies installed under
+   * node_modules are left out). A change to any of them makes the UI out of date, including a file
+   * imported from another folder. Absent when the UI is not built here.
+   */
+  inputs?: string[];
 };
 
 export async function buildContextUI(
@@ -78,9 +84,10 @@ async function buildReactContextUI(
 
   await mkdir(outputDir, { recursive: true });
 
+  let inputs: string[] = [];
   try {
     const esbuild = await loadEsbuild(input.sparkRoot);
-    await esbuild.build({
+    const result = await esbuild.build({
       entryPoints: [input.rootViewSourcePath],
       outfile: rootViewBuiltPath,
       bundle: true,
@@ -89,6 +96,7 @@ async function buildReactContextUI(
       target: "es2020",
       jsx: "automatic",
       sourcemap: true,
+      metafile: true,
       absWorkingDir: input.contextDir,
       external: [
         "react",
@@ -103,7 +111,8 @@ async function buildReactContextUI(
         typescriptSourceResolvePlugin(),
       ],
       logLevel: "silent",
-    });
+    }) as { metafile?: { inputs: Record<string, unknown> } };
+    inputs = sourceInputs(result.metafile, input.contextDir);
   } catch (err) {
     throw new Error(
       [
@@ -122,7 +131,22 @@ async function buildReactContextUI(
     rootViewBuiltPath,
     rootViewBuiltUrl: pathToFileURL(rootViewBuiltPath).href,
     outputDir,
+    inputs,
   };
+}
+
+// sourceInputs turns esbuild's metafile into the absolute, sorted list of the files that are the
+// instance's own sources: what lives under node_modules and what is not a real file is skipped.
+function sourceInputs(metafile: { inputs: Record<string, unknown> } | undefined, contextDir: string): string[] {
+  if (!metafile) return [];
+  const result = new Set<string>();
+  for (const relative of Object.keys(metafile.inputs)) {
+    if (relative.includes(":")) continue; // a plugin namespace, not a file
+    const absolute = path.resolve(contextDir, relative);
+    if (absolute.split(path.sep).includes("node_modules")) continue;
+    if (existsSync(absolute)) result.add(absolute);
+  }
+  return [...result].sort();
 }
 
 async function loadEsbuild(packageRoot: string): Promise<{

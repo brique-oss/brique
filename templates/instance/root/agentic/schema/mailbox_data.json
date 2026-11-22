@@ -1,0 +1,19 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "mailbox_data",
+    "description": "Defines the content (substance) of a mailbox Matter: the pending and claimed message entries of one continuity."
+  },
+  "functional": {
+    "continuity_id": [],
+    "_continuity_id_note": "Required. Identifier of the unique continuity owning this mailbox.",
+    "entries": {
+      "schema_ref": "mailbox_entry",
+      "cardinality": "many"
+    },
+    "_entries_note": "Required. Collection of mailbox entries referencing durable continuity messages. Physical array order is not canonical; selection order is determined by priority and the referenced message seq."
+  },
+  "subjective": {}
+}

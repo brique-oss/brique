@@ -70,3 +70,26 @@ validation/**
 
 !templates/
 !templates/**
+
+# Ni le launcher ni le code source Go ne font partie de l'extension VS Code :
+# le launcher se construit depuis le dépôt (npm run setup), et ses paquets runtime pèsent des centaines de Mo.
+runtime/**
+cmd/**
+engine/**
+launcher/**
+platform/**
+contracts/**
+integration/**
+deploy/**
+go.mod
+go.sum
+components.json
+tailwind.config.ts
+/brique-browser-host
+/brique-launcher
+bin/brique-launcher
+bin/brique-launcher.exe
+bin/brique-web
+bin/brique-web.exe
+bin/brique-browser-host
+bin/brique-browser-host.exe

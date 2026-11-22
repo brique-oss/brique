@@ -1,0 +1,131 @@
+{
+  "brique": {
+    "cap_name": "review_orders",
+    "kind": "dsl",
+    "wrapper": "",
+    "rel_ctx": "",
+    "lang": "brique_dsl"
+  },
+  "objective": {
+    "name": "review_orders",
+    "description": "Capacity pilot of the integration tests: reviews the open orders of the customer named by the message, one analysis prompt per order, then one summary prompt.",
+    "agentic": {
+      "pilot": {
+        "subject": "test"
+      }
+    }
+  },
+  "functional": {
+    "#root": {
+      "role": "Decide for a continuity by a deterministic plan with a prompt per order and a final summary prompt.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "object"
+          },
+          "stimulus": {
+            "type": "object"
+          },
+          "max_inferences": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "messages": {
+            "type": "array"
+          }
+        }
+      },
+      "transformation_contract": {
+        "morphing": "A message naming a customer becomes a pilot_output carrying a summary of the customer's open orders.",
+        "invariants": [
+          "Looking up the customer and the orders is deterministic and leaves no trace in the continuity.",
+          "Each order is analysed by one prompt and the summary by one prompt: all of them go through pilot.infer."
+        ],
+        "notes": [
+          "Test infrastructure of the integration scenarios of the Capacity pilot."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/world.get_customer",
+                "as": "customer",
+                "with": {
+                  "customer_id": "$input.message.content.customer_id"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/test/review_orders.analyse_all",
+                "as": "analyses",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "order_ids": "$customer.payload.customer.open_orders"
+                }
+              }
+            },
+            {
+              "invoke": {
+                "@capacity": "/root/agentic/pilot.infer",
+                "as": "summary",
+                "with": {
+                  "continuity_id": "$input.continuity_id",
+                  "run_id": "$input.run_id",
+                  "step": "summary",
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "model": {
+                    "provider": "fake",
+                    "model": "scripted",
+                    "parameters": {
+                      "max_output_tokens": 200
+                    }
+                  },
+                  "prompt_parts": [
+                    "Summarise these order analyses for the customer in one sentence.",
+                    "$analyses.payload.items"
+                  ]
+                }
+              }
+            },
+            {
+              "output": {
+                "messages": [
+                  {
+                    "to": "user:1",
+                    "kind": "user",
+                    "content": "$summary.payload.output.summary"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

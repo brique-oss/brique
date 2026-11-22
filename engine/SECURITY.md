@@ -240,16 +240,14 @@ only to the engine-created channel/UI coordinates.
 
 The in-memory native channel speaks `brique.browser.bridge/1`: the host creates session and channel
 ids, client requests have an exact increasing sequence, and `open` binds one canonical origin,
-document, frame and UI after user activation. Payloads are opaque and bounded. EOF, disconnect or
+document, frame and UI. No user gesture is asked for any `open`. A page that carries an instance descriptor (another instance, reached with the identity of the person) can act only if its browser origin, which Chrome supplies and the page cannot forge, is in the descriptor's signed `ui_origins`; the instance of the person checks this before signing anything. Payloads are opaque and bounded. EOF, disconnect or
 close destroys the corresponding authority; an id can never restore it. The packaged native host and
 engine adapter now consume this contract, so the runtime advertises it. Chrome registration still
 requires a local manifest with the exact allowed extension origin.
 
 The extension-to-service-worker port is not itself a native rendez-vous. `connectNative()` is delayed
-until the isolated content relay has observed trusted active user input and releases a valid `open`.
-Ordinary pages and synthetic clicks therefore create no native process. Navigation, native-host loss
-or service-worker loss closes the channel; the same document cannot recreate it, while a new document
-must repeat trusted activation and receives fresh session/channel coordinates.
+until the isolated content relay releases a valid `open` (ordinary pages that never ask for one create no native process). No gesture is asked: for a page with a descriptor the origin check against the signed `ui_origins` is the guard, and for the page of a local instance (no descriptor) the native host accepts only the exact address of the web server of an instance the owner associated. Navigation, native-host loss or service-worker loss closes the
+channel; the same document cannot recreate it, while a new document opens again and receives fresh session/channel coordinates.
 
 ### 3.3.1 Public web subject
 
@@ -386,8 +384,7 @@ object belongs is refused, so the value of a secret cannot be written here by mi
 It is part of the signed policy (`wrapper_secrets`, absent when there is nothing to grant: such a policy is
 byte for byte what it was before, and no format version changes), so `apply` signs it and `diff` shows it
 as `+ secret <name>: <wrapper>` / `- secret <name>: <wrapper>`. It does not make a wrapper a restricted one
-(§8.2): the two are independent. There is no command that edits it yet; write it by hand, then `apply
---reload`.
+(§8.2): the two are independent. `brique-sec secret allow <name> <wrapper>` and `secret deny <name> <wrapper>` edit it; then `apply --reload`.
 
 ## 4. How a request is decided
 
@@ -1605,4 +1602,4 @@ Package names are relative to `engine/`, except `contracts/`, `platform/`, `laun
 | `platform/filesystem`, `platform/protectedfile` | atomic write and replace; protected files and directories (unix and windows) |
 | `platform/locking`, `platform/storage`, `platform/listener` | kernel directory locks, free disk space, accept-loop back-off |
 | `enginebuild` | the engine's build provenance (`CurrentBuildInfo`) |
-| `contracts/connectiondiagnosis`, `transport/diagnostic` | the result and stable codes of a connection diagnosis; the steps (configuration, network policy, DNS, TCP, TLS, HTTP) against one declared peer endpoint |
+| `contracts/connectiondiagnosis`, `platform/diagnostic` | the result and stable codes of a connection diagnosis; the steps (configuration, network policy, DNS, TCP, TLS, HTTP) against one declared peer endpoint |

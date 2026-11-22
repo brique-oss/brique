@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter",
+    "revision": 1795334357571032000,
+    "substance_framing": "bytes",
+    "substance_mode": "brique",
+    "substance_size_bytes": 19,
+    "substance_type": "text"
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/reading_data"
+  },
+  "objective": {
+    "description": "Where each reader has read up to in each conversation.",
+    "name": "reading_cursors",
+    "type": "reading"
+  },
+  "subjective": {}
+}

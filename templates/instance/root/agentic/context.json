@@ -1,0 +1,107 @@
+{
+  "brique": {
+    "children_list": [
+      "pilot",
+      "prompt",
+      "test"
+    ],
+    "ctx_ext_name": "",
+    "ctx_name": "agentic",
+    "ctx_version": "1",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "config": {
+              "allow_any_origin": false,
+              "egress_enabled": true,
+              "idle_timeout_ms": 0,
+              "ingress_enabled": true,
+              "path": "/wrapper/agentic_core",
+              "read_limit": 0,
+              "read_timeout_ms": 0,
+              "request_timeout_ms": 0,
+              "tls_cert_file": "",
+              "tls_insecure_skip_verify": false,
+              "tls_key_file": "",
+              "tls_server_name": "",
+              "write_timeout_ms": 0
+            },
+            "driver": "ws",
+            "name": "agentic_core",
+            "type": "wrapper"
+          },
+          {
+            "config": {
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/agentic/ws"
+            },
+            "driver": "ws",
+            "name": "agentic",
+            "type": "ui"
+          }
+        ],
+        "wrapper_boundary": [
+          "agentic_core"
+        ]
+      },
+      "execution": {
+        "default_invoke_timeout_ms": 0,
+        "wrappers": [
+          {
+            "mode": "interpreted",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "python3",
+                "main.py"
+              ],
+              "cwd": "code/agentic_core",
+              "env": {
+                "BRIQUE_QUEUE_LIMIT": "4096",
+                "BRIQUE_WRAPPER_NAME": "agentic_core"
+              },
+              "env_name": "env1",
+              "log": {
+                "enabled": false
+              },
+              "shell": false
+            },
+            "stop_timeout_ms": 1000,
+            "watch": [
+              "../../../../wrapper/python/lib"
+            ],
+            "wrapper_name": "agentic_core"
+          }
+        ]
+      },
+      "matter": {},
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 20,
+        "flush_every_n": 8,
+        "level": "minimal",
+        "ring_capacity": 64,
+        "segment_max_bytes": 1048576
+      }
+    },
+    "engine_version": "0.0.0",
+    "ui_config": {
+      "adapter": "react",
+      "host": "electron",
+      "name": "agentic",
+      "root_view": "AgenticInterface",
+      "ws_path": "/agentic/ws"
+    }
+  },
+  "objective": {
+    "name": "agentic",
+    "description": "Carries the elements that allow an Intention to continue over time through a succession of explicit transformations, under a Continuity, until its objective is satisfied."
+  },
+  "functional": {
+    "role": "child"
+  },
+  "subjective": {}
+}

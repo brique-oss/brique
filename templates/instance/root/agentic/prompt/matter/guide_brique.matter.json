@@ -1,0 +1,20 @@
+{
+  "brique": {
+    "kind": "matter"
+  },
+  "objective": {
+    "name": "guide_brique",
+    "description": "Pilot Matter that guides a person in the Brique world: it explains how Brique works, finds elements by their meaning, and on request invokes capacities or launches other pilots as sub-continuities.",
+    "type": "pilot_definition",
+    "agentic": {
+      "pilot": {
+        "subject": "brique"
+      }
+    }
+  },
+  "functional": {
+    "format": "json",
+    "schema_ref": "/root/agentic/schema/pilot_definition_data"
+  },
+  "subjective": {}
+}

@@ -1,0 +1,43 @@
+{
+  "brique": {
+    "kind": "schema"
+  },
+  "objective": {
+    "name": "journal",
+    "description": "Defines the journal Matter as an element: an append-only Matter in JSON Lines whose substance is the ordered stream of messages of one continuity, one message per line, described line by line by the message schema."
+  },
+  "functional": {
+    "brique": {
+      "kind": [
+        "matter"
+      ],
+      "substance_mode": [
+        "brique"
+      ],
+      "substance_type": [
+        "text"
+      ],
+      "substance_framing": [
+        "lines"
+      ]
+    },
+    "objective": {
+      "type": [
+        "journal"
+      ]
+    },
+    "functional": {
+      "_format_note": "Required. The substance is JSON Lines: one JSON document per line, each line ending with LF.",
+      "_schema_ref_note": "Required. For a JSON Lines Matter, the schema constraining ONE line of the substance.",
+      "_framing_note": "The engine only knows the LF line boundaries (brique.substance_framing = lines); it never parses the JSON. Lines are added at the tail by matter.append, guarded by expected_line_count.",
+      "format": [
+        "jsonl"
+      ],
+      "schema_ref": [
+        "/root/agentic/schema/message"
+      ]
+    },
+    "subjective": {}
+  },
+  "subjective": {}
+}

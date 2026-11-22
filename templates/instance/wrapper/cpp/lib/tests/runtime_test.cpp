@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../wrapper/json.hpp"
+#include "../wrapper/matter_client.hpp"
 #include "../wrapper/runtime.hpp"
 #include "../wrapper/scheduler.hpp"
 
@@ -271,6 +272,434 @@ static void run() {
 }
 }  // namespace listvec
 
+// The shared corpus of the busy retry (vectors/busy_retry.json): this runtime must agree with the Python and Go ones.
+namespace busyvec {
+using wrapper::json::array_field;
+using wrapper::json::array_items;
+using wrapper::json::string_field;
+
+static std::string read_corpus() {
+    std::ifstream input("../../vectors/busy_retry.json");
+    if (!input.good()) input.open("../../../vectors/busy_retry.json");
+    assert(input.good());
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+static void run() {
+    const std::string corpus = read_corpus();
+    for (const auto& item : array_items(array_field(corpus, "is_busy"))) {
+        const bool expected = wrapper::json::bool_field(item, "busy");
+        const std::string response = wrapper::json::object_field(item, "response", "{}");
+        if (wrapper::is_busy_response(response) != expected) {
+            std::cerr << "busy vector disagrees: " << string_field(item, "name") << "\n";
+            std::abort();
+        }
+    }
+    for (const auto& item : array_items(array_field(corpus, "pause"))) {
+        const int attempt = static_cast<int>(wrapper::json::integer_field(item, "attempt"));
+        const double low = wrapper::busy_pause_ms(attempt, 0.0);
+        const double high = wrapper::busy_pause_ms(attempt, 1.0);
+        if (low != static_cast<double>(wrapper::json::integer_field(item, "min_ms")) ||
+            high != static_cast<double>(wrapper::json::integer_field(item, "max_ms"))) {
+            std::cerr << "busy pause disagrees for attempt " << attempt << ": " << low << ".." << high << "\n";
+            std::abort();
+        }
+    }
+    for (const auto& item : array_items(array_field(corpus, "settings"))) {
+        ::unsetenv("BRIQUE_BUSY_ATTEMPTS");
+        const std::string env = wrapper::json::object_field(item, "env", "{}");
+        const std::string value = string_field(env, "BRIQUE_BUSY_ATTEMPTS");
+        if (!value.empty()) ::setenv("BRIQUE_BUSY_ATTEMPTS", value.c_str(), 1);
+        if (wrapper::busy_attempts() != wrapper::json::integer_field(item, "attempts")) {
+            std::cerr << "busy attempts disagree for env " << env << "\n";
+            std::abort();
+        }
+    }
+    ::unsetenv("BRIQUE_BUSY_ATTEMPTS");
+}
+}  // namespace busyvec
+
+// Critical sections: waiting for a taken key gives the execution slot back, and the keys are taken in sorted order.
+static void run_critical_sections() {
+    {
+        wrapper::WorkScheduler scheduler(1, 8);
+        std::mutex mu;
+        std::condition_variable cv;
+        bool holder_in = false, holder_go = false;
+        std::vector<std::string> order;
+        scheduler.submit("a", [&] {
+            wrapper::CriticalSection section(scheduler, {"k"});
+            { std::lock_guard<std::mutex> lock(mu); holder_in = true; }
+            cv.notify_all();
+            {
+                wrapper::SlotYield own_call;   // a call of its own: it gives its slot back while it waits for the answer
+                std::unique_lock<std::mutex> lock(mu);
+                cv.wait(lock, [&] { return holder_go; });
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            order.push_back("holder done");
+        }, false);
+        { std::unique_lock<std::mutex> lock(mu); cv.wait(lock, [&] { return holder_in; }); }
+        scheduler.submit("b", [&] {
+            wrapper::CriticalSection section(scheduler, {"k"});
+            std::lock_guard<std::mutex> lock(mu);
+            order.push_back("waiter in");
+        }, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        { std::lock_guard<std::mutex> lock(mu); holder_go = true; }
+        cv.notify_all();
+        scheduler.close();
+        assert((order == std::vector<std::string>{"holder done", "waiter in"}));
+    }
+    {
+        wrapper::WorkScheduler scheduler(8, 64);
+        std::atomic<int> done{0};
+        for (int i = 0; i < 50; ++i) {
+            const std::vector<std::string> keys = i % 2 == 0 ? std::vector<std::string>{"x", "y"} : std::vector<std::string>{"y", "x"};
+            scheduler.submit("w" + std::to_string(i), [&, keys] { wrapper::CriticalSection section(scheduler, keys); ++done; }, false);
+        }
+        scheduler.close();
+        assert(done == 50);
+    }
+}
+
+// The state of the execution slots, as the diagnostic on demand writes it.
+static void run_stats_and_dump() {
+    wrapper::WorkScheduler scheduler(1, 1);
+    std::mutex mu;
+    std::condition_variable cv;
+    bool go = false;
+    auto hold = [&] { std::unique_lock<std::mutex> lock(mu); cv.wait(lock, [&] { return go; }); };
+    assert(scheduler.submit("a", hold, true));
+    assert(scheduler.submit("b", hold, false));
+    assert(!scheduler.submit("c", hold, false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const wrapper::SchedulerStats stats = scheduler.stats();
+    assert(stats.free_slots == 0 && stats.active == 1 && stats.pending == 2 && stats.queued == 1 && stats.refused == 1 && stats.ordered_chains == 1);
+    const std::string path = (std::filesystem::temp_directory_path() / "brique_cpp_state_test.txt").string();
+    wrapper::dump_state(scheduler, path);
+    std::ifstream in(path);
+    std::stringstream text;
+    text << in.rdbuf();
+    assert(text.str().find("slots free 0 of 1") != std::string::npos);
+    std::filesystem::remove(path);
+    { std::lock_guard<std::mutex> lock(mu); go = true; }
+    cv.notify_all();
+    scheduler.close();
+}
+
+// The shared corpus of the Matter client (vectors/matter_client.json) and its guarded operations over scripted engine answers.
+namespace mattervec {
+using wrapper::json::array_field;
+using wrapper::json::array_items;
+using wrapper::json::object_field;
+using wrapper::json::string_field;
+
+static void fail(const std::string& what) {
+    std::cerr << "matter client vector disagrees: " << what << "\n";
+    std::abort();
+}
+
+static std::string read_corpus() {
+    std::ifstream input("../../vectors/matter_client.json");
+    if (!input.good()) input.open("../../../vectors/matter_client.json");
+    assert(input.good());
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+static bool unrepresentable(const std::string& item) {
+    return array_field(item, "unrepresentable_in", "[]").find("\"cpp\"") != std::string::npos;
+}
+
+// Run `body`; the CallError it throws must have the cause `want` (nothing thrown is a failure).
+template <typename Body>
+static void expect_cause(const std::string& name, const std::string& want, Body body) {
+    try {
+        body();
+    } catch (const wrapper::CallError& error) {
+        if (wrapper::cause_of(error) != want) fail(name + ": cause " + wrapper::cause_of(error) + ", want " + want);
+        return;
+    }
+    fail(name + ": no error, want " + want);
+}
+
+struct Script {
+    std::vector<std::string> answers;   // payloads, or "!" + the details of an error
+    std::vector<std::string> caps, params, contexts;
+    std::string call(const std::string& context, const std::string& cap, const std::string& params_raw) {
+        contexts.push_back(context);
+        caps.push_back(cap);
+        params.push_back(params_raw);
+        assert(!answers.empty());
+        const std::string answer = answers.front();
+        answers.erase(answers.begin());
+        if (!answer.empty() && answer[0] == '!') throw wrapper::CallError("refused", "x", answer.substr(1));
+        return answer;
+    }
+};
+
+static std::string revision_refused() { return "!{\"reason\":\"revision_mismatch\"}"; }
+
+static void run() {
+    const std::string corpus = read_corpus();
+    for (const auto& item : array_items(array_field(corpus, "substance"))) {
+        const std::string name = string_field(item, "name");
+        const std::string data = wrapper::json::raw_field(item, "data", "null");
+        const std::string want_error = string_field(item, "error");
+        if (!want_error.empty()) {
+            expect_cause(name, want_error, [&] { wrapper::classify_substance(data); });
+            continue;
+        }
+        const wrapper::Substance got = wrapper::classify_substance(data);
+        const std::string result = object_field(item, "result", "{}");
+        if (got.kind != string_field(result, "kind")) fail(name + ": kind");
+        if ((got.kind == "inline" ? got.text : got.url) != (got.kind == "inline" ? string_field(result, "text") : string_field(result, "url"))) fail(name + ": value " + got.text + got.url);
+    }
+    for (const auto& item : array_items(array_field(corpus, "revision"))) {
+        const std::string brique = wrapper::json::raw_field(item, "brique", "null");
+        // the wanted revision is the last "revision" of the case (the first one is inside the brique)
+        const long long want = std::stoll(item.substr(item.rfind("\"revision\":") + 11));
+        if (wrapper::revision_of(brique) != want) fail("revision of " + brique);
+    }
+    for (const auto& item : array_items(array_field(corpus, "lines"))) {
+        if (unrepresentable(item)) continue;
+        const std::string name = string_field(item, "name");
+        const std::string text = string_field(item, "text");
+        const std::string want_error = string_field(item, "error");
+        if (!want_error.empty()) {
+            expect_cause(name, want_error, [&] { wrapper::parse_lines(text); });
+            continue;
+        }
+        const auto got = wrapper::parse_lines(text);
+        const auto want = array_items(array_field(item, "lines"));
+        if (got.size() != want.size()) fail(name + ": number of lines");
+        for (std::size_t i = 0; i < got.size(); ++i) if (wrapper::compact_json(got[i]) != wrapper::compact_json(want[i])) fail(name + ": line " + std::to_string(i));
+    }
+    for (const auto& item : array_items(array_field(corpus, "dump_lines"))) {
+        if (wrapper::dump_lines(array_items(array_field(item, "lines"))) != string_field(item, "text")) fail(string_field(item, "name"));
+    }
+    if (static_cast<long long>(wrapper::kInlineAppendMax) != wrapper::json::integer_field(object_field(corpus, "append"), "inline_max_bytes")) fail("append limit");
+    const std::string pause = object_field(corpus, "guarded_write_pause");
+    for (const auto& item : array_items(array_field(pause, "cases"))) {
+        const int attempt = static_cast<int>(wrapper::json::integer_field(item, "attempt"));
+        const long long base = wrapper::json::integer_field(pause, "base_ms"), cap = wrapper::json::integer_field(pause, "cap_ms");
+        if (wrapper::guarded_write_pause_ms(attempt, 1.0, base, cap) != static_cast<double>(wrapper::json::integer_field(item, "max_ms"))) fail("pause");
+        if (wrapper::guarded_write_pause_ms(attempt, 0.0, base, cap) != 0.0) fail("pause floor");
+    }
+
+    // read inline, then through a lease that goes stale and is read again
+    {
+        Script script;
+        script.answers = {R"({"data":{"kind":"inline","bytes":"{\"a\": 1}"},"brique":{"revision":7},"functional":{"f":1}})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        const wrapper::MatterView view = client.read("m1");
+        assert(view.revision == 7 && wrapper::compact_json(view.content) == "{\"a\":1}" && script.contexts[0] == "/ctx" && script.caps[0] == "matter.read");
+    }
+    {
+        int gets = 0;
+        Script script;
+        const std::string lease = R"("data":{"kind":"http","http":{"base_url":"http://h","path":"/s","tok":"t"}})";
+        script.answers = {"{" + lease + R"(,"brique":{"revision":1}})", "{" + lease + R"(,"brique":{"revision":2}})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx",
+            [&](const std::string& method, const std::string& url, const std::string&) {
+                assert(method == "GET" && url == "http://h/s?tok=t");
+                return ++gets == 1 ? wrapper::HttpResult{409, ""} : wrapper::HttpResult{200, "{\"big\":true}"};
+            });
+        const wrapper::MatterView view = client.read("m1");
+        assert(view.revision == 2 && gets == 2 && script.caps.size() == 2);
+    }
+    // read_many: one request, in order; a missing Matter is the error of its answer
+    {
+        Script script;
+        script.answers = {R"({"result":[{"ok":true,"data":{"bytes":"{\"a\": 1}"},"brique":{"revision":3}},{"ok":true,"data":{"bytes":"{\"b\": 2}"},"brique":{"revision":4}}]})",
+                          R"({"result":[{"ok":true,"data":{"bytes":"{}"},"brique":{}},{"ok":false,"error":{"code":"not_found","message":"gone"}}]})",
+                          R"({"result":[]})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        const auto views = client.read_many({"m1", "m2"});
+        assert(views.size() == 2 && views[0].id == "m1" && views[0].revision == 3 && views[1].revision == 4 && script.caps[0] == "matter.read_batch");
+        assert(wrapper::json::array_items(wrapper::json::array_field(script.params[0], "matter_ids")).size() == 2);
+        try { client.read_many({"m1", "m2"}); assert(false); } catch (const wrapper::CallError& e) { assert(wrapper::is_not_found(e)); }
+        try { client.read_many({"m1"}); assert(false); } catch (const wrapper::CallError& e) { assert(wrapper::cause_of(e) == "batch_size"); }
+    }
+    // a write is guarded by a decimal revision
+    {
+        Script script;
+        script.answers = {R"({"revision":1790000000000000009})", R"({"revision":10})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        assert(client.write("m1", "{\"a\":1}", 1790000000000000001LL) == 1790000000000000009LL);
+        assert(wrapper::json::string_field(script.params[0], "expected_revision") == "1790000000000000001");
+        client.write("m1", "{\"a\":1}");
+        assert(!wrapper::json::has_key(script.params[1], "expected_revision"));
+    }
+    // append inline, through a lease, and a lease that conflicts
+    {
+        Script script;
+        script.answers = {R"({"total_lines":3})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        assert(client.append_lines("j", {"{\"a\": 1}"}, 2) == 3);
+        assert(wrapper::json::string_field(script.params[0], "data") == "{\"a\":1}\n");
+        const std::string handle = R"({"http_data":{"base_url":"http://h","path":"/a","tok":"t"}})";
+        std::string received;
+        long status = 200;
+        script.answers = {handle, handle};
+        wrapper::MatterClient leased([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx",
+            [&](const std::string& method, const std::string&, const std::string& body) { assert(method == "PUT"); received = body; return wrapper::HttpResult{status, ""}; });
+        std::vector<std::string> big(300, "{\"k\":\"" + std::string(1000, 'x') + "\"}");
+        assert(leased.append_lines("j", big, 5) == 305 && received == wrapper::dump_lines(big));
+        status = 409;
+        try { leased.append_lines("j", big, 5); assert(false); } catch (const wrapper::CallError& e) { assert(wrapper::is_line_count_mismatch(e)); }
+    }
+    // read_lines
+    {
+        Script script;
+        script.answers = {R"({"data":{"kind":"inline","bytes":"{\"a\":1}\n{\"b\":2}\n","total_lines":9},"brique":{"revision":4}})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        const wrapper::LinesView view = client.read_lines("j", 7, 2);
+        assert(view.lines.size() == 2 && view.total_lines == 9 && view.revision == 4 && view.offset == 7);
+    }
+    // update: starts again after a lost race, writes nothing when there is nothing to write, gives up after the attempts
+    {
+        ::setenv("BRIQUE_CAS_PAUSE_BASE_MS", "0", 1);
+        Script script;
+        script.answers = {R"({"data":{"bytes":"{\"n\": 1}"},"brique":{"revision":1}})", revision_refused(),
+                          R"({"data":{"bytes":"{\"n\": 2}"},"brique":{"revision":2}})", R"({"revision":3})"};
+        wrapper::MatterClient client([&](const std::string& c, const std::string& k, const std::string& p) { return script.call(c, k, p); }, "/ctx");
+        std::string result;
+        const bool wrote = client.update("m1", [](const std::string& content, std::string& out) -> std::optional<std::string> {
+            out = content;
+            return std::string("{\"n\":9}");
+        }, &result);
+        assert(wrote && wrapper::json::string_field(script.params.back(), "expected_revision") == "2");
+        script.answers = {R"({"data":{"bytes":"{\"n\": 1}"},"brique":{"revision":1}})"};
+        assert(!client.update("m1", [](const std::string&, std::string&) -> std::optional<std::string> { return std::nullopt; }));
+        ::setenv("BRIQUE_CAS_ATTEMPTS", "3", 1);
+        script.answers.clear();
+        for (int i = 0; i < 3; ++i) { script.answers.push_back(R"({"data":{"bytes":"{}"},"brique":{"revision":1}})"); script.answers.push_back(revision_refused()); }
+        try {
+            client.update("m1", [](const std::string&, std::string&) -> std::optional<std::string> { return std::string("{\"x\":1}"); });
+            assert(false);
+        } catch (const wrapper::CallError& e) { assert(wrapper::cause_of(e).empty() && e.reason() == "concurrency_failure"); }
+        ::unsetenv("BRIQUE_CAS_ATTEMPTS");
+        ::unsetenv("BRIQUE_CAS_PAUSE_BASE_MS");
+    }
+}
+}  // namespace mattervec
+
+// The settings of the runtime are the shared declarations (vectors/settings.json), and an invalid value is handled as its policy says.
+static void run_settings() {
+    std::ifstream input("../../vectors/settings.json");
+    if (!input.good()) input.open("../../../vectors/settings.json");
+    assert(input.good());
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    const auto declared = wrapper::json::array_items(wrapper::json::array_field(buffer.str(), "settings"));
+    const auto& mine = wrapper::declared_settings();
+    if (declared.size() > mine.size()) { std::cerr << "settings: " << mine.size() << " declared, " << declared.size() << " in the shared file\n"; std::abort(); }
+    for (std::size_t i = 0; i < declared.size(); ++i) {
+        const bool same = mine[i].name == wrapper::json::string_field(declared[i], "name") &&
+                          mine[i].default_value == wrapper::json::integer_field(declared[i], "default") &&
+                          mine[i].minimum == wrapper::json::integer_field(declared[i], "minimum") &&
+                          mine[i].strict == (wrapper::json::string_field(declared[i], "policy") == "strict") &&
+                          !wrapper::json::string_field(declared[i], "what").empty() && !wrapper::json::string_field(declared[i], "unit").empty();
+        if (!same) { std::cerr << "settings: " << mine[i].name << " differs from the shared file\n"; std::abort(); }
+    }
+    for (const auto& setting : mine) ::unsetenv(setting.name.c_str());
+    assert(wrapper::setting_value("BRIQUE_BUSY_ATTEMPTS") == 8 && wrapper::settings_not_default().empty());
+    for (const char* bad : {"abc", "1.5", "-3", "0"}) {
+        ::setenv("BRIQUE_BUSY_ATTEMPTS", bad, 1);
+        assert(wrapper::setting_value("BRIQUE_BUSY_ATTEMPTS") == 8);
+    }
+    ::setenv("BRIQUE_BUSY_BASE_MS", "0", 1);
+    assert(wrapper::setting_value("BRIQUE_BUSY_BASE_MS") == 0);
+    for (const char* bad : {"abc", "0", "-1"}) {
+        ::setenv("BRIQUE_MAX_CONCURRENCY", bad, 1);
+        try { wrapper::strict_setting("BRIQUE_MAX_CONCURRENCY"); assert(false); } catch (const std::runtime_error&) {}
+    }
+    ::unsetenv("BRIQUE_MAX_CONCURRENCY");
+    ::setenv("BRIQUE_CAS_ATTEMPTS", "3", 1);
+    ::setenv("BRIQUE_LEASE_RETRIES", "nope", 1);
+    std::map<std::string, std::string> sources;
+    for (const auto& state : wrapper::describe_settings()) sources[state.setting.name] = state.source;
+    assert(sources["BRIQUE_CAS_ATTEMPTS"] == "env" && sources["BRIQUE_LEASE_RETRIES"] == "ignored" && sources["BRIQUE_BUSY_CAP_MS"] == "default");
+    const auto changed = wrapper::settings_not_default();
+    assert(changed.size() == 2 && changed.at("BRIQUE_CAS_ATTEMPTS") == 3 && changed.at("BRIQUE_BUSY_BASE_MS") == 0);
+    ::setenv("BRIQUE_TEST_COUNT", "7", 1);
+    wrapper::declare_setting("BRIQUE_TEST_COUNT", 4, 1, "a count");
+    wrapper::declare_setting("BRIQUE_TEST_COUNT", 9, 0, "again");
+    assert(wrapper::setting_value("BRIQUE_TEST_COUNT") == 7 && wrapper::declared_setting("BRIQUE_TEST_COUNT").default_value == 4);
+    assert(wrapper::settings_not_default().count("BRIQUE_TEST_COUNT") == 1);
+    ::unsetenv("BRIQUE_TEST_COUNT");
+    for (const auto& setting : wrapper::declared_settings()) ::unsetenv(setting.name.c_str());
+}
+
+// The classification of the errors of a call is the shared one (vectors/errors.json).
+static void run_error_kinds() {
+    std::ifstream input("../../vectors/errors.json");
+    if (!input.good()) input.open("../../../vectors/errors.json");
+    assert(input.good());
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    const std::string corpus = buffer.str();
+    for (const auto& item : wrapper::json::array_items(wrapper::json::array_field(corpus, "cases"))) {
+        const std::string error = wrapper::json::raw_field(item, "error", "null");
+        const wrapper::CallError failure = wrapper::call_error_from(error);
+        if (failure.kind() != wrapper::json::string_field(item, "kind") ||
+            failure.outcome_unknown() != wrapper::json::bool_field(item, "outcome_unknown")) {
+            std::cerr << "error kind disagrees for " << error << ": " << failure.kind() << "\n";
+            std::abort();
+        }
+    }
+    const std::string defaults = wrapper::json::object_field(corpus, "defaults");
+    const wrapper::CallError empty = wrapper::call_error_from("null");
+    assert(empty.code() == wrapper::json::string_field(defaults, "code") && std::string(empty.what()) == wrapper::json::string_field(defaults, "message"));
+}
+
+// The running response is the shared one (vectors/running_response.json), and the keepalive says running at once, then every period, until its scope ends.
+static void run_running() {
+    std::ifstream input("../../vectors/running_response.json");
+    if (!input.good()) input.open("../../../vectors/running_response.json");
+    assert(input.good());
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    using wrapper::json::array_field;
+    using wrapper::json::array_items;
+    using wrapper::json::object_field;
+    using wrapper::json::string_field;
+    for (const auto& item : array_items(array_field(buffer.str(), "cases"))) {
+        const std::string name = string_field(item, "name");
+        const std::string intention = object_field(item, "intention");
+        const std::string to = object_field(intention, "to");
+        const std::string got = wrapper::running_message(string_field(item, "wrapper_name"), wrapper::json::bool_field(item, "delegated"), string_field(intention, "intention_id"),
+                                                         object_field(intention, "from"), string_field(to, "cap"), string_field(to, "type"), string_field(to, "context"), "t");
+        const std::string response = object_field(got, "response");
+        const std::string want = object_field(item, "response");
+        auto same = [&](const std::string& what, const std::string& a, const std::string& b) {
+            if (a != b) { std::cerr << "running vector disagrees: " << name << " (" << what << "): " << a << " vs " << b << "\n"; std::abort(); }
+        };
+        same("intention_id", string_field(response, "intention_id"), string_field(want, "intention_id"));
+        same("status", string_field(response, "status"), string_field(want, "status"));
+        same("to", wrapper::compact_json(object_field(response, "to")), wrapper::compact_json(object_field(want, "to")));
+        for (const char* key : {"context", "cap", "type"}) same(key, string_field(object_field(response, "from"), key), string_field(object_field(want, "from"), key));
+        same("identity", wrapper::compact_json(object_field(response, "identity")), wrapper::compact_json(object_field(want, "identity")));
+        same("payload", wrapper::compact_json(object_field(response, "payload")), "{}");
+        same("kind", string_field(got, "kind"), "response");
+    }
+    std::atomic<int> count{0};
+    {
+        wrapper::Keepalive alive([&] { ++count; }, 20);
+        assert(count == 1);   // a running at once
+        std::this_thread::sleep_for(std::chrono::milliseconds(110));
+    }
+    const int seen = count;
+    assert(seen >= 4);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    assert(count == seen);   // the heartbeat stopped with the scope
+}
+
 int main() {
     wrapper::WorkScheduler scheduler(2, 8);
     std::mutex mu;
@@ -482,5 +911,12 @@ int main() {
     }
     run_frame_vectors();
     listvec::run();
+    busyvec::run();
+    run_critical_sections();
+    run_stats_and_dump();
+    mattervec::run();
+    run_error_kinds();
+    run_settings();
+    run_running();
     return 0;
 }

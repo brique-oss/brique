@@ -1,0 +1,17 @@
+{
+  "brique": {
+    "file": "document/pilot_launcher_chat.md",
+    "kind": "document",
+    "ref": ""
+  },
+  "functional": {
+    "content_kind": "markdown",
+    "mime_type": "text/markdown",
+    "source_kind": "local"
+  },
+  "objective": {
+    "description": "Design of the chat that finds a pilot, launches it in a conversation, and follows everything: existing behavior, missing pieces, and decisions to make.",
+    "name": "pilot_launcher_chat"
+  },
+  "subjective": {}
+}

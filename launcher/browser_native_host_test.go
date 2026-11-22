@@ -8,22 +8,18 @@ package launcher
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
-
-	"brique_engine/contracts/buildinfo"
 )
 
 func TestSupportedChromiumBrowsers(t *testing.T) {
-	for _, browser := range []string{"brave", "chrome", "chromium"} {
+	for _, browser := range []string{"brave", "chrome"} {
 		if !supportedChromiumBrowser(browser) {
 			t.Errorf("browser %q is not supported", browser)
 		}
 	}
-	for _, browser := range []string{"", "chrome-testing", "edge", "firefox", "safari", "vivaldi", "Brave"} {
+	for _, browser := range []string{"", "chrome-testing", "edge", "firefox", "safari", "vivaldi", "Brave", "chromium"} {
 		if supportedChromiumBrowser(browser) {
 			t.Errorf("browser %q is unexpectedly supported", browser)
 		}
@@ -40,7 +36,7 @@ func TestFirefoxNativeManifestUsesExplicitAddonID(t *testing.T) {
 		validBrowserExtensionID("firefox", strings.Repeat("a", 32)) {
 		t.Fatal("Firefox extension identity validation is inconsistent")
 	}
-	raw, err := encodeBrowserNativeManifest("firefox", FirefoxExtensionID, "/opt/brique-browser-host")
+	raw, err := encodeBrowserNativeManifest("firefox", []string{FirefoxExtensionID}, "/opt/brique-browser-host")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,77 +51,33 @@ func TestFirefoxNativeManifestUsesExplicitAddonID(t *testing.T) {
 	}
 }
 
-func TestInstallBrowserNativeHostUsesOnlySelectedPackagedRuntime(t *testing.T) {
-	base := t.TempDir()
-	data := filepath.Join(base, "launcher")
-	root := filepath.Join(base, "root")
-	runtimeDirectory := filepath.Join(base, "runtime")
-	engine := filepath.Join(runtimeDirectory, "bin", "brique")
-	host := filepath.Join(runtimeDirectory, "bin", "brique-browser-host")
-	if err := os.MkdirAll(filepath.Dir(engine), 0o700); err != nil {
-		t.Fatal(err)
+func TestTheNativeHostIsRegisteredOnlyForTheDefaultLauncherDirectory(t *testing.T) {
+	previous := browserNativeDefaultLauncherDirectory
+	browserNativeDefaultLauncherDirectory = func() (string, error) { return filepath.Join(t.TempDir(), "default"), nil }
+	t.Cleanup(func() { browserNativeDefaultLauncherDirectory = previous })
+
+	store := Store{Directory: filepath.Join(t.TempDir(), "custom")}
+	err := store.syncBrowserNativeHosts(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "default launcher data directory") {
+		t.Fatalf("custom launcher directory error = %v", err)
 	}
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, binary := range []string{engine, host} {
-		if err := os.WriteFile(binary, []byte(filepath.Base(binary)), 0o700); err != nil {
-			t.Fatal(err)
+}
+
+func TestOnlyExactExtensionIdentifiersAreAccepted(t *testing.T) {
+	for _, bad := range []struct{ browser, id string }{
+		{"chrome", "*"}, {"firefox", strings.Repeat("a", 32)}, {"chrome", strings.Repeat("z", 32)}, {"edge", strings.Repeat("a", 32)},
+	} {
+		if validBrowserExtensionID(bad.browser, bad.id) {
+			t.Fatalf("accepted %#v", bad)
 		}
 	}
-	canonicalRuntime, err := filepath.EvalSymlinks(runtimeDirectory)
-	if err != nil {
-		t.Fatal(err)
+	if !validBrowserExtensionID("brave", strings.Repeat("a", 32)) || !validBrowserExtensionID("firefox", FirefoxExtensionID) {
+		t.Fatal("a valid identifier was refused")
 	}
-	host = filepath.Join(canonicalRuntime, "bin", "brique-browser-host")
-	runtimeID := "brt1_" + strings.Repeat("a", 43)
-	build := buildinfo.Info{Format: buildinfo.Format, EngineVersion: "test", GoVersion: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
-	inspection := RuntimeInspection{Directory: canonicalRuntime, Compatible: true, Manifest: RuntimeManifest{
-		Format: RuntimeManifestFormat, RuntimeID: runtimeID, EngineBuild: build,
-		Entrypoints: RuntimeEntrypoints{Engine: "bin/brique"},
-		Contracts:   []string{"brique.browser.bridge/1"},
-		Components:  []RuntimeComponent{{Name: "browser-host", Kind: "binary", Path: "bin/brique-browser-host"}},
-	}}
-	store := Store{Directory: data, InspectPackage: func(context.Context, string) (RuntimeInspection, error) { return inspection, nil }}
-	if _, err := store.Add(context.Background(), AddOptions{Alias: "alpha", RootPath: root, RuntimePath: canonicalRuntime}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.SetBrowserGateway("alpha"); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	manifestDirectory := filepath.Join(base, "chrome", "NativeMessagingHosts")
-	previousPath, previousRegister := browserNativeManifestPath, browserNativeRegister
-	previousDefault := browserNativeDefaultLauncherDirectory
-	browserNativeDefaultLauncherDirectory = func() (string, error) { return data, nil }
-	browserNativeManifestPath = func(browser, _ string) (string, error) {
-		if browser != "chrome" {
-			t.Fatalf("browser = %q", browser)
-		}
-		return filepath.Join(manifestDirectory, browserNativeManifestFilename), nil
-	}
-	registered := ""
-	browserNativeRegister = func(browser, path string) error {
-		registered = browser + ":" + path
-		return nil
-	}
-	t.Cleanup(func() {
-		browserNativeManifestPath, browserNativeRegister = previousPath, previousRegister
-		browserNativeDefaultLauncherDirectory = previousDefault
-	})
-
-	extensionID := strings.Repeat("a", 32)
-	installed, err := store.InstallBrowserNativeHost(context.Background(), BrowserNativeHostOptions{
-		Browser: "chrome", ExtensionID: extensionID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if installed.GatewayAlias != "alpha" || installed.RuntimeID != runtimeID || installed.HostPath != host ||
-		registered != "chrome:"+installed.ManifestPath {
-		t.Fatalf("installation = %#v, registered = %q", installed, registered)
-	}
-	raw, err := os.ReadFile(installed.ManifestPath)
+func TestOneManifestCanAllowSeveralExtensions(t *testing.T) {
+	raw, err := encodeBrowserNativeManifest("chrome", []string{strings.Repeat("a", 32), strings.Repeat("b", 32)}, "/opt/brique-browser-host")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,38 +85,10 @@ func TestInstallBrowserNativeHostUsesOnlySelectedPackagedRuntime(t *testing.T) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Name != BrowserNativeHostName || manifest.Path != host || manifest.Type != "stdio" ||
-		len(manifest.AllowedOrigins) != 1 || manifest.AllowedOrigins[0] != "chrome-extension://"+extensionID+"/" {
-		t.Fatalf("manifest = %#v", manifest)
+	if len(manifest.AllowedOrigins) != 2 || manifest.AllowedOrigins[1] != "chrome-extension://"+strings.Repeat("b", 32)+"/" {
+		t.Fatalf("allowed origins = %v", manifest.AllowedOrigins)
 	}
-	if info, err := os.Stat(installed.ManifestPath); err != nil || runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		t.Fatalf("manifest protection = %v, %v", info, err)
-	}
-}
-
-func TestInstallBrowserNativeHostRejectsCustomLauncherDirectory(t *testing.T) {
-	previous := browserNativeDefaultLauncherDirectory
-	browserNativeDefaultLauncherDirectory = func() (string, error) { return filepath.Join(t.TempDir(), "default"), nil }
-	t.Cleanup(func() { browserNativeDefaultLauncherDirectory = previous })
-
-	store := Store{Directory: filepath.Join(t.TempDir(), "custom")}
-	_, err := store.InstallBrowserNativeHost(context.Background(), BrowserNativeHostOptions{
-		Browser: "chrome", ExtensionID: strings.Repeat("a", 32),
-	})
-	if err == nil || !strings.Contains(err.Error(), "default launcher data directory") {
-		t.Fatalf("custom launcher directory error = %v", err)
-	}
-}
-
-func TestInstallBrowserNativeHostRejectsUnpinnedInputs(t *testing.T) {
-	store := Store{}
-	for _, options := range []BrowserNativeHostOptions{
-		{Browser: "chrome", ExtensionID: "*"},
-		{Browser: "firefox", ExtensionID: strings.Repeat("a", 32)},
-		{Browser: "chrome", ExtensionID: strings.Repeat("z", 32)},
-	} {
-		if _, err := store.InstallBrowserNativeHost(context.Background(), options); err == nil {
-			t.Fatalf("accepted %#v", options)
-		}
+	if _, err := encodeBrowserNativeManifest("chrome", nil, "/opt/host"); err == nil {
+		t.Fatal("a manifest that allows nobody was encoded")
 	}
 }

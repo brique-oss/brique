@@ -225,13 +225,21 @@ If hosted code needs additional information or data outside that contract, it sh
 
 ### 9.1 Long-Running Capacities
 
-A capacity whose work takes long enough that the caller might otherwise time out waiting is not a special kind of capacity — it is an ordinary capacity that, while still running, may call `runtime.notify_running()` (Python) zero, one, or many times before it returns its final result normally.
+A capacity whose work takes long enough that the caller might otherwise time out waiting is not a special kind of capacity — it is an ordinary capacity that, while still running, says so zero, one, or many times before it returns its final result normally.
 
-`notify_running()` sends an intermediate response with `status: "running"` for the capacity call currently executing, correlated by the same `intention_id` as the eventual final response. It is a no-op when called outside of a capacity execution, so it is always safe to call. It does not replace the final response — the hosted function still returns its result at the end exactly as any other capacity does, and that return value becomes the final `ok`/`error` response as usual.
+| | One `running` | A heartbeat until the end of the block |
+|---|---|---|
+| Python | `await runtime.notify_running()` | `async with runtime.keepalive():` |
+| Go | `params.NotifyRunning()` | `stop := params.Keepalive(); defer stop()` |
+| C++ | `runtime.notify_running()` | `wrapper::Keepalive alive(runtime);` |
+
+`notify_running` sends an intermediate response with `status: "running"` for the capacity call currently executing, correlated by the same `intention_id` as the eventual final response. It answers the intention being served: addressed to the caller, from the capacity, with no payload; its identity is the wrapper's, except in a delegated call where the engine stamps it. It is a no-op when called outside of a capacity execution, so it is always safe to call. It does not replace the final response — the hosted function still returns its result at the end exactly as any other capacity does, and that return value becomes the final `ok`/`error` response as usual. The message is the same in the three runtimes (`vectors/running_response.json`).
+
+The keepalive sends a `running` at once, then one every `BRIQUE_HEARTBEAT_MS` (10 s by default), until its block ends. **The heartbeat is never automatic**: it is sent from a task of its own, so a runtime that sent it for every capacity would go on saying "running" for a handler that is stuck, and the budget would no longer protect the caller. The author of a capacity asks for it where the work may last.
 
 On the receiving side, both the engine's DSL-internal invoke mechanism and the Pulse client runtime treat `status: "running"` as "still waiting, not done" — they keep listening for the eventual final response instead of settling on the intermediate one, and they push their timeout budget back out on each `running` received, so a capacity that keeps checking in can run arbitrarily long; only silence beyond the timeout is fatal.
 
-There is no separate mechanism to declare a capacity as "long-running" in its contract — any `interpreted`/`compiled` capacity may call `notify_running()` from inside its hosted code when its own execution time warrants it. It is purely a runtime behavior of the hosted function, not a descriptor-level property.
+There is no separate mechanism to declare a capacity as "long-running" in its contract — any `interpreted`/`compiled` capacity may say `running` from inside its hosted code when its own execution time warrants it. It is purely a runtime behavior of the hosted function, not a descriptor-level property.
 
 ---
 
@@ -480,11 +488,11 @@ The following apply regardless of host language.
 
 **Concurrency** — the wrapper must remain responsive, execute in parallel, and handle multiple requests.
 
-**Backpressure** — the wrapper defines a maximum concurrency level and a queue for pending work.
+**Backpressure** — the wrapper defines a maximum concurrency level (`BRIQUE_MAX_CONCURRENCY`) and a queue for pending work (`BRIQUE_QUEUE_LIMIT`). A full queue refuses an awaited call with `refused` / `details.reason: "busy"`, before running it; the runtimes ask again for the caller (§14.1.1).
 
-**Error model** — errors are mapped to Brique responses by wrapper code. No universal mapping is enforced.
+**Error model** — errors are mapped to Brique responses by wrapper code. No universal mapping is enforced for what a capacity raises. What a caller receives is the same in the three runtimes: the error object of the response, classified by what the caller reacts to (§14.1.2).
 
-**Timeout** — defined by the wrapper implementation. Not fixed by this specification.
+**Timeout** — defined by the wrapper implementation. Not fixed by this specification. Whatever the timeout, an expired call is never asked again by the runtime: it may have run.
 
 **Cancellation** — no standard cancellation model is defined.
 
@@ -521,6 +529,89 @@ preserves the opaque delegation frame and never interprets or widens it.
 
 **Non-goals** — a wrapper must not duplicate engine behavior, implement routing logic, define bindings in JSON, create multiple runtimes per subcontext, or enforce business logic structure.
 
+### 14.1 Shared Mechanisms of the Runtimes
+
+The mechanisms below exist in the three runtimes with the same behavior. The rules that can be written as data are in `wrapper/vectors/` and every runtime runs them in its own test suite (see `vectors/README.md`); a runtime that disagrees is fixed to match the file. A mechanism that was found useful in one wrapper and is generic belongs here, once, instead of being copied from wrapper to wrapper.
+
+| Mechanism | Python | Go | C++ | Vectors |
+|---|---|---|---|---|
+| Busy retry (§14.1.1) | automatic in `emit_and_wait` and `calls.call(busy_attempts=)` | automatic in `EmitAndWait`, `SendRawIntention`, `Call`; `OutboundParams.BusyAttempts` | automatic in `emit_and_wait`; `OutboundParams::busy_attempts` | `busy_retry.json` |
+| Typed errors (§14.1.2) | `wrapper.errors` (`Busy`, `RevisionMismatch`, ...) | `*CallError`, `Kind()`, `IsBusy`... | `CallError`, `kind()` | `errors.json` |
+| Settings (§14.1.3) | `wrapper.settings` | `Settings`, `DescribeSettings`, `DeclareSetting` | `declared_settings`, `describe_settings`, `declare_setting` | `settings.json` |
+| Critical sections (§14.1.4) | `runtime.scheduler.critical(*keys)` | `params.Critical(keys...)` | `CriticalSection(runtime.scheduler(), {keys})` | — |
+| Matter client (§14.1.5) | `MatterClient(runtime, context)` | `params.Store(context)` | `MatterClient::over(runtime, context)` | `matter_client.json` |
+| Running and keepalive (§9.1) | `notify_running`, `keepalive()` | `NotifyRunning`, `Keepalive` | `notify_running`, `Keepalive` | `running_response.json` |
+| Diagnostic on demand (§14.1.6) | `wrapper.diagnostic`, `scheduler.stats()` | `DumpState`, `Scheduler().Stats()` | `dump_state`, `scheduler().stats()` | — |
+
+#### 14.1.1 Busy retry
+
+A callee that is busy refuses a call **before running it**: the pending-work queue of a wrapper (`details.reason: "busy"`) or the Matter loop of the engine (`"loop busy"`). Asking again is therefore safe, whatever the call. A call that waits for an answer and is refused so is asked again by the runtime, up to `BRIQUE_BUSY_ATTEMPTS` attempts in all (the first included). The pause before each new attempt starts at `BRIQUE_BUSY_BASE_MS`, doubles up to `BRIQUE_BUSY_CAP_MS` and is multiplied by a random factor from 0.5 to 1.5, so that callers refused together do not come back together. The pause does not hold an execution slot. When the attempts are used up, the caller gets the last refusal as a `Busy` error (§14.1.2).
+
+* A call that **timed out** is never asked again: it may have run. Neither is any other error, nor a call that awaits no answer (the refusal could not even be seen).
+* An intention sent through the raw path (`SendRawIntention` in Go) is sent again with an `intention_id` of its own: the refused one is spent.
+* A caller that must insist longer (a wake, whose message is already accepted) passes its own number of attempts with the call: `busy_attempts` in Python and C++, `BusyAttempts` in Go.
+* A callee is refused "busy" on purpose when it is saturated. Raising `BRIQUE_MAX_CONCURRENCY` of a wrapper whose capacities mostly wait for something remote (an inference, a download) is the usual remedy.
+
+#### 14.1.2 Typed errors
+
+An engine response with `status: "error"` carries `error`: a code, a message and `details`, whose `reason` says what happened. A call raises it as one error type per **kind**, which is what a caller reacts to:
+
+| Kind | Reason (`details.reason`) | What the caller does |
+|---|---|---|
+| `busy` | `busy`, `loop busy` | nothing was done; the runtime already asked again |
+| `revision_mismatch` | `revision_mismatch`, `revision not coherent` | read the Matter again |
+| `line_count_mismatch` | `line_count_mismatch` | read the journal again (it is also a `revision_mismatch`) |
+| `connection_lost` | `connection_lost` | the outcome is unknown: the call may have been executed, never ask again blindly (`outcome_unknown`) |
+| `not_found` | code `not_found` when the reason is none of the above | |
+| `other` | anything else | the caller's own handling |
+
+The reason decides first, the code when the reason says nothing known (`vectors/errors.json`). In Python every type is a `CapacityCallError`, so code that catches that keeps working, and hosted code registers the reasons its own capacities answer with (`wrapper.errors.register`). In Go the error is a `*CallError` (`Code`, `Message`, `Details`, `Kind()`, `OutcomeUnknown()`) with `IsBusy`, `IsRevisionMismatch`, `IsLineCountMismatch`, `IsNotFound` and `IsOutcomeUnknown`. In C++ it is a `CallError` (`code()`, `details()`, `reason()`, `kind()`, `outcome_unknown()`), with the same helpers.
+
+#### 14.1.3 Settings
+
+Every numeric setting of the runtime is read from the environment (`BRIQUE_<NAME>`), declared once with its default, its minimum and what an invalid value does. A **strict** setting stops the wrapper at start; a **tolerant** one ignores a value that is missing, not an integer or below its minimum, and the default holds. `vectors/settings.json` is the single source (name, default, minimum, unit, policy, what it sets); each runtime declares the same and its test compares them. The table below is generated from it (`python3 -m wrapper.settings table vectors/settings.json`).
+
+| Variable | Default | Min. | Unit | Invalid value | What it sets |
+|---|---|---|---|---|---|
+| `BRIQUE_MAX_CONCURRENCY` | 16 | 1 | works | stops the start | Engine-routed capacity and Matter works that run at the same time in the wrapper (the execution slots). |
+| `BRIQUE_QUEUE_LIMIT` | 256 | 1 | works | stops the start | Works that may wait for a slot; beyond it a call is refused 'busy' before it runs. |
+| `BRIQUE_TRANSIT_MAX_BYTES` | 67108864 | 1 | bytes | stops the start | Largest serialized parameter sent as a transit file; above it a transient Matter is used. |
+| `BRIQUE_TRANSIT_TTL_SECONDS` | 3600 | 1 | seconds | stops the start | Lifetime of an abandoned transit reference before it is swept. |
+| `BRIQUE_BUSY_ATTEMPTS` | 8 | 1 | attempts | ignored | Attempts in all (the first included) of a call refused because its callee is busy. |
+| `BRIQUE_BUSY_BASE_MS` | 20 | 0 | ms | ignored | Pause before the second attempt of a call refused 'busy'; doubled at each attempt, times a random factor from 0.5 to 1.5. |
+| `BRIQUE_BUSY_CAP_MS` | 1000 | 0 | ms | ignored | Ceiling of the pause between two attempts of a call refused 'busy'. |
+| `BRIQUE_LEASE_TIMEOUT_MS` | 30000 | 1 | ms | ignored | Time allowed to one HTTP transfer through a Matter lease. |
+| `BRIQUE_LEASE_RETRIES` | 5 | 1 | reads | ignored | Reads of a Matter whose lease went stale (the substance changed meanwhile) before giving up. |
+| `BRIQUE_CAS_ATTEMPTS` | 12 | 1 | attempts | ignored | Attempts of a read-recompute-write that keeps losing the race on the revision. |
+| `BRIQUE_CAS_PAUSE_BASE_MS` | 2 | 0 | ms | ignored | After a lost race, a pause of random length up to this, doubled at each attempt. |
+| `BRIQUE_CAS_PAUSE_CAP_MS` | 50 | 0 | ms | ignored | Ceiling of the pause after a lost race: writers that lost the same round do not come back together. |
+| `BRIQUE_HEARTBEAT_MS` | 10000 | 50 | ms | ignored | Period of the `running` acknowledgement of a long capacity (it renews the inactivity budget of whoever waits for it). |
+
+What a running wrapper really uses is visible: the settings that are not at their default are written to its log at start and to the diagnostic dump (§14.1.6), and `describe()` (`DescribeSettings`, `describe_settings`) says for each one whether its value comes from the default, from the environment, or was given and ignored. The engine reads `run.env` when it starts: a change applies at its next start. Hosted code declares its own settings in the same registry (`settings.declare`, `DeclareSetting`, `declare_setting`) and gets the same visibility.
+
+#### 14.1.4 Critical sections
+
+A short "read, compute, guarded write" on shared state needs the writers of one process to take turns instead of racing on the revision. A critical section holds the lock of every key given for the length of its block. The keys are taken in sorted order, so two sections that name the same keys in a different order cannot wait for each other. **A wait for a taken lock does not hold an execution slot**: without that, as many sections waiting for the same key as there are slots would stop the wrapper, the one that holds the lock needing a slot itself to make progress.
+
+A lock is local to the process and only reduces conflicts; the guard on the write (`expected_revision`, `expected_line_count`) stays the guarantee. Never hold one across a long wait (an inference, a call that may last) and never hold a parent's lock around a call on a child.
+
+#### 14.1.5 Matter client
+
+A capacity that keeps its state in Matters does the same few things; the Matter client does them once (`vectors/matter_client.json`):
+
+* **read**: the parsed substance (a JSON object) with its revision, `read_text`, `read_many` (one engine request), `read_lines` (a range of a journal), `stat`, `exists`. A substance served through a one-shot HTTP lease that went stale (HTTP 409: the Matter changed meanwhile) is read again, `BRIQUE_LEASE_RETRIES` times at most.
+* **write**: `write` replaces the whole content, guarded by `expected_revision` sent as a **decimal string** (a revision is a nanosecond timestamp, above 2^53, which a float cannot hold); `append_lines` appends a block to a journal in one commit, guarded by `expected_line_count`, inline up to 240 KiB and through the engine's HTTP lease beyond; `create` and `delete`.
+* **update**: read, recompute, write guarded, and start again after a short random pause (`BRIQUE_CAS_PAUSE_BASE_MS` doubled up to `BRIQUE_CAS_PAUSE_CAP_MS`) when another writer got there first, `BRIQUE_CAS_ATTEMPTS` times at most. `compute` returns the new content, or nothing when there is nothing to write. Run it inside a critical section when the writers of the process should take turns.
+
+Errors are the typed ones of §14.1.2. The client needs a running capacity (its calls are children of the intention being served) and addresses the context of that capacity unless one is given.
+
+In Go, the response payload keeps an integer above 2^53 exact (a `json.Number`; every other number stays a `float64`), because the revision of a Matter would not survive a `float64`.
+
+#### 14.1.6 Diagnostic on demand
+
+`kill -USR1 <pid of the wrapper>` writes `$TMPDIR/brique_wrapper_tasks_<pid>.txt`: the state of the execution slots (free, active, pending, queued, refused since the start, locks, ordered chains), the settings that are not at their default and, where the language allows, every task with what it awaits (Python: the chain of coroutines down to the future it is parked on; Go: every goroutine with its stack; C++: the state only, since threads have no portable stack to read). It only reads, and does nothing until the signal comes. The same snapshot is available to code as `scheduler.stats()` (`Stats()`, `stats()`), for a metric. Hosted code that holds state worth seeing in a stall adds a line to the dump (`diagnostic.install(extra=...)` in Python).
+
+
 ---
 
 ## 15. Python Implementation
@@ -529,7 +620,7 @@ This section is the mandatory, concrete pattern for the Python wrapper. It super
 
 ### 15.1 What Already Exists — Copy It, Don't Reinvent It
 
-The generic runtime is a **library shared by every wrapper of the instance**, one copy per language under `<instance>/wrapper/<lang>/lib/` (`python/lib/wrapper/`, `go/lib/` with package `wrapper/`, `cpp/lib/wrapper/*.hpp`). A wrapper's own directory `<context_dir>/code/<wrapper_name>/` holds only its entry point (`main.*`), its `bindings.*` and the dependency file. Fixing or upgrading the library is done once and benefits every wrapper. For Python the library is `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `transit.py`, `calls.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, plus `__init__.py` and `_ws_stdlib.py`; the tests live beside it in `python/lib/tests/`. This is the membrane described in §1–§14 and §17, implemented and tested.
+The generic runtime is a **library shared by every wrapper of the instance**, one copy per language under `<instance>/wrapper/<lang>/lib/` (`python/lib/wrapper/`, `go/lib/` with package `wrapper/`, `cpp/lib/wrapper/*.hpp`). A wrapper's own directory `<context_dir>/code/<wrapper_name>/` holds only its entry point (`main.*`), its `bindings.*` and the dependency file. Fixing or upgrading the library is done once and benefits every wrapper. For Python the library is `runtime.py`, `registry.py`, `router.py`, `execution.py`, `matter.py`, `outbound.py`, `correlator.py`, `scheduler.py`, `transit.py`, `transit_matter.py`, `calls.py`, `transport.py`, `constants.py`, `models.py`, `util.py`, the shared mechanisms of §14.1 (`busy.py`, `errors.py`, `settings.py`, `matter_client.py`, `keepalive.py`, `diagnostic.py`), plus `__init__.py` and `_ws_stdlib.py`; the tests live beside it in `python/lib/tests/`. This is the membrane described in §1–§14 and §17, implemented and tested.
 
 **To create a new wrapper for a context**: copy `wrapper/python/code/main.py` and `wrapper/python/code/requirements.txt` verbatim into `<context_dir>/code/<wrapper_name>/`. Do **not** copy the library: `main.py` finds `<instance>/wrapper/python/lib` by walking up from its own directory (or from `BRIQUE_WRAPPER_LIB` when set). Do not rewrite, re-derive, or "improve" `main.py` or the library — every real wrapper in this instance uses them unmodified. The only file you write yourself is `bindings.py` (§15.2) and the capacity files it imports (§15.3).
 
@@ -585,7 +676,7 @@ Declare the wrapper in the owning context's `context.json`:
 }
 ```
 
-For the Python, Go and C++ runtimes, `BRIQUE_MAX_CONCURRENCY` and `BRIQUE_QUEUE_LIMIT` are positive integers with defaults `16` and `256`. They bound globally executing engine-routed capacity/matter work and pending work. Responses and `wrapper_stop` bypass that queue so a saturated wrapper can still make progress. Work on one matter remains ordered. Calls to a capacity run in parallel unless the capacity is declared serial, in which case they run one at a time in arrival order. A call that waits for the answer to a call it made gives its execution slot back for the time it waits, and takes it back in turn, so that capacities waiting for each other can never use up every slot. All three consume `BRIQUE_TRANSIT_MAX_BYTES` and `BRIQUE_TRANSIT_TTL_SECONDS`: they cap one serialized `@file` payload and the lifetime of abandoned references. Above the file limit the runtime uses a transient Matter; durable data remains an explicit semantic Matter.
+For the Python, Go and C++ runtimes, `BRIQUE_MAX_CONCURRENCY` and `BRIQUE_QUEUE_LIMIT` are positive integers with defaults `16` and `256` (all the settings are in §14.1.3). They bound globally executing engine-routed capacity/matter work and pending work. Responses and `wrapper_stop` bypass that queue so a saturated wrapper can still make progress. Work on one matter remains ordered. Calls to a capacity run in parallel unless the capacity is declared serial, in which case they run one at a time in arrival order. A call that waits for the answer to a call it made gives its execution slot back for the time it waits, and takes it back in turn, so that capacities waiting for each other can never use up every slot. All three consume `BRIQUE_TRANSIT_MAX_BYTES` and `BRIQUE_TRANSIT_TTL_SECONDS`: they cap one serialized `@file` payload and the lifetime of abandoned references. Above the file limit the runtime uses a transient Matter; durable data remains an explicit semantic Matter.
 
 ### 15.2 `bindings.py` Is a Pure Import File — Never Business Logic
 

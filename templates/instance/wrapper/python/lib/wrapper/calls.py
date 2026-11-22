@@ -32,17 +32,9 @@ import asyncio
 from typing import Any
 
 from .constants import STATUS_ERROR, TYPE_USER
+from .errors import CapacityCallError, typed_error
 from .execution import current_intention, current_scope
 from .transit import MatterRef, Params, TransitError, TransitTarget, reference_kind
-
-
-class CapacityCallError(Exception):
-    """A capacity answered an engine-routed call with an error response."""
-
-    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.details = details or {}
 
 
 class CapacityCaller:
@@ -75,6 +67,7 @@ class CapacityCaller:
         direct: bool = False,
         timeout_s: float | None = None,
         type_tags: dict[str, str] | None = None,
+        busy_attempts: int | None = None,
     ) -> Params | None:
         """Call an address with ordinary values as parameters.
 
@@ -131,6 +124,7 @@ class CapacityCaller:
                 matters=matters,
                 timeout_s=timeout_s,
                 correlation=correlation,
+                busy_attempts=busy_attempts,
             )
         except asyncio.TimeoutError:
             # The callee may still be running and about to take what was posted: do not release.
@@ -142,12 +136,7 @@ class CapacityCaller:
         if str(body.get("status", "")) == STATUS_ERROR:
             # Not found, refused, failed: whatever it consumed is gone, the rest is released here.
             await self._release(posted)
-            error = body.get("error") if isinstance(body.get("error"), dict) else {}
-            raise CapacityCallError(
-                str(error.get("code", "internal")),
-                str(error.get("message", "capacity call failed")),
-                error.get("details") if isinstance(error.get("details"), dict) else {},
-            )
+            raise typed_error(body.get("error"))
         payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
         return self._hold(Params(payload, self.runtime))
 

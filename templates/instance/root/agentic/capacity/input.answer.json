@@ -1,0 +1,116 @@
+{
+  "brique": {
+    "cap_name": "input.answer",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "input.answer",
+    "description": "Answers an open request for input: validates the answer against the kind of the request, records it, and lets the waiting capacity go on."
+  },
+  "functional": {
+    "#root": {
+      "role": "Record the answer of a person to an open request of a continuity, so that the input.request that waits for it answers.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "request_id": {
+            "type": "string"
+          },
+          "answered": {
+            "type": "boolean"
+          }
+        }
+      },
+      "effects": {
+        "continuity": "Appends an input_response line to the journal of the continuity.",
+        "external": "Wakes at once the input.request that waits for this request in the same process."
+      },
+      "transformation_contract": {
+        "morphing": "An answer of a person becomes the response of an open request.",
+        "invariants": [
+          "The answer is validated against the kind of the request: text must be non-empty, choice must be exactly one of the choices, confirm must be yes or no; an invalid answer is refused and the request stays open.",
+          "The first valid answer closes the request: one input_response line carrying the answer is written, and the input.request that waits for it goes on.",
+          "The same answer again gives the same result and writes nothing more; another answer to an already answered request is refused (reason already_answered).",
+          "A closed request cannot be answered (refused, reason closed).",
+          "input.answer writes only the input_response line."
+        ],
+        "success": [
+          "The request is answered and the waiting capacity can answer its own intention."
+        ],
+        "failure": [
+          "Fails with an invalid request when continuity_id, request_id or answer is missing, or when the answer does not suit the kind of the request.",
+          "Fails not found when the continuity has no such request."
+        ],
+        "notes": [
+          "Two answers at the same time: the one written first counts, the other is compared with it."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#validate": {
+                "role": "Validate the answer against the kind of the request.",
+                "inputs": {
+                  "params": {
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A raw answer becomes an answer of the kind asked, or a refusal."
+                }
+              }
+            },
+            {
+              "#record": {
+                "role": "Write the response line once.",
+                "inputs": {
+                  "params": {
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "answered": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "A valid answer becomes the response of the request."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

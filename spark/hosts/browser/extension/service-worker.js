@@ -35,11 +35,11 @@ export function attachPagePort(pagePort, connectNative) {
     pending.set(current, { kind: "open" });
     nativePort.postMessage({ format: BRIDGE_FORMAT, kind: "open", sequence: current,
       session_id: sessionId, origin: sender.origin, document_id: sender.documentId, frame_id: sender.frameId,
-      ui_name: request.uiName, user_activated: true,
+      ui_name: request.uiName,
       ...(request.descriptorB64 === undefined ? {} : { descriptor_b64: request.descriptorB64 }) });
   };
   // Merely injecting the extension into a page must not start a native
-  // process. content-relay releases `open` only after trusted user input;
+  // process. content-relay releases `open` once the page has asked for it;
   // that request is the first point at which the native rendez-vous exists.
   const startNative = () => {
     if (nativePort || closed) return;

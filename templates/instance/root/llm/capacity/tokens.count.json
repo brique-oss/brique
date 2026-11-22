@@ -1,0 +1,36 @@
+{
+  "brique": {"cap_name": "tokens.count", "kind": "interpreted", "lang": "python", "rel_ctx": "", "wrapper": "llm_llm"},
+  "objective": {
+    "name": "tokens.count",
+    "description": "Count the input tokens of a canonical inference request through the provider, without running the inference."
+  },
+  "functional": {
+    "#root": {
+      "role": "Give the exact number of input tokens the provider would bill for a canonical request, to measure what each part of a prompt costs.",
+      "effects": {},
+      "inputs": {
+        "params": {
+          "request": {"type": "object", "_comment": "A canonical inference request (/root/llm/schema/request). Only model, messages and output are read; max_output_tokens is not needed."},
+          "provider": {"type": "string", "_comment": "Only 'anthropic' counts tokens today."}
+        }
+      },
+      "outputs": {"payload": {"input_tokens": {"type": "integer"}}},
+      "transformation_contract": {
+        "morphing": "A canonical request becomes the number of input tokens its provider counts for it.",
+        "notes": [
+          "HTTP method: POST. API URL: https://api.anthropic.com/v1/messages/count_tokens.",
+          "Header x-api-key: ${ANTHROPIC_API_KEY}. Header anthropic-version: 2023-06-01.",
+          "The body is the one infer.anthropic builds from the same request, without max_tokens and the sampling parameters.",
+          "payload.input_tokens = the provider's input_tokens."
+        ],
+        "invariants": [
+          "No inference is run and nothing is generated.",
+          "The request is a transit value: no Matter is read, written or created, and nothing is persisted.",
+          "A provider other than anthropic is an explicit invalid-request failure.",
+          "A provider failure is an explicit failure carrying the provider's status and message."
+        ]
+      }
+    }
+  },
+  "subjective": {}
+}

@@ -1,0 +1,1796 @@
+{
+  "brique": {
+    "cap_name": "pilot.activate",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "pilot.activate",
+    "description": "Activates or resumes the unique cognitive run of a continuity and coordinates its cognition, effects, waits, controls, and completion."
+  },
+  "functional": {
+    "#root": {
+      "role": "Drive one continuity through an explicitly structured cognitive run while preserving exclusive ownership, durable history, deterministic effects, explicit waiting, safe controls, and recoverability.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "wake": {
+            "type": "boolean",
+            "_comment": "Optional. true: a wake, the no-op activation that mailbox.send and pilot.recover fire; it never waits for another run and answers at once."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "current_message_id": {
+            "type": "string"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "continuity": {
+              "schema": "/root/agentic/schema/continuity_data"
+            },
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            },
+            "runtime": {
+              "schema": "/root/agentic/schema/runtime_data"
+            },
+            "journal": {
+              "schema": "/root/agentic/schema/message"
+            }
+          }
+        }
+      },
+      "effects": {
+        "continuity": "May append durable cognitive and operational messages to the journal and explicitly update current_intention in the continuity header.",
+        "mailbox": "Coordinates mailbox consumption through mailbox.read, mailbox.ack, mailbox.release, and mailbox.send. Reads user messages for absorption (mailbox.read with kind user) while a chain is in progress, and acknowledges them with the main message at the end of the chain.",
+        "runtime": "Maintains exclusive run ownership, current message, status, and active wait groups.",
+        "external": "May invoke arbitrary Brique capacities explicitly requested by validated pilot intentions."
+      },
+      "transformation_contract": {
+        "morphing": "An activable continuity becomes a coherently advanced cognitive continuity whose next operational state is explicit and durable.",
+        "invariants": [
+          "At most one cognitive run owns a continuity at any instant.",
+          "initial_intention is immutable.",
+          "current_intention changes only through an explicit traced update.",
+          "A durable message is immutable once appended.",
+          "A pilot output is validated before any requested effect begins.",
+          "Requested effects are applied in deterministic order.",
+          "An already successful effect is never implicitly replayed.",
+          "An already emitted intention is never implicitly re-emitted.",
+          "Waiting state is explicit in runtime.active_wait_groups.",
+          "The journal remains the durable cognitive history.",
+          "The wrapper owns orchestration but no hidden persistent cognitive state.",
+          "The Matters of the continuity are resolved from continuity_id by the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>; callers never bind them.",
+          "Mutations of the Matters of one continuity are serialized by short critical-section locks keyed by continuity_id inside the agentic_core wrapper process: a lock is held only around a read, recompute and guarded write, never during an LLM inference, an external invoke or a wait; it is never the sole guarantee.",
+          "Every write to a mutable Matter carries expected_revision; a revision conflict causes a bounded read, recompute and retry.",
+          "Revision is opaque concurrency metadata and is never used as an application sequence.",
+          "Ownership transitions of the runtime (idle to running, running to idle, waiting and suspension changes) are individually atomic Matter mutations guarded by expected_revision; the run as a whole is a recoverable multi-Matter operation reconstructed after interruption.",
+          "Uniqueness of the cognitive run is guaranteed durably by runtime.status, run_id and expected_revision, not by holding a lock for the lifetime of the run.",
+          "An archived continuity is never activated.",
+          "The size of the context sent by the last inference (input_tokens reported by the provider, or an estimation before any report) is recorded as an event line inference_measured in the journal (with the usage breakdown when the provider reported it: cache_read_tokens, cache_creation_tokens, uncached_input_tokens, output_tokens, model, duration_ms, window_tokens), in the same append as the other lines of the step, and read from the in-memory object; it is not stored in runtime.",
+          "When the pilot declares limits.context_tokens, the inference context carries context_pressure from the advised level.",
+          "At the required level, at a safe point with normal work pending, a compaction inference produces a summary and the continuity succeeds before the next message is processed; a failed compaction leaves the continuity unchanged and is traced.",
+          "A pilot output carrying succession is exclusive with intentions, wait_group, messages and projection_request; the message in progress is released so that the successor processes it.",
+          "A Response is written as is in its capacity_response line with its status preserved, whatever its size: no overflow Matter and no threshold.",
+          "A message sent to another continuity carries correlation.continuity_id equal to the lineage_id of the sender unless the pilot set it.",
+          "A Capacity pilot is invoked at each turn with the continuity, the run, the current message and the stimulus; the pilot_output it returns is validated and applied like the one of a pilot_definition.",
+          "A wait group of a Capacity pilot resumes by invoking the Capacity again with the stimulus: the plan holds no state.",
+          "An invalid output of a Capacity pilot is never corrected by a second inference: the treatment fails explicitly and the claim is released.",
+          "A Capacity pilot has no pilot_definition and no model of its own: its compaction is never automatic; when its pilot_ref declares limits.context_tokens it is given the context_pressure and decides the succession itself.",
+          "The actions of a Capacity pilot leave no trace in the journal; only its prompts and completions, recorded by pilot.infer, do.",
+          "An activation of a continuity that another live run owns waits for that run to end and answers with the state the continuity is left in, like any awaited Capacity; an activation marked wake answers at once.",
+          "A continuity cannot wait for its own activation: such an intention fails explicitly.",
+          "The request sent to the model and the projection view are transit values: they are never written to the journal or to a Matter; the journal keeps the facts that follow from them (intentions, messages, projection request and its selected message identifiers).",
+          "A request to the model ends with one message that holds what is new: the current intention, the current message (designated by its id, kind and sender when the conversation already holds it, whole otherwise), the active stimulus and the context pressure.",
+          "Each answer of a capacity in the conversation says which intention it answers (intention_id).",
+          "The stimulus of a resumption after a wait states its outcome, the id of the wait group and how many answers it holds against how many were expected, and nothing else: the answers are in the conversation.",
+          "A wait group that lists no expected item waits for the intentions of the same output whose await_response is true, and fails the validation when there is none.",
+          "The compaction inference is one more turn of the conversation: the same system text, history and output schema as any other turn, so that the provider reads them from its cache; only the last message differs and asks for the summary.",
+          "A pilot policy is applied by the code before any effect: an intention whose target is forbidden by forbidden_capacities, or not allowed when allowed_capacities is present, refuses the whole output (no intention, wait group, intention update or message of it takes effect) and the pilot is told which targets were refused, as an execution_result.",
+          "forbidden_capacities wins over allowed_capacities, and the contract readers /root/read.capacity and */read.meaning are allowed whatever allowed_capacities says unless forbidden_capacities names them.",
+          "A target that is not a canonical absolute reference is refused by the policy.",
+          "A wait group whose expected answers do not come within the wait delay (limits.wait_timeout_s, 3600 seconds by default) is resolved: each missing answer becomes an error answer (timeout) delivered like any other, so that the wait ends and the pilot decides.",
+          "A treatment that fails is traced and its entry released with one more attempt; when the entry is parked after three attempts the run goes on with the next message instead of ending.",
+          "A Response that mailbox.send does not take is offered again; when it is still not taken, the loss is written in the journal (response_delivery_failed), never left to a background task in silence.",
+          "A not-found that does not come from the disappearance of the continuity is a failure of the treatment, not a deletion.",
+          "The control set_pilot takes effect from the next inference of the same run.",
+          "The stimulus of a recovery states what the journal knows of the interrupted chain: the run that resumes, the message, and for each intention emitted for that message its id, whether an answer was expected and whether one is present; it never proposes to replay.",
+          "A waiting run is woken by notification when an answer or a control arrives; re-reading the durable state every five seconds is only a safety net.",
+          "The family of a capacity listed in known_capacities is the one the pilot_definition declares (user by default): the list given to the model shows it, and an intention aimed at that capacity is routed with it whatever the model wrote.",
+          "A pilot policy may also name contexts (allowed_contexts, forbidden_contexts): a context covers every capacity addressed to it or to a context nested in it; a forbidden capacity or context always wins, and when an allowed list is present a listed capacity or a listed context is enough.",
+          "The decision of a pilot_definition (its accepted output as the model wrote it, free values decoded, without what the code adds) is recorded as a completion line before any of its effects; the conversation shows that line and not the lines of its effects (capacity_intention, pilot), which stay in the journal as facts.",
+          "A pilot that asks three times in a row for what its policy refuses fails its treatment, which counts as a failed attempt of the message.",
+          "A user message that arrives while the chain of a pilot_definition is in progress joins that chain: it is claimed at a safe point (mailbox.read kind user), never made the current message, and designated to the next inference by the user_message block of its news, separate from the active stimulus.",
+          "While waiting, the run wakes for a pending user message (its kind is read in the journal) as it does for a control; the wait groups stay open.",
+          "An absorbed message stays claimed until the end of the chain and is acknowledged with the main message; each absorbed message renews the allocation of inferences of the chain.",
+          "After an abrupt stop, every normal entry claimed by the dead run that is not its current message goes back to pending and is absorbed again.",
+          "The inference step of a pilot_definition (reading of the projection, inference, recording of the decision) holds the inference window of the continuity; applying the effects does not.",
+          "A window reserved for a request stays open to the writes of the run's loop; the background tasks of awaited intentions do not inherit that identity.",
+          "A Capacity pilot absorbs nothing: no message is addressed to it but by its parent, and its plan is never interrupted.",
+          "An intention to pilot.launch is checked against the policy of the pilot that asks for it on the pilot it names too: its pilot_ref is read as a reference (<context>/<capacity> or <context>/<matter_id>) and the whole output is refused before any effect when that reference is refused.",
+          "Every message the pilot writes carries the message it answers (correlation.causation_id); the last message of a step that ends the chain (no intention, no wait group, nothing awaited) also carries ends_chain, which is the proof that the treatment of that message is complete.",
+          "A takeover does not answer again a message whose chain already ended: the interrupted run wrote the last message of the chain and died before acknowledging the message, so the takeover acknowledges it and records run_recovered with already_answered, instead of presenting it to the pilot again. A chain interrupted before its last message is presented again (a message may then be answered twice, never lost)."
+        ],
+        "success": [
+          "Exclusive ownership is established before cognition advances.",
+          "Mailbox work is claimed through mailbox.read.",
+          "Continuity views are built through continuity.project.",
+          "LLM inference is delegated to /root/llm/infer.",
+          "Validated pilot intentions invoke their explicitly addressed capacities.",
+          "Cross-continuity messages are delivered through mailbox.send.",
+          "Completed mailbox messages are consumed through mailbox.ack.",
+          "Abandoned claimed messages are returned through mailbox.release.",
+          "Delete controls delegate deletion to continuity.delete.",
+          "Satisfied waits resume the same cognitive chain.",
+          "The continuity becomes idle only when no immediate work remains."
+        ],
+        "failure": [
+          "Fails if required Matters or pilot_definition are incoherent.",
+          "Fails if exclusive ownership cannot be established consistently.",
+          "Fails the current treatment if both the initial pilot output and its single correction are invalid.",
+          "Stops requested-effect application on the first execution failure.",
+          "Does not roll back already materialized effects.",
+          "Does not silently replay uncertain effects after interruption or recovery.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted.",
+          "Fails the treatment when the Capacity pilot referenced by pilot_ref does not exist."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "The nominal process may remain alive while waiting; the durable wait state remains represented in runtime.",
+          "The work cycle may repeat several times inside one activation while immediate work remains.",
+          "Safe points exist after inference, awaited responses, pilot-output application, and complete mailbox-message treatment.",
+          "pilot_definition is not an input: pilot.activate resolves it itself from continuity.pilot_ref in #resolve_pilot and passes only its default_projection, as a value, to continuity.project.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model.",
+          "Implementation constraint: every read of the continuity (controls, current message, history, used intention identifiers) goes through the in-memory object that duplicates the journal for performance; every write is an append to the journal followed by the update of the object. A run keeps no private copy: after a loss or a resumption the object is rebuilt from the journal. The kind of each line written is its characterization, set by pilot.activate, which knows where the line comes from; the LLM never sets it."
+        ]
+      },
+      "resolution": {
+        ">sequence": {
+          "items": [
+            {
+              "#resolve_state": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "continuity_matter_id": {
+                      "type": "string"
+                    },
+                    "mailbox_matter_id": {
+                      "type": "string"
+                    },
+                    "runtime_matter_id": {
+                      "type": "string"
+                    },
+                    "journal_matter_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Derive the four Matters owned by the target continuity (header, journal, mailbox, runtime) from continuity_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if one of the four derived Matters does not exist."
+                  ],
+                  "invariants": [
+                    "Matter IDs follow the convention continuity_<id> (header), journal_<id>, mailbox_<id>, runtime_<id>.",
+                    "Resolution is deterministic and requires no caller-provided Matter."
+                  ],
+                  "morphing": "A continuity_id becomes the physical Matter IDs of its continuity header, journal, mailbox, and runtime."
+                }
+              }
+            },
+            {
+              "#ownership": {
+                "role": "Establish or recover the unique cognitive ownership of the continuity.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "acquired": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "An activation request becomes an exclusively owned cognitive run, a resumed run, or a no-op.",
+                  "invariants": [
+                    "Ownership acquisition (idle to running with a new run_id) is one runtime write guarded by expected_revision; of two concurrent activations one succeeds, the other re-reads the runtime, observes running and becomes a no-op.",
+                    "A competing run is never created."
+                  ],
+                  "success": [
+                    "idle becomes running with a new run_id.",
+                    "A legitimate active waiting run preserves its logical ownership."
+                  ],
+                  "failure": [
+                    "Inconsistent ownership fails explicitly."
+                  ]
+                },
+                "resolution": {
+                  "#acquire_or_resume": {
+                    "role": "Perform the ownership transition required before cognition can advance through one guarded runtime write.",
+                    "inputs": {
+                      "params": {
+                        "continuity_id": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "outputs": {
+                      "payload": {
+                        "run_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "acquired": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "transformation_contract": {
+                      "morphing": "A runtime ownership state becomes a coherent owned or non-activable state."
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "#resolve_pilot": {
+                "inputs": {
+                  "params": {
+                    "pilot_ref": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "functional": {
+                      "type": "object"
+                    },
+                    "matter_id": {
+                      "type": "string"
+                    },
+                    "default_projection": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "role": "Resolve the pilot_definition Matter governing the continuity from the explicit reference continuity.pilot_ref, made of a context and a matter_id.",
+                "transformation_contract": {
+                  "failure": [
+                    "Fails if pilot_ref does not identify a readable pilot_definition Matter."
+                  ],
+                  "invariants": [
+                    "pilot_definition is resolved by pilot.activate itself, never supplied by message producers.",
+                    "The resolved pilot_definition is read-only for the whole run.",
+                    "The pilot_definition used by agentic must currently live in /root/agentic; pilot_ref.context is reserved for a future evolution and is not yet used."
+                  ],
+                  "morphing": "pilot_ref.matter_id becomes the pilot_definition read from /root/agentic and used by every inference and projection of the run.",
+                  "notes": [
+                    "pilot_ref.context is reserved: cross-context pilot_definition resolution is explicitly deferred, because the DSL cannot compose a capacity address from a context value and a dynamic cross-context invocation is a wider engine question."
+                  ]
+                },
+                "resolution": {
+                  "invoke": {
+                    "@capacity": "/root/agentic/matter.read",
+                    "as": "resolved_pilot",
+                    "to_type": "matter",
+                    "with": {
+                      "matter_id": "$input.pilot_ref.matter_id",
+                      "read_mode": "data"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "#work_cycle": {
+                "role": "Repeatedly select immediate work, perform cognition, apply validated decisions, handle waits and controls, and complete the current message.",
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "current_message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "An owned cognitive run becomes progressively advanced until no immediate cognitive work remains or execution must wait.",
+                  "invariants": [
+                    "One current mailbox message is cognitively processed at a time.",
+                    "Satisfied wait groups belong to the same logical run.",
+                    "Controls are applied only at safe points."
+                  ],
+                  "notes": [
+                    "The Python wrapper repeats this section while immediate work remains."
+                  ]
+                },
+                "resolution": {
+                  ">sequence": {
+                    "items": [
+                      {
+                        "#safe_point_controls": {
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "run_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "applied": {
+                                "type": "boolean"
+                              },
+                              "deleted": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "#read_control": {
+                                    "inputs": {
+                                      "params": {
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "run_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "message_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "resolution": {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/mailbox.read",
+                                        "as": "control_read",
+                                        "with": {
+                                          "continuity_id": "$input.continuity_id",
+                                          "priority": "control",
+                                          "run_id": "$input.run_id"
+                                        }
+                                      }
+                                    },
+                                    "role": "Claim the next pending control entry.",
+                                    "transformation_contract": {
+                                      "morphing": "Pending control work becomes claimed by the active run through one guarded mailbox write, one control at a time in message seq order."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#load_control": {
+                                    "inputs": {
+                                      "params": {
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "message_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "action": {
+                                          "type": "string"
+                                        },
+                                        "cascade": {
+                                          "type": "boolean"
+                                        }
+                                      }
+                                    },
+                                    "role": "Load the durable control message referenced by the claimed entry and expose its action and parameters.",
+                                    "transformation_contract": {
+                                      "morphing": "A claimed control message reference becomes the control action and its parameters read from the journal."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#apply_control": {
+                                    "inputs": {
+                                      "params": {
+                                        "action": {
+                                          "type": "string"
+                                        },
+                                        "cascade": {
+                                          "type": "boolean"
+                                        },
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "message_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "applied": {
+                                          "type": "boolean"
+                                        },
+                                        "deleted": {
+                                          "type": "boolean"
+                                        }
+                                      }
+                                    },
+                                    "resolution": {
+                                      ">switch": {
+                                        "cases": [
+                                          {
+                                            "then": {
+                                              "#suspend": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "applied": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Suspend the continuity at the safe point.",
+                                                "transformation_contract": {
+                                                  "morphing": "A running continuity and a suspend control become a suspended continuity."
+                                                }
+                                              }
+                                            },
+                                            "value": "suspend"
+                                          },
+                                          {
+                                            "then": {
+                                              "#resume": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "applied": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Resume a suspended continuity at the safe point.",
+                                                "transformation_contract": {
+                                                  "morphing": "A suspended continuity and a resume control become an activable continuity."
+                                                }
+                                              }
+                                            },
+                                            "value": "resume"
+                                          },
+                                          {
+                                            "then": {
+                                              "#set_intention": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "applied": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Replace current_intention from the control content.",
+                                                "transformation_contract": {
+                                                  "morphing": "A set_intention control becomes a new current_intention."
+                                                }
+                                              }
+                                            },
+                                            "value": "set_intention"
+                                          },
+                                          {
+                                            "then": {
+                                              "#set_pilot": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "applied": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Replace pilot_ref from the control content.",
+                                                "transformation_contract": {
+                                                  "morphing": "A set_pilot control becomes a new pilot_ref."
+                                                }
+                                              }
+                                            },
+                                            "value": "set_pilot"
+                                          },
+                                          {
+                                            "then": {
+                                              "#delete": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "cascade": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "deleted": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "resolution": {
+                                                  "invoke": {
+                                                    "@capacity": "/root/agentic/continuity.delete",
+                                                    "as": "continuity_delete",
+                                                    "with": {
+                                                      "cascade": "$input.cascade",
+                                                      "continuity_id": "$input.continuity_id"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Delegate continuity deletion when a delete control becomes applicable.",
+                                                "transformation_contract": {
+                                                  "morphing": "An applicable delete control becomes explicit deletion through continuity.delete, which also removes the mailbox holding this control."
+                                                }
+                                              }
+                                            },
+                                            "value": "delete"
+                                          }
+                                        ],
+                                        "on": "$input.action"
+                                      }
+                                    },
+                                    "role": "Apply the claimed control: suspend, resume, set_intention, set_pilot, or delete.",
+                                    "transformation_contract": {
+                                      "invariants": [
+                                        "The control is applied only at a safe point.",
+                                        "delete is terminal: it removes the mailbox that holds the control, so the control is never acknowledged."
+                                      ],
+                                      "morphing": "A claimed control becomes an explicit continuity or runtime state transition."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#acknowledge_unless_deleted": {
+                                    "inputs": {
+                                      "params": {
+                                        "action": {
+                                          "type": "string"
+                                        },
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "message_id": {
+                                          "type": "string"
+                                        },
+                                        "run_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "acknowledged": {
+                                          "type": "boolean"
+                                        }
+                                      }
+                                    },
+                                    "resolution": {
+                                      ">if": {
+                                        ">else": {
+                                          "#ack_control": {
+                                            "inputs": {
+                                              "params": {
+                                                "continuity_id": {
+                                                  "type": "string"
+                                                },
+                                                "run_id": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "outputs": {
+                                              "payload": {
+                                                "acknowledged": {
+                                                  "type": "boolean"
+                                                }
+                                              }
+                                            },
+                                            "resolution": {
+                                              "invoke": {
+                                                "@capacity": "/root/agentic/mailbox.ack",
+                                                "as": "control_ack",
+                                                "with": {
+                                                  "continuity_id": "$input.continuity_id",
+                                                  "message_id": "$control_read.payload.message_id",
+                                                  "run_id": "$input.run_id"
+                                                }
+                                              }
+                                            },
+                                            "role": "Acknowledge the control once it has been applied.",
+                                            "transformation_contract": {
+                                              "invariants": [
+                                                "Acknowledgement is delegated to mailbox.ack."
+                                              ],
+                                              "morphing": "An applied claimed control becomes historically consumed."
+                                            }
+                                          }
+                                        },
+                                        ">then": {
+                                          "#terminal_delete": {
+                                            "inputs": {
+                                              "params": {}
+                                            },
+                                            "outputs": {
+                                              "payload": {}
+                                            },
+                                            "role": "End the run after a successful delete without acknowledgement.",
+                                            "transformation_contract": {
+                                              "morphing": "A deleted continuity ends the run; no mailbox remains to acknowledge, and #work_cycle and #settle do not proceed."
+                                            }
+                                          }
+                                        },
+                                        "when": {
+                                          "left": "$input.action",
+                                          "op": "eq",
+                                          "right": "delete"
+                                        }
+                                      }
+                                    },
+                                    "role": "Acknowledge an applied control unless it was a delete.",
+                                    "transformation_contract": {
+                                      "morphing": "An applied non-delete control becomes historically consumed; a delete control ends the run without acknowledgement."
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "role": "At each safe point, claim, apply, and acknowledge pending controls one at a time until none remains, before satisfied wait groups or normal work resume.",
+                          "transformation_contract": {
+                            "invariants": [
+                              "Controls never interrupt an inference, a capacity execution, or an individually atomic Matter mutation.",
+                              "Controls are processed one at a time in message seq order.",
+                              "The cycle read, apply, acknowledge repeats while mailbox.read with priority control returns a control; the repetition is a responsibility of the Python wrapper, not a DSL operator.",
+                              "Satisfied wait groups and normal work resume only after controls are exhausted.",
+                              "After a delete control the run ends immediately: the mailbox is gone, so there is no acknowledgement and neither #work_cycle nor #settle continues."
+                            ],
+                            "morphing": "Pending controls become applied and acknowledged state transitions before any new cognitive work begins."
+                          }
+                        }
+                      },
+                      {
+                        "#select_work": {
+                          "role": "Choose the next satisfied wait result or normal mailbox message available to the active run, once pending controls are exhausted.",
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "run_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "work_kind": {
+                                "type": "string"
+                              },
+                              "message_id": {
+                                "type": "string"
+                              },
+                              "wait_group_id": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "transformation_contract": {
+                            "morphing": "An owned continuity becomes associated with its next immediately processable work item.",
+                            "invariants": [
+                              "Controls are handled beforehand by #safe_point_controls and are never claimed here.",
+                              "Satisfied wait groups resume before unrelated normal messages.",
+                              "Normal mailbox selection is delegated to mailbox.read with priority normal."
+                            ]
+                          },
+                          "resolution": {
+                            "#read_normal": {
+                              "inputs": {
+                                "params": {
+                                  "continuity_id": {
+                                    "type": "string"
+                                  },
+                                  "run_id": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "outputs": {
+                                "payload": {
+                                  "message_id": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "resolution": {
+                                "invoke": {
+                                  "@capacity": "/root/agentic/mailbox.read",
+                                  "as": "mailbox_read",
+                                  "with": {
+                                    "continuity_id": "$input.continuity_id",
+                                    "priority": "normal",
+                                    "run_id": "$input.run_id"
+                                  }
+                                }
+                              },
+                              "role": "Claim the next pending normal mailbox entry when the active run requires new normal work.",
+                              "transformation_contract": {
+                                "morphing": "Pending normal work becomes claimed by the active run through one guarded mailbox write."
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#cognition": {
+                          "role": "Construct the cognitive context, perform LLM inference, and obtain a valid structured pilot decision.",
+                          "inputs": {
+                            "params": {
+                              "active_stimulus": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "validated_output": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "transformation_contract": {
+                            "morphing": "The current cognitive state becomes one validated structured pilot decision.",
+                            "invariants": [
+                              "The LLM receives explicit direction and projected context.",
+                              "No requested effect occurs before validation.",
+                              "At most one correction inference follows an invalid output."
+                            ]
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "#projection": {
+                                    "role": "Build the deterministic continuity view required for inference.",
+                                    "inputs": {
+                                      "params": {
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "projection": {
+                                          "type": "object"
+                                        },
+                                        "mode": {
+                                          "type": "string"
+                                        },
+                                        "budget": {
+                                          "type": "any"
+                                        },
+                                        "default_projection": {
+                                          "_comment": "Optional. Default projection supplied by the caller as a value; absent means an empty default.",
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "projection": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A continuity and deterministic projection definition become a bounded cognitive view."
+                                    },
+                                    "resolution": {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/continuity.project",
+                                        "with": {
+                                          "continuity_id": "$input.continuity_id",
+                                          "projection": "$input.projection",
+                                          "mode": "$input.mode",
+                                          "budget": "$input.budget",
+                                          "default_projection": "$input.default_projection"
+                                        },
+                                        "as": "continuity_projection"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "#build_context": {
+                                    "role": "Compose pilot definition, founding direction, current direction, available capacities, projection, current message, and active stimulus into the canonical LLM request.",
+                                    "inputs": {
+                                      "params": {
+                                        "projection": {
+                                          "type": "object"
+                                        },
+                                        "active_stimulus": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "request": {
+                                          "type": "object"
+                                        },
+                                        "provider": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "The explicit cognitive state becomes a canonical inference request.",
+                                      "invariants": [
+                                        "Context order is pilot_definition with its stable available capacities (the system prefix, marked cache true), then initial_intention, current_intention, continuity_projection, current_message, active stimulus.",
+                                        "initial_intention is always exposed.",
+                                        "current_message remains explicit independently of projection.",
+                                        "The request asks for structured output with request.output.format json_schema. request.output.schema is a strict-compatible projection of /root/agentic/schema/pilot_output generated from that schema: closed objects, free values (parameters, content, intention_update) carried as JSON text. Its style depends on the provider that really answers (pilot_definition.parameters.upstream_provider, else model.provider): for anthropic, which limits union-typed parameters, properties are optional and absent when unused and the schema contains no union; for the other providers every property is required and nullable. The guide appended to the system text states the matching convention (omit or use null). The canonical pilot_output itself is unchanged.",
+                                        "The provider that must answer is exposed beside the request, as the provider declared by the request: /root/llm/infer routes on it without reading the request."
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "#infer": {
+                                    "role": "Delegate cognition to the configured LLM subsystem.",
+                                    "inputs": {
+                                      "params": {
+                                        "request": {
+                                          "type": "object"
+                                        },
+                                        "provider": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "pilot_output": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A canonical cognitive request becomes a structured pilot decision."
+                                    },
+                                    "resolution": {
+                                      ">sequence": {
+                                        "items": [
+                                          {
+                                            "invoke": {
+                                              "@capacity": "/root/llm/infer",
+                                              "as": "pilot_inference",
+                                              "with": {
+                                                "request": "$input.request",
+                                                "provider": "$input.provider"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "#extract_pilot_output": {
+                                              "inputs": {
+                                                "params": {
+                                                  "response": {
+                                                    "type": "object"
+                                                  }
+                                                }
+                                              },
+                                              "outputs": {
+                                                "payload": {
+                                                  "pilot_output": {
+                                                    "type": "object"
+                                                  }
+                                                }
+                                              },
+                                              "role": "Extract the structured pilot_output from the canonical inference response.",
+                                              "transformation_contract": {
+                                                "invariants": [
+                                                  "The pilot_output is read from response.output.content according to the effective output format.",
+                                                  "The runtime never infers missing actions from free text.",
+                                                  "A response whose content is not a structured pilot_output is a validation failure, not an implicit action.",
+                                                  "The provider-facing projection is reversed here: nulls of absent optional values are dropped and free JSON text is decoded, so that validation always applies to the canonical pilot_output. A textual answer is read tolerantly (plain JSON, fenced JSON, or the JSON object it contains)."
+                                                ],
+                                                "morphing": "The response read from $pilot_inference.payload.response becomes a structured pilot_output."
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "#validation": {
+                                    "role": "Validate pilot output and perform at most one correction inference when necessary.",
+                                    "inputs": {
+                                      "params": {
+                                        "pilot_output": {
+                                          "type": "object"
+                                        },
+                                        "request": {
+                                          "type": "object"
+                                        },
+                                        "provider": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "validated_output": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A raw pilot decision becomes one validated executable decision or an explicit failure.",
+                                      "invariants": [
+                                        "An empty output is invalid.",
+                                        "projection_request is exclusive with intentions and wait_group.",
+                                        "At most one wait_group may be created by one output.",
+                                        "Only one correction inference is allowed.",
+                                        "A wait_group referencing an intention whose await_response is false, or an intention absent from the same output, is invalid."
+                                      ]
+                                    },
+                                    "resolution": {
+                                      "#correct_if_invalid": {
+                                        "role": "Return validation errors to the same pilot context for one structured correction attempt.",
+                                        "inputs": {
+                                          "params": {
+                                            "request": {
+                                              "type": "object"
+                                            },
+                                            "provider": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "outputs": {
+                                          "payload": {
+                                            "pilot_output": {
+                                              "type": "object"
+                                            }
+                                          }
+                                        },
+                                        "transformation_contract": {
+                                          "morphing": "An invalid pilot decision and its validation errors become one corrected pilot decision."
+                                        },
+                                        "resolution": {
+                                          ">sequence": {
+                                            "items": [
+                                              {
+                                                "invoke": {
+                                                  "@capacity": "/root/llm/infer",
+                                                  "as": "correction_inference",
+                                                  "with": {
+                                                    "request": "$input.request",
+                                                    "provider": "$input.provider"
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "#extract_pilot_output": {
+                                                  "inputs": {
+                                                    "params": {
+                                                      "response": {
+                                                        "type": "object"
+                                                      }
+                                                    }
+                                                  },
+                                                  "outputs": {
+                                                    "payload": {
+                                                      "pilot_output": {
+                                                        "type": "object"
+                                                      }
+                                                    }
+                                                  },
+                                                  "role": "Extract the corrected structured pilot_output from the canonical inference response.",
+                                                  "transformation_contract": {
+                                                    "invariants": [
+                                                      "The pilot_output is read from response.output.content according to the effective output format.",
+                                                      "The runtime never infers missing actions from free text.",
+                                                      "A response whose content is not a structured pilot_output is a validation failure, not an implicit action."
+                                                    ],
+                                                    "morphing": "The response read from $correction_inference.payload.response becomes a structured pilot_output."
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#apply_decision": {
+                          "role": "Apply a validated pilot decision in its deterministic architectural order.",
+                          "inputs": {
+                            "params": {
+                              "validated_output": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "waiting": {
+                                "type": "boolean"
+                              },
+                              "execution_result": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "transformation_contract": {
+                            "morphing": "A validated cognitive decision becomes a sequence of explicit Brique effects.",
+                            "invariants": [
+                              "Application order is intention_update, projection_request, wait_group, intentions, messages: a wait group is materialized before the awaited intentions it references are invoked.",
+                              "Successful earlier effects remain real when a later effect fails."
+                            ]
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "#update_intention": {
+                                    "role": "Apply and trace an explicit current_intention update when requested.",
+                                    "inputs": {
+                                      "params": {
+                                        "intention_update": {
+                                          "type": "any"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "updated": {
+                                          "type": "boolean"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "An explicit cognitive redirection becomes the new durable current_intention.",
+                                      "invariants": [
+                                        "initial_intention is never modified."
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "#projection_request": {
+                                    "role": "Handle a pilot-requested temporary projection change and return to cognition before other decision effects.",
+                                    "inputs": {
+                                      "params": {
+                                        "projection_request": {
+                                          "type": "object"
+                                        },
+                                        "default_projection": {
+                                          "_comment": "Optional. Default projection supplied by the caller as a value; absent means an empty default.",
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "projection": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A requested projection change becomes a new deterministic cognitive view for the next inference.",
+                                      "invariants": [
+                                        "Projection requests use continuity.project.",
+                                        "A projection request does not coexist with intentions or wait_group."
+                                      ]
+                                    },
+                                    "resolution": {
+                                      "invoke": {
+                                        "@capacity": "/root/agentic/continuity.project",
+                                        "with": {
+                                          "continuity_id": "$input.continuity_id",
+                                          "projection": "$input.projection_request.projection",
+                                          "mode": "$input.projection_request.mode",
+                                          "budget": "$input.projection_request.budget",
+                                          "default_projection": "$input.default_projection"
+                                        },
+                                        "as": "requested_projection"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "#create_wait_group": {
+                                    "inputs": {
+                                      "params": {
+                                        "wait_group": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "wait_group_id": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "role": "Materialize the explicit wait group BEFORE any intention it references is invoked, so that no Response can arrive without a wait group to capture it.",
+                                    "transformation_contract": {
+                                      "invariants": [
+                                        "The wait is durable in runtime.",
+                                        "At most one new wait group is created by one pilot output.",
+                                        "Every expected item of type intention references an intention of the same pilot output whose await_response is true.",
+                                        "An intention whose await_response is false never appears in wait_group.expected."
+                                      ],
+                                      "morphing": "A validated asynchronous expectation becomes an active runtime wait group, created before the awaited intentions it references are invoked."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#execute_intentions": {
+                                    "inputs": {
+                                      "params": {
+                                        "continuity_id": {
+                                          "type": "string"
+                                        },
+                                        "intentions": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "items": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    },
+                                    "resolution": {
+                                      ">for_each": {
+                                        ">do": {
+                                          ">if": {
+                                            ">else": {
+                                              "#invoke_fire_and_forget": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "intention": {
+                                                      "type": "object"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {}
+                                                },
+                                                "resolution": {
+                                                  "invoke": {
+                                                    "@capacity": "$intention.target_capacity",
+                                                    "await_response": false,
+                                                    "with": {
+                                                      "parameters": "$intention.parameters"
+                                                    }
+                                                  }
+                                                },
+                                                "role": "Invoke an intention without expecting any result.",
+                                                "transformation_contract": {
+                                                  "invariants": [
+                                                    "No return route, correlation or wait group is attached."
+                                                  ],
+                                                  "morphing": "An intention with await_response false becomes a non-blocking invocation; no Response is tracked."
+                                                }
+                                              }
+                                            },
+                                            ">then": {
+                                              "#invoke_awaited": {
+                                                "inputs": {
+                                                  "params": {
+                                                    "continuity_id": {
+                                                      "type": "string"
+                                                    },
+                                                    "intention": {
+                                                      "type": "object"
+                                                    }
+                                                  }
+                                                },
+                                                "outputs": {
+                                                  "payload": {
+                                                    "response": {
+                                                      "type": "object"
+                                                    }
+                                                  }
+                                                },
+                                                "resolution": {
+                                                  ">sequence": {
+                                                    "items": [
+                                                      {
+                                                        "invoke": {
+                                                          "@capacity": "$intention.target_capacity",
+                                                          "as": "awaited_response",
+                                                          "await_response": true,
+                                                          "with": {
+                                                            "parameters": "$intention.parameters"
+                                                          }
+                                                        }
+                                                      },
+                                                      {
+                                                        "#record_response": {
+                                                          "inputs": {
+                                                            "params": {
+                                                              "continuity_id": {
+                                                                "type": "string"
+                                                              },
+                                                              "intention": {
+                                                                "type": "object"
+                                                              },
+                                                              "response": {
+                                                                "type": "object"
+                                                              }
+                                                            }
+                                                          },
+                                                          "outputs": {
+                                                            "payload": {
+                                                              "message_id": {
+                                                                "type": "string"
+                                                              },
+                                                              "wake": {
+                                                                "type": "boolean"
+                                                              }
+                                                            }
+                                                          },
+                                                          "resolution": {
+                                                            ">sequence": {
+                                                              "items": [
+                                                                {
+                                                                  "#build_response_message": {
+                                                                    "inputs": {
+                                                                      "params": {
+                                                                        "continuity_id": {
+                                                                          "type": "string"
+                                                                        },
+                                                                        "intention": {
+                                                                          "type": "object"
+                                                                        },
+                                                                        "response": {
+                                                                          "type": "object"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    "outputs": {
+                                                                      "payload": {
+                                                                        "message": {
+                                                                          "type": "object"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    "role": "Build the canonical capacity_response Message from the Response of an awaited invoke and the intention it answers.",
+                                                                    "transformation_contract": {
+                                                                      "invariants": [
+                                                                        "id derives deterministically from intention.id, so that a repeated delivery of the same Response is an idempotent retry in mailbox.send.",
+                                                                        "from is the addressed target capacity and to is the emitting continuity.",
+                                                                        "kind is capacity_response and content.response is the canonical Brique Response, unchanged.",
+                                                                        "correlation.intention_id is intention.id, matching expected.ref of the wait group.",
+                                                                        "created_at is set at construction; seq is never provided because mailbox.send assigns it."
+                                                                      ],
+                                                                      "morphing": "A Response and its pilot_intention become one canonical Message of kind capacity_response."
+                                                                    }
+                                                                  }
+                                                                },
+                                                                {
+                                                                  "#deliver_response": {
+                                                                    "inputs": {
+                                                                      "params": {
+                                                                        "continuity_id": {
+                                                                          "type": "string"
+                                                                        },
+                                                                        "message": {
+                                                                          "type": "object"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    "outputs": {
+                                                                      "payload": {
+                                                                        "message_id": {
+                                                                          "type": "string"
+                                                                        },
+                                                                        "wake": {
+                                                                          "type": "boolean"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    "resolution": {
+                                                                      "invoke": {
+                                                                        "@capacity": "/root/agentic/mailbox.send",
+                                                                        "as": "response_delivery",
+                                                                        "with": {
+                                                                          "continuity_id": "$input.continuity_id",
+                                                                          "message": "$input.message"
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                    "role": "Deliver the constructed capacity_response Message through mailbox.send.",
+                                                                    "transformation_contract": {
+                                                                      "invariants": [
+                                                                        "Delivery is delegated to mailbox.send."
+                                                                      ],
+                                                                      "morphing": "A capacity_response Message becomes a durable event of the emitting continuity, captured by the matching wait group or admitted as a normal message."
+                                                                    }
+                                                                  }
+                                                                }
+                                                              ]
+                                                            }
+                                                          },
+                                                          "role": "Associate the Response received from an awaited invoke with its intention and deliver it as a capacity_response message of the emitting continuity.",
+                                                          "transformation_contract": {
+                                                            "invariants": [
+                                                              "The Response is first transformed into a canonical Message of kind capacity_response whose content carries the Response and whose correlation.intention_id is the invoked intention id; the raw Response is never sent to mailbox.send.",
+                                                              "correlation.intention_id is the id of the pilot_intention that was invoked, matching expected.ref of the wait group.",
+                                                              "Delivery is delegated to mailbox.send, which captures the message into the active wait group or admits it as a normal message."
+                                                            ],
+                                                            "morphing": "The Response of an awaited invoke becomes a capacity_response message correlated to its intention_id."
+                                                          }
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "role": "Invoke an intention whose Response is expected and record the Response.",
+                                                "transformation_contract": {
+                                                  "morphing": "An intention with await_response true becomes an invocation whose Response is recorded against its intention_id."
+                                                }
+                                              }
+                                            },
+                                            "when": {
+                                              "left": "$intention.await_response",
+                                              "op": "eq",
+                                              "right": true
+                                            }
+                                          }
+                                        },
+                                        "as": "intention",
+                                        "collection": "$input.intentions",
+                                        "on_error": "fail"
+                                      }
+                                    },
+                                    "role": "Invoke every explicitly addressed Brique capacity requested in intentions, either fire-and-forget or with the Response awaited, according to each intention's await_response.",
+                                    "transformation_contract": {
+                                      "invariants": [
+                                        "Every target capacity comes from the validated intention.",
+                                        "pilot.activate never substitutes a different target implicitly.",
+                                        "Already successful invocations are never automatically replayed.",
+                                        "await_response false: the invoke is non-blocking and no result is expected, tracked or delivered.",
+                                        "await_response true: the Response is expected; its association with the intention goes through correlation.intention_id equal to the pilot_intention id.",
+                                        "Any wait group referencing an awaited intention is materialized before that intention is invoked.",
+                                        "A Response matching no active wait group enters as a normal message through mailbox.send and is never silently lost.",
+                                        "Each target capacity is addressed in the family given by target_type of its pilot_intention (user when absent), so that engine-native capacities are reachable."
+                                      ],
+                                      "morphing": "A collection of validated pilot intentions becomes invocations of their addressed Brique capacities: non-blocking without result when await_response is false, with an expected Response when it is true."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#send_messages": {
+                                    "role": "Deliver every addressed pilot message through the destination continuity mailbox.",
+                                    "inputs": {
+                                      "params": {
+                                        "messages": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "items": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A collection of pilot-addressed messages becomes durable incoming events of their destination continuities.",
+                                      "invariants": [
+                                        "Cross-continuity messages are always delegated to mailbox.send.",
+                                        "pilot.activate never directly mutates another continuity's message stream.",
+                                        "The destination is addressed only by the message to field; the Matters of the target continuity are resolved by the executing layer from the Matter ID convention, never exposed to cognition."
+                                      ]
+                                    },
+                                    "resolution": {
+                                      ">for_each": {
+                                        "collection": "$input.messages",
+                                        "as": "message",
+                                        "on_error": "fail",
+                                        ">do": {
+                                          "invoke": {
+                                            "@capacity": "/root/agentic/mailbox.send",
+                                            "with": {
+                                              "continuity_id": "$message.to",
+                                              "message": "$message"
+                                            },
+                                            "as": "message_send"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#resume": {
+                          "role": "Handle asynchronous wait resumptions and partial execution failures as explicit cognitive stimuli.",
+                          "inputs": {
+                            "params": {
+                              "execution_result": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "resume_required": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "transformation_contract": {
+                            "morphing": "A wait result or partial execution failure becomes an explicit continuation of the same cognitive chain.",
+                            "invariants": [
+                              "Satisfied wait groups resume under the same logical run.",
+                              "Completed effects are never replayed during recovery."
+                            ]
+                          },
+                          "resolution": {
+                            ">sequence": {
+                              "items": [
+                                {
+                                  "#wait_resume": {
+                                    "role": "Resume cognition when an active wait group reaches its satisfaction condition.",
+                                    "inputs": {
+                                      "params": {}
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "active_wait_result": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A satisfied active wait group becomes a one-time active_wait_result stimulus."
+                                    }
+                                  }
+                                },
+                                {
+                                  "#execution_failure_resume": {
+                                    "role": "Return partial execution failure to the LLM for explicit recovery decision.",
+                                    "inputs": {
+                                      "params": {
+                                        "request": {
+                                          "type": "object"
+                                        },
+                                        "provider": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "outputs": {
+                                      "payload": {
+                                        "pilot_output": {
+                                          "type": "object"
+                                        }
+                                      }
+                                    },
+                                    "transformation_contract": {
+                                      "morphing": "A partial execution failure becomes a new explicit cognitive decision."
+                                    },
+                                    "resolution": {
+                                      ">sequence": {
+                                        "items": [
+                                          {
+                                            "invoke": {
+                                              "@capacity": "/root/llm/infer",
+                                              "as": "execution_failure_inference",
+                                              "with": {
+                                                "request": "$input.request",
+                                                "provider": "$input.provider"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "#extract_pilot_output": {
+                                              "inputs": {
+                                                "params": {
+                                                  "response": {
+                                                    "type": "object"
+                                                  }
+                                                }
+                                              },
+                                              "outputs": {
+                                                "payload": {
+                                                  "pilot_output": {
+                                                    "type": "object"
+                                                  }
+                                                }
+                                              },
+                                              "role": "Extract the structured pilot_output decided after an execution failure from the canonical inference response.",
+                                              "transformation_contract": {
+                                                "invariants": [
+                                                  "The pilot_output is read from response.output.content according to the effective output format.",
+                                                  "The runtime never infers missing actions from free text.",
+                                                  "A response whose content is not a structured pilot_output is a validation failure, not an implicit action."
+                                                ],
+                                                "morphing": "The response read from $execution_failure_inference.payload.response becomes a structured pilot_output."
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "#complete": {
+                          "role": "Acknowledge a successfully completed current message or release it when treatment must be abandoned.",
+                          "inputs": {
+                            "params": {
+                              "continuity_id": {
+                                "type": "string"
+                              },
+                              "message_id": {
+                                "type": "string"
+                              },
+                              "run_id": {
+                                "type": "string"
+                              },
+                              "chain_completed": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "outputs": {
+                            "payload": {
+                              "completed": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "transformation_contract": {
+                            "morphing": "A claimed current mailbox message becomes either historically consumed or safely pending again.",
+                            "invariants": [
+                              "Messages are acknowledged only when their whole cognitive chain is complete.",
+                              "Release never means rollback.",
+                              "Acknowledgement and release are mutually exclusive outcomes: ack on complete success, release on abandonment before completion."
+                            ]
+                          },
+                          "resolution": {
+                            ">if": {
+                              ">else": {
+                                "#release": {
+                                  "inputs": {
+                                    "params": {
+                                      "continuity_id": {
+                                        "type": "string"
+                                      },
+                                      "message_id": {
+                                        "type": "string"
+                                      },
+                                      "run_id": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "outputs": {
+                                    "payload": {
+                                      "released": {
+                                        "type": "boolean"
+                                      }
+                                    }
+                                  },
+                                  "resolution": {
+                                    "invoke": {
+                                      "@capacity": "/root/agentic/mailbox.release",
+                                      "as": "message_release",
+                                      "with": {
+                                        "continuity_id": "$input.continuity_id",
+                                        "message_id": "$input.message_id",
+                                        "run_id": "$input.run_id"
+                                      }
+                                    }
+                                  },
+                                  "role": "Return an incompletely processed claimed mailbox entry to pending state through mailbox.release.",
+                                  "transformation_contract": {
+                                    "morphing": "An abandoned claimed mailbox entry becomes pending again without reverting real effects."
+                                  }
+                                }
+                              },
+                              ">then": {
+                                "#ack": {
+                                  "inputs": {
+                                    "params": {
+                                      "continuity_id": {
+                                        "type": "string"
+                                      },
+                                      "message_id": {
+                                        "type": "string"
+                                      },
+                                      "run_id": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "outputs": {
+                                    "payload": {
+                                      "acknowledged": {
+                                        "type": "boolean"
+                                      }
+                                    }
+                                  },
+                                  "resolution": {
+                                    "invoke": {
+                                      "@capacity": "/root/agentic/mailbox.ack",
+                                      "as": "message_ack",
+                                      "with": {
+                                        "continuity_id": "$input.continuity_id",
+                                        "message_id": "$input.message_id",
+                                        "run_id": "$input.run_id"
+                                      }
+                                    }
+                                  },
+                                  "role": "Acknowledge a fully completed current mailbox message through mailbox.ack.",
+                                  "transformation_contract": {
+                                    "morphing": "A fully completed claimed mailbox entry becomes historically consumed."
+                                  }
+                                }
+                              },
+                              "when": {
+                                "left": "$input.chain_completed",
+                                "op": "eq",
+                                "right": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "#settle": {
+                "role": "Determine the stable state of the continuity after all immediately processable cognitive work has been considered.",
+                "inputs": {
+                  "params": {}
+                },
+                "outputs": {
+                  "payload": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "transformation_contract": {
+                  "morphing": "An advanced cognitive run becomes further running, waiting, suspended, deleted, or idle.",
+                  "invariants": [
+                    "running to idle is published by one runtime write guarded by expected_revision, which also removes run_id, after the final immediate-work check.",
+                    "Pending controls are considered before ownership is released.",
+                    "Unresolved active waits preserve waiting state.",
+                    "Suspension removes active run ownership.",
+                    "After publishing idle, the mailbox and the runtime are re-read: if the runtime is still idle and activable work is present, the run attempts the idle to running acquisition again with a new run_id and continues; otherwise it stays idle.",
+                    "The second check happens after idle is published, which closes the lost wake-up window against a concurrent mailbox.send; the idle to running acquisition is guarded by expected_revision, so a single activation wins.",
+                    "If another activation has already won, nothing more is done."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

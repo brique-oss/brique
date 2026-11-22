@@ -18,7 +18,7 @@ import (
 	"brique_engine/spark/hosts/browser/host"
 )
 
-var chromeExtensionOrigin = regexp.MustCompile(`^chrome-extension://[a-p]{32}/$`)
+var chromeExtensionOrigin = regexp.MustCompile(`^chrome-extension://([a-p]{32})/$`)
 
 // firefoxExtensionID must equal launcher.FirefoxExtensionID (checked by a test);
 // the native host library does not import the launcher: this command composes them.
@@ -40,10 +40,26 @@ func main() {
 		os.Exit(1)
 	}
 	if err := browserhost.Run(browserhost.Options{Input: os.Stdin, Output: os.Stdout,
-		Resolver: resolver, RuntimeDirectory: *runtimeDirectory}); err != nil {
+		Resolver: resolver, RuntimeDirectory: *runtimeDirectory, ExtensionID: extensionIDFromArgs(flag.Args())}); err != nil {
 		fmt.Fprintln(os.Stderr, "Brique browser host unavailable.")
 		os.Exit(1)
 	}
+}
+
+// extensionIDFromArgs reads which extension started this host: the owner chose, for each extension, the
+// instances it reaches. Chrome passes the origin of the extension (chrome-extension://<id>/); Firefox
+// passes the add-on id after the path of the manifest. It selects nothing by itself: the owner's
+// association does.
+func extensionIDFromArgs(args []string) string {
+	if len(args) == 2 && args[1] == firefoxExtensionID {
+		return firefoxExtensionID
+	}
+	if len(args) >= 1 {
+		if match := chromeExtensionOrigin.FindStringSubmatch(args[0]); len(match) == 2 {
+			return match[1]
+		}
+	}
+	return ""
 }
 
 // Chrome appends the allowed extension origin and, on Windows, the native

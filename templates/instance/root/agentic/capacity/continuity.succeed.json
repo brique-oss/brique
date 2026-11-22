@@ -1,0 +1,338 @@
+{
+  "brique": {
+    "cap_name": "continuity.succeed",
+    "kind": "interpreted",
+    "wrapper": "agentic_core",
+    "rel_ctx": "",
+    "lang": "python"
+  },
+  "objective": {
+    "name": "continuity.succeed",
+    "description": "Continues a continuity in a new one whose first message is a summary, archives the source and moves its pending messages to the successor."
+  },
+  "functional": {
+    "#root": {
+      "role": "Compact a continuity by succession: the history is kept as an archive and the work goes on in a new continuity that starts from a summary.",
+      "inputs": {
+        "params": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "any",
+            "_comment": "Required. Synthesis written for the successor: a non-empty string or object."
+          },
+          "run_id": {
+            "type": "string",
+            "_comment": "Optional. The run that owns the continuity when the succession is decided during that run."
+          }
+        }
+      },
+      "outputs": {
+        "payload": {
+          "continuity_id": {
+            "type": "string"
+          },
+          "successor_id": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "transferred": {
+            "type": "array"
+          }
+        },
+        "@matter": {
+          "modify": {
+            "continuity": {
+              "schema": "/root/agentic/schema/continuity_data"
+            },
+            "mailbox": {
+              "schema": "/root/agentic/schema/mailbox_data"
+            },
+            "parent": {
+              "schema": "/root/agentic/schema/continuity_data"
+            }
+          },
+          "new": {
+            "successor": {
+              "schema": "/root/agentic/schema/continuity_data"
+            },
+            "successor_journal": {
+              "schema": "/root/agentic/schema/message"
+            }
+          }
+        }
+      },
+      "effects": {
+        "successor": "Creates the successor continuity, mailbox and runtime Matters and records the summary as its first message.",
+        "source": "Names the successor, hands over its pending messages and becomes archived; its journal is untouched.",
+        "parent": "Replaces the source by the successor in its children collection."
+      },
+      "transformation_contract": {
+        "morphing": "A continuity and a summary become an archived continuity and its active successor.",
+        "invariants": [
+          "A continuity with an active wait group cannot succeed.",
+          "Only an idle continuity, or the run that owns it, can succeed.",
+          "The successor identifier derives from the lineage: \u003clineage_id\u003e_g\u003cgeneration + 1\u003e.",
+          "The successor opens with its own cognitive frame (written by continuity.create); the summary is the first message after it and is never a stimulus.",
+          "successor_id is written on the source before any pending message is transferred, so no message can be stranded in the source.",
+          "Pending messages are transferred in seq order with their identifiers preserved, then consumed at the source.",
+          "The archive status is the last write and the commit point; the journal of the source is never modified.",
+          "The operation is a recoverable multi-Matter operation: every step is idempotent and relaunching it completes the missing steps; no rollback is promised.",
+          "Every write of a document Matter is guarded by expected_revision and every journal append by expected_line_count, and critical sections are short locks by continuity_id never held across continuity.create.",
+          "A lineage has exactly one active continuity once the operation completes."
+        ],
+        "success": [
+          "The response carries the source identifier, the successor identifier, archived true and the identifiers of the transferred messages."
+        ],
+        "failure": [
+          "Fails when summary is absent or empty.",
+          "Fails when the continuity does not exist.",
+          "Fails when the continuity has an active wait group.",
+          "Fails when the continuity is not idle and no run_id is given, or when run_id is not its owner.",
+          "Fails with a consistency failure when an existing continuity contradicts the planned successor or the source names another successor.",
+          "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted."
+        ],
+        "notes": [
+          "Executed by the agentic_core Python wrapper.",
+          "The creation of the successor is delegated to continuity.create and the acceptance of transferred messages to mailbox.send.",
+          "The concurrency model of agentic_core is defined once in the document agentic_core_concurrency_model; the succession is designed in the document continuity_succession.",
+          "Implementation constraint: the pending messages to transfer are read from the in-memory object of the source; the summary and the transferred messages are appended to the journal of the successor, whose object is updated the same way. The object of the archived source may be evicted and is rebuilt on demand."
+        ]
+      },
+      "resolution": {
+        "\u003esequence": {
+          "items": [
+            {
+              "#validate": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "any"
+                    },
+                    "run_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "source": {
+                      "type": "object"
+                    },
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Check that the source continuity can succeed.",
+                "transformation_contract": {
+                  "morphing": "A continuity identifier and a summary become the validated source state and the planned successor identifier.",
+                  "invariants": [
+                    "The successor identifier derives from the source lineage and generation: \u003clineage_id\u003e_g\u003cgeneration + 1\u003e.",
+                    "An already archived source with a successor is an idempotent success."
+                  ],
+                  "failure": [
+                    "Fails if summary is absent or empty.",
+                    "Fails if the continuity does not exist.",
+                    "Fails if the runtime holds an active wait group.",
+                    "Fails if the runtime is not idle and no run_id is given.",
+                    "Fails if run_id is not the run owning the continuity."
+                  ]
+                }
+              }
+            },
+            {
+              "#create_successor": {
+                "inputs": {
+                  "params": {
+                    "source": {
+                      "type": "object"
+                    },
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Create the continuity that continues the source.",
+                "transformation_contract": {
+                  "morphing": "A source continuity state becomes a new continuity carrying the same founding intention, pilot and parent.",
+                  "invariants": [
+                    "The successor keeps initial_intention, pilot_ref and parent_id, and starts from the current_intention of the source.",
+                    "The successor records predecessor_id, lineage_id and generation + 1.",
+                    "The creation is delegated to continuity.create, which is idempotent."
+                  ],
+                  "failure": [
+                    "Fails with a consistency failure when an existing continuity contradicts the planned successor."
+                  ]
+                }
+              }
+            },
+            {
+              "#record_summary": {
+                "inputs": {
+                  "params": {
+                    "successor_id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "any"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "message_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "role": "Make the summary the first message of the successor after its cognitive frame.",
+                "transformation_contract": {
+                  "morphing": "A summary becomes the first journal message of the successor, with a deterministic identifier.",
+                  "invariants": [
+                    "The summary is a journal entry of kind summary with no mailbox entry: it is history, never a stimulus.",
+                    "Its sender is the source continuity."
+                  ]
+                }
+              }
+            },
+            {
+              "#switch_routing": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "switched": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Declare the successor on the source.",
+                "transformation_contract": {
+                  "morphing": "A source continuity becomes a continuity that names its successor.",
+                  "invariants": [
+                    "successor_id is written on the source before any pending message is transferred: from then on mailbox.send redirects to the successor.",
+                    "The write is guarded by expected_revision and recomputed from a fresh read on conflict."
+                  ],
+                  "failure": [
+                    "Fails with a consistency failure when the source already names another successor."
+                  ]
+                }
+              }
+            },
+            {
+              "#transfer_pending": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "transferred": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "role": "Move the pending messages of the source to the successor.",
+                "transformation_contract": {
+                  "morphing": "The pending mailbox entries of the source become pending mailbox entries of the successor.",
+                  "invariants": [
+                    "Messages are transferred in seq order with their identifiers preserved, so a repeated transfer is an idempotent retry.",
+                    "Each transferred entry is consumed at the source after its acceptance by the successor.",
+                    "Claimed entries are never transferred: they belong to a run."
+                  ]
+                }
+              }
+            },
+            {
+              "#relink_parent": {
+                "inputs": {
+                  "params": {
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "continuity_id": {
+                      "type": "string"
+                    },
+                    "successor_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "relinked": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Make the parent point to the active continuity of the lineage.",
+                "transformation_contract": {
+                  "morphing": "A parent children collection becomes the same collection with the successor in place of the source.",
+                  "invariants": [
+                    "The parent gains the successor id and loses the source id; both operations are idempotent.",
+                    "Nothing happens when the source has no parent."
+                  ]
+                }
+              }
+            },
+            {
+              "#archive": {
+                "inputs": {
+                  "params": {
+                    "continuity_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "outputs": {
+                  "payload": {
+                    "archived": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "role": "Archive the source: the commit point of the succession.",
+                "transformation_contract": {
+                  "morphing": "A source continuity with a successor becomes an archived, read-only continuity.",
+                  "invariants": [
+                    "The archive status is the last write of the succession.",
+                    "The source journal is never modified by the succession."
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "subjective": {}
+}

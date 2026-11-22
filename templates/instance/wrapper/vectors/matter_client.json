@@ -1,0 +1,59 @@
+{
+  "description": "The semantic Matter client of the wrappers: how a matter.read payload is understood, how journal lines are parsed and written, when an append goes through a lease, and the pause between two attempts of a guarded write.",
+  "substance": [
+    {"name": "inline text", "data": {"kind": "inline", "bytes": "{\"a\":1}"}, "result": {"kind": "inline", "text": "{\"a\":1}"}},
+    {"name": "inline without kind", "data": {"bytes": "x"}, "result": {"kind": "inline", "text": "x"}},
+    {"name": "lease nested under http", "data": {"kind": "http", "http": {"base_url": "http://127.0.0.1:5000", "path": "/substance/ab", "tok": "t1"}}, "result": {"kind": "lease", "url": "http://127.0.0.1:5000/substance/ab?tok=t1"}},
+    {"name": "lease flat", "data": {"kind": "http", "base_url": "http://127.0.0.1:5000", "path": "/substance/ab", "tok": "t2"}, "result": {"kind": "lease", "url": "http://127.0.0.1:5000/substance/ab?tok=t2"}},
+    {"name": "token is url encoded", "data": {"kind": "http", "http": {"base_url": "http://h", "path": "/s", "tok": "a/b+c="}}, "result": {"kind": "lease", "url": "http://h/s?tok=a%2Fb%2Bc%3D"}},
+    {"name": "a trailing slash of the base is dropped", "data": {"kind": "http", "http": {"base_url": "http://h/", "path": "/s", "tok": "t"}}, "result": {"kind": "lease", "url": "http://h/s?tok=t"}},
+    {"name": "lease without token", "data": {"kind": "http", "http": {"base_url": "http://h", "path": "/s"}}, "error": "malformed_lease"},
+    {"name": "no data", "data": null, "error": "no_substance"},
+    {"name": "data is not an object", "data": "text", "error": "no_substance"},
+    {"name": "inline bytes are not text", "data": {"kind": "inline", "bytes": 12}, "error": "not_text"}
+  ],
+  "revision": [
+    {"brique": {"revision": 12}, "revision": 12},
+    {"brique": {"revision": "1790000000000000001"}, "revision": 1790000000000000001},
+    {"brique": {"revision": "abc"}, "revision": 0},
+    {"brique": {}, "revision": 0},
+    {"brique": null, "revision": 0}
+  ],
+  "lines": [
+    {"name": "empty", "text": "", "lines": []},
+    {"name": "null", "text": null, "lines": []},
+    {"name": "two lines", "text": "{\"a\":1}\n{\"b\":2}\n", "lines": [{"a": 1}, {"b": 2}]},
+    {"name": "blank lines are skipped", "text": "{\"a\":1}\n\n   \n{\"b\":2}", "lines": [{"a": 1}, {"b": 2}]},
+    {"name": "a line that is not json", "text": "{\"a\":1}\nnope\n", "error": "invalid_line"},
+    {"name": "a line that is not an object", "text": "[1,2]\n", "error": "invalid_line"},
+    {"name": "text is not a string", "text": 5, "error": "not_text", "unrepresentable_in": ["cpp"]}
+  ],
+  "dump_lines": [
+    {"name": "compact, one per line, LF-ended", "lines": [{"a": 1}, {"b": "x"}], "text": "{\"a\":1}\n{\"b\":\"x\"}\n"},
+    {"name": "no escaping of html or unicode", "lines": [{"k": "<a & b> é €"}], "text": "{\"k\":\"<a & b> é €\"}\n"},
+    {"name": "nothing", "lines": [], "text": ""}
+  ],
+  "append": {
+    "inline_max_bytes": 245760,
+    "cases": [
+      {"bytes": 0, "mode": "inline"},
+      {"bytes": 245760, "mode": "inline"},
+      {"bytes": 245761, "mode": "lease"}
+    ]
+  },
+  "guarded_write_pause": {
+    "base_ms": 2,
+    "cap_ms": 50,
+    "cases": [
+      {"attempt": 0, "max_ms": 2},
+      {"attempt": 1, "max_ms": 4},
+      {"attempt": 4, "max_ms": 32},
+      {"attempt": 5, "max_ms": 50},
+      {"attempt": 40, "max_ms": 50}
+    ]
+  },
+  "write_params": [
+    {"expected_revision": 1790000000000000001, "param": "1790000000000000001"},
+    {"expected_revision": null, "param": null}
+  ]
+}

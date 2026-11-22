@@ -83,13 +83,16 @@
     "vscode:deploy": "npm run vscode:package && npm run vscode:install",
     "start": "node dist/spark/index.js",
     "start:sandbox": "node dist/spark/index.js spark/test/sandbox/root/context.json",
-    "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts spark/test/relay.test.ts spark/test/local-discovery.test.ts spark/test/web-publication.test.ts spark/test/authority-switch.test.ts spark/test/browser-bridge-protocol.test.ts spark/test/browser-extension-protocol.test.ts spark/test/browser-extension-service-worker.test.ts",
+    "test:spark": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test spark/test/spark.test.ts spark/test/source-hygiene.test.ts spark/test/relay.test.ts spark/test/local-discovery.test.ts spark/test/web-publication.test.ts spark/test/authority-switch.test.ts spark/test/browser-bridge-protocol.test.ts spark/test/browser-extension-protocol.test.ts spark/test/browser-extension-service-worker.test.ts spark/test/browser-extension-relay.test.ts",
     "test:brique-editor": "node --experimental-strip-types --loader ./spark/test/ts-resolve-loader.mjs --test briqueEditorUI/Brique_Substrate/test/brique-substrate.test.ts briqueEditorUI/spaces/Projection/Flow/SectionFlow/flowRefs.test.ts briqueEditorUI/spaces/shared/hoverPosition.test.ts briqueEditorUI/spaces/OperationalState/RuntimeSnapshot/interfaceQueue.test.ts",
     "benchmark:matter": "cd engine && go test ./matter -run '^$' -bench 'BenchmarkMatter(DataPlaneRead|ControlPlane)$' -benchmem -benchtime=2s -count=3",
     "qualify:matter-proxy": "node scripts/qualify-matter-proxy.mjs",
     "campaign:matter-m4": "node scripts/campaign/matter-proxy-m4.mjs",
     "campaign:browser-a2a": "node scripts/campaign/browser-a2a.mjs",
-    "test:deployment": "node --test scripts/qualify-matter-proxy.test.mjs scripts/build-runtime.test.mjs",
-    "start:mcp": "node scripts/start-brique-instance-mcp.mjs"
+    "test:deployment": "node --test scripts/qualify-matter-proxy.test.mjs scripts/build-runtime.test.mjs scripts/setup.test.mjs scripts/shortcut.test.mjs",
+    "start:mcp": "node scripts/start-brique-instance-mcp.mjs",
+    "setup": "node scripts/setup.mjs",
+    "launcher": "node scripts/start-launcher.mjs",
+    "launcher:shortcut": "node scripts/setup.mjs --shortcut-only"
   }
 }
