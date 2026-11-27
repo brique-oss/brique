@@ -22,10 +22,18 @@ package execution
 // and only if the wrapper declares that it needs it (run.secrets in its context.json), the
 // active policy grants it to that wrapper, and the machine holds a value for it. Nothing
 // here ever puts a value in an error: a refusal names the secret and the wrapper.
+//
+// A need is mandatory unless it is declared "optional": true. A mandatory need that cannot be met stops
+// the wrapper from starting. An optional one that is not granted, or that has no value on the machine,
+// is left out (the wrapper starts without that variable); a declaration that cannot be used and a value
+// that exists but cannot be read safely (wrong mode, too large) are still refused, so that a mistake is
+// never silent.
 
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -105,13 +113,29 @@ func (l *ExecutionLoop) wrapperSecretEnv(cfg WrapperRuntimeCfg) (map[string]stri
 	out := make(map[string]string, len(needs))
 	for _, need := range needs {
 		if policy == nil || policy.Active() == nil {
+			if need.Optional {
+				continue
+			}
 			return nil, refuse(need.Name, "no security policy is active: a secret is given only under a policy (brique-sec init, then apply)")
 		}
 		if !policy.WrapperMaySeeSecret(need.Name, cfg.Name) {
+			if need.Optional {
+				continue
+			}
 			return nil, refuse(need.Name, "not granted to this wrapper: add it to \"secrets\" in access.json, then brique-sec apply --reload")
 		}
 		if machine == "" {
+			if need.Optional {
+				continue
+			}
 			return nil, refuse(need.Name, "this instance has no machine security directory")
+		}
+		if need.Optional {
+			// No value at all is how an optional secret is left out. The protected reader gives opaque errors (no path), so
+			// absence is looked at here; the value, when there is one, is still read only through the protected reader.
+			if _, statErr := os.Lstat(filepath.Join(machine, shared.SecretsDir, need.Name)); errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
 		}
 		value, err := protectedfile.ReadProtectedFile(machine, shared.SecretsDir+"/"+need.Name, protectedfile.ProtectedFileOptions{MaxBytes: shared.MaxSecretBytes})
 		if err != nil {

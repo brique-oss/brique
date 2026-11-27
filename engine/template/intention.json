@@ -5,7 +5,7 @@
   "_intention_id_note": "Required. Unique identifier for this intention. Generate a fresh UUID per call.",
 
   "await_response": true,
-  "_await_response_note": "Required. true = block until a response is received. false = fire-and-forget, no response expected.",
+  "_await_response_note": "Required. true = the caller waits for the final response ('ok' or 'error'); any 'running' responses that come first are not the result. false = fire-and-forget, no response is expected and none comes back, so a failure is not reported to the caller.",
 
   "to": {
     "_comment": "Required. Destination address of the capacity to invoke.",

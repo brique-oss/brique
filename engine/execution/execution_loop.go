@@ -708,6 +708,9 @@ func (l *ExecutionLoop) handleInboxDelivery(delivery junction.Delivery) {
 		l.handleInboxMessageAuthorized(msg, delivery)
 		return
 	}
+	if l.refuseUnadmittedProtected(msg) {
+		return
+	}
 	l.handleInboxMessageAuthorized(msg, delivery)
 }
 

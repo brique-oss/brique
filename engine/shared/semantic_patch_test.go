@@ -41,7 +41,7 @@ func TestSemanticPatch_SetTraversesObjectsAndArrays(t *testing.T) {
 			"engine_config": map[string]any{
 				"interfaces": []any{map[string]any{"name": "llm"}},
 				"execution": map[string]any{
-					"wrappers": []any{map[string]any{"run": map[string]any{"env_name": "old", "cwd": "/old"}}},
+					"wrappers": []any{map[string]any{"run": map[string]any{"env_name": "old", "shell": false}}},
 				},
 			},
 		},

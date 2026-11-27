@@ -58,7 +58,7 @@ func TestCatalogReaderInThreeCommands(t *testing.T) {
 	if !strings.Contains(out, "Generation g000002 installed") {
 		t.Fatalf("apply output:\n%s", out)
 	}
-	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/a#matter:m"); !strings.HasPrefix(out, "ALLOWED") {
+	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/a/matter/M"); !strings.HasPrefix(out, "ALLOWED") {
 		t.Fatalf("simulate allowed:\n%s", out)
 	}
 	if out := mustOK(t, dir, "simulate", "partner-a", "read", "/root/catalog/secrets#matter:m"); !strings.HasPrefix(out, "DENIED") || !strings.Contains(out, "exception") {

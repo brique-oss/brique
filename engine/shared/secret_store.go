@@ -22,6 +22,9 @@ package shared
 const (
 	// SecretsDir is the folder of the values, relative to the machine's directory.
 	SecretsDir = "secrets"
+	// WrappersDir is the folder of the private directories of the wrappers that declare run.store,
+	// relative to the machine's directory: <machine>/wrappers/<wrapper>.
+	WrappersDir = "wrappers"
 	// MaxSecretBytes bounds the value of one secret.
 	MaxSecretBytes = 8 << 10
 )

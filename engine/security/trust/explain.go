@@ -125,7 +125,7 @@ func denyMatch(set PermissionSet, query DenialQuery) string {
 			if permission.Kind != query.Kind || !covers(permission.Context, query.Context) || !oneOf(query.Action, permission.Actions...) {
 				continue
 			}
-			if query.Kind == "context" || permission.Selector == nil || permission.Selector.All != nil || oneOf(query.ID, permission.Selector.IDs...) {
+			if query.Kind == "context" || permission.Selector == nil || permission.Selector.All != nil || oneOf(FoldName(query.ID), permission.Selector.IDs...) || matchesAnyPattern(permission.Selector.Patterns, query.ID) {
 				return permission.PermissionID
 			}
 		}
@@ -279,4 +279,13 @@ func (interval Interval) Covers(ctx string) bool {
 // i.e. a context that must be traversed to reach it.
 func (interval Interval) OnPathTo(ctx string) bool {
 	return len(interval.Path) > len(ctx) && interval.Path[:len(ctx)] == ctx && interval.Path[len(ctx)] == '/'
+}
+
+func matchesAnyPattern(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		if MatchName(pattern, name) {
+			return true
+		}
+	}
+	return false
 }

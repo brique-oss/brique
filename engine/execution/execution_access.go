@@ -23,6 +23,7 @@ import (
 	"brique_engine/engine/junction"
 	"brique_engine/engine/security/access"
 	"brique_engine/engine/security/audit"
+	"brique_engine/engine/security/refusal"
 	"brique_engine/engine/security/trust"
 	"brique_engine/engine/shared"
 )
@@ -108,4 +109,35 @@ func (l *ExecutionLoop) deriveActing(request junction.Delivery) (junction.Delive
 		return request, nil
 	}
 	return junction.DeriveAsOwner(request, provider.TrustRuntime())
+}
+
+// refuseUnadmittedProtected refuses a user capacity that the policy protects when the message
+// carries no admission: a wrapper with no restricted principal, or any other caller that runs with
+// the local authority of its context. Such a caller passes no door, so without this check it could
+// run a capacity whose authorization the policy keeps to admitted callers. The refusal is the
+// canonical capability refusal and is journaled; it reports true when the message was refused.
+func (l *ExecutionLoop) refuseUnadmittedProtected(msg circulation.Message) bool {
+	if msg.Kind != circulation.ValueKindIntention || msg.Intention.To.Type != circulation.ValueTypeUser || l == nil || l.frame == nil || l.frame.CtxCommReg == nil {
+		return false
+	}
+	provider, ok := l.frame.CtxCommReg.(junction.TrustRuntimeProvider)
+	if !ok || provider.TrustRuntime() == nil {
+		return false
+	}
+	in := msg.Intention
+	if !provider.TrustRuntime().IsProtectedCapacity(string(in.To.Context), in.To.Cap) {
+		return false
+	}
+	junction.AuditOf(l.frame.CtxCommReg).Record(audit.Record{
+		Channel: "local", Layer: audit.LayerCapability, Reason: audit.ReasonCapabilityDenied,
+		Context: string(in.To.Context), Capacity: in.To.Type + "/" + in.To.Cap, Intention: in.IntentionID, Untrusted: true,
+	})
+	parentID, rootID := executionCorrelationIDs(in)
+	l.sendToTrace(circulation.ValueKindIntention, in.IntentionID, parentID, rootID, circulation.ValueTraceFamilyError)
+	if in.AwaitResponse {
+		response := errorResp(in, circulation.ValueCodeUnauthorized, nil, refusal.MessageCapabilityDenied)
+		response.Response.Error = refusal.CapabilityDenied(circulation.ValueOriginExecution)
+		l.emitResponseError(response)
+	}
+	return true
 }

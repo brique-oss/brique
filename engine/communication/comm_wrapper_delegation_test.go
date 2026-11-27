@@ -506,3 +506,37 @@ func TestWrapperRootResponsesToABrowserAreAnsweredLocallyAndSignedOnesStaySigned
 		t.Fatal("a signed request from another instance must be answered through the signed path")
 	}
 }
+
+// A call made on a delegation that is no longer valid is answered at once, never left waiting.
+func TestACallOnAnInvalidDelegationIsAnsweredUnavailable(t *testing.T) {
+	fixture := newCommWrapperFixture(t)
+	loop, connection, _ := fixture.loop(t)
+	root := fixture.rootDelivery(t)
+	marked, err := junction.DispatchExternalToWrapper(root, "catalog_wrapper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop.routeEgress(mustDeliveryMessage(t, marked), marked)
+	queued := <-loop.ifaces["catalog_wrapper"].WrapperEgress
+	loop.revokeWrapperDelegation(queued.Frame.Delegation)
+	child := circulation.Message{Kind: circulation.ValueKindIntention, Intention: circulation.Intention{
+		IntentionID: "523e4567-e89b-42d3-a456-426614174000", AwaitResponse: true,
+		To:          circulation.Address{Context: "/root/catalog", Type: circulation.ValueTypeUser, Cap: "sample.child"},
+		From:        circulation.Address{Context: "worker", Type: circulation.ValueTypeUser, Cap: "sample.worker"},
+		Correlation: &circulation.Correlation{RootIntentionID: commWrapperRootID, ParentIntentionID: commWrapperRootID},
+	}}
+	loop.handleInterfaceIngress(IngressItem{
+		Msg: child, Endpoint: EndpointWrapper, IfaceName: "catalog_wrapper",
+		WrapperConnection: connection, WrapperDelegation: queued.Frame.Delegation,
+	})
+	select {
+	case answer := <-loop.ifaces["catalog_wrapper"].WrapperEgress:
+		response := answer.Frame.Message.Response
+		if answer.Frame.Message.Kind != circulation.ValueKindResponse || response.IntentionID != child.Intention.IntentionID ||
+			response.Status != circulation.ValueStatusError || response.Error == nil || response.Error.Code != circulation.ValueCodeUnavailable {
+			t.Fatalf("unexpected answer: %#v", answer.Frame.Message)
+		}
+	default:
+		t.Fatal("a call on a revoked delegation was left without an answer")
+	}
+}

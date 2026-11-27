@@ -341,9 +341,9 @@ func boundedBridgePayload(message circulation.Message) ([]byte, error) {
 	replaced.Response.Status = circulation.ValueStatusError
 	replaced.Response.Payload = nil
 	replaced.Response.Error = &circulation.ResponseProblem{
-		Origin: "engine", Code: "response_too_large",
+		Origin: circulation.ValueTypeCommunication, Code: circulation.ValueCodeRefused,
 		Message: fmt.Sprintf("the answer is %d bytes and the browser bridge carries at most %d: ask for less (a shorter range, fewer lines)", len(payload), browserbridge.MaxPayloadBytes),
-		Details: map[string]any{"size_bytes": len(payload), "limit_bytes": browserbridge.MaxPayloadBytes},
+		Details: map[string]any{circulation.KeyReason: circulation.ValueReasonResponseTooLarge, "size_bytes": len(payload), "limit_bytes": browserbridge.MaxPayloadBytes},
 	}
 	return json.Marshal(replaced)
 }

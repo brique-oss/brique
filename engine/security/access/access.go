@@ -134,8 +134,14 @@ func Normalize(item ResourceAccess) (ResourceAccess, error) {
 		if item.ID != "" {
 			return ResourceAccess{}, fmt.Errorf("context resource must omit id")
 		}
-	} else if !identifierPattern.MatchString(item.ID) {
-		return ResourceAccess{}, fmt.Errorf("resource id %q is not canonical", item.ID)
+	} else {
+		// The id of an element is decided under the name the element is stored under (shared.ElementName): folded to
+		// lowercase, in the portable set. "CMD-1042" and "cmd-1042" are one element, at the door as on disk.
+		name, err := shared.ElementName(item.ID)
+		if err != nil {
+			return ResourceAccess{}, fmt.Errorf("resource id %q is not an element name: %w", item.ID, err)
+		}
+		item.ID = name
 	}
 	if !identifierPattern.MatchString(item.Action) {
 		return ResourceAccess{}, fmt.Errorf("resource action %q is not canonical", item.Action)

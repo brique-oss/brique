@@ -28,7 +28,28 @@
     "trace": {
       "type": "object",
       "required": false,
-      "kv": true
+      "kv": true,
+      "_comment": "A trace event written by the engine, never sent to a capacity. It records what happened, with who it was done for. Its fields are listed below; all but ts, context_id, trace_kind and family are optional and appear only when they apply.",
+      "fields": {
+        "ts": "RFC 3339 time with nanoseconds.",
+        "context_id": "Absolute path of the context that recorded the event.",
+        "trace_kind": "What happened, for example CommIngress, CommEgress, CommDrop, CommReject (communication), WrapperReady, WrpStartBuilding, WrpStartDone (execution), substance_lease_open, substance_lease_expired (matter), FamilyEnter, FamilyExit, FamilySaturated, FamilyError (the family loops).",
+        "family": "The engine family that produced the event: communication, execution, matter, trace or reflexive.",
+        "intention_id": "Correlation anchor: the id of the intention this event belongs to.",
+        "msg_kind": "kind of the message the event is about (intention or response).",
+        "intention": "The intention itself, only for CommIngress.",
+        "response": "The response itself, only for CommIngress.",
+        "message_truncated": "true when the message was too large to be kept whole in the event.",
+        "message_bytes": "Size in bytes of the message, when it was truncated.",
+        "message_sha256": "Digest of the whole message, when it was truncated.",
+        "payload_keys": "Names of the keys of the payload, without their values.",
+        "parent_intention_id": "The intention that caused this one.",
+        "root_intention_id": "The intention at the start of the chain.",
+        "principal": "Who the work is done for: the principal that was admitted for the root of the request. Stamped by the engine from the admission, never taken from a message.",
+        "actor": "The actor the principal declared for the root of the request, when it has actors. Stamped by the engine.",
+        "reason_code": "Why a message was dropped or refused (CommDrop, CommReject), a stable reason such as context_unreachable or context_stopped.",
+        "user_text": "A short human-readable text with the details of the event."
+      }
     },
     "_routing_comment": "Depending on kind, only one payload among intention, response, or trace is expected."
   }

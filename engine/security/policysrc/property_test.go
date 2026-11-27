@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"brique_engine/engine/security/access"
@@ -36,8 +37,11 @@ import (
 var (
 	propContexts = []string{"/root", "/root/a", "/root/a/b", "/root/a/b/c", "/root/ab", "/root/a/s", "/root/a/s/t", "/root/z"}
 	propRequests = append(append([]string{}, propContexts...), "/root/a/b/c/d")
-	propNames    = []string{"x", "y"}
-	propUser     = []string{"f", "g", "h"}
+	propNames    = []string{"x", "y", "order_a", "ORDER_B", "refund_1"}
+	propUser     = []string{"f", "g", "h", "price.Quote"}
+	// patterns a target may use instead of a name; requests use the names above, in any case
+	propNamePatterns = []string{"order_*", "*_1", "ord*_b", "*e*"}
+	propUserPatterns = []string{"pri*", "*quote", "f*"}
 )
 
 func randTarget(r *rand.Rand, verb string) string {
@@ -61,10 +65,24 @@ func randTarget(r *rand.Rand, verb string) string {
 	}
 	genre := genres[r.Intn(len(genres))]
 	name := names[r.Intn(len(names))]
+	if r.Intn(3) == 0 {
+		patterns := propNamePatterns
+		if verb == VerbCall {
+			patterns = propUserPatterns
+		}
+		name = patterns[r.Intn(len(patterns))]
+	}
 	if r.Intn(3) == 0 || subtree {
 		name = "*"
 	}
-	return out + "#" + genre + ":" + name
+	target := out + "#" + genre + ":" + name // the earlier form, still read
+	if r.Intn(2) == 0 {
+		target = out + "/" + genre + "/" + name // the path form
+	}
+	if r.Intn(4) == 0 {
+		target = strings.ToUpper(target) // letter case does not count
+	}
+	return target
 }
 
 func sortStrings(s []string) {
@@ -183,7 +201,13 @@ func TestPropertyCompiledSnapshotMatchesOracle(t *testing.T) {
 							case verb == VerbCall:
 								ids = propUser
 							}
-							for _, id := range ids {
+							asked := append([]string{}, ids...)
+							if kind != "context" && kind != "trace" {
+								for _, id := range ids {
+									asked = append(asked, strings.ToUpper(id), strings.ToLower(id))
+								}
+							}
+							for _, id := range asked {
 								want := src.AllowedAs(principal, actor, verb, ctx, kind, id)
 								got := c.resourceVerdictAs(t, principal, actor, verb, ctx, kind, id)
 								questions++

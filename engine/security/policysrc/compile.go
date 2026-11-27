@@ -140,6 +140,8 @@ func Compile(src *Source, cat trust.Catalog, opt Options) (*Result, error) {
 		})
 	}
 	policy.WrapperSecrets = compileSecrets(src.Secrets)
+	policy.ProtectedCapacities = compileProtected(src.Protected)
+	c.warnProtected(src)
 	encoded, err := json.Marshal(policy)
 	if err != nil {
 		return nil, err
@@ -293,8 +295,11 @@ func (sb *scopeBuilder) resources(grantIndex, exceptIndex int, verb string, t Ta
 		case "trace":
 			perm.Selector = &trust.ResourceSelector{IDs: []string{"events"}}
 		default:
-			if t.Named() {
+			if t.Named() && identifierPattern.MatchString(t.Name) {
 				perm.Selector = &trust.ResourceSelector{IDs: []string{t.Name}}
+			} else if t.Named() {
+				// a pattern, or an exact name that is not an identifier (a pattern with no star matches only itself)
+				perm.Selector = &trust.ResourceSelector{Patterns: []string{t.Name}}
 			} else {
 				all := true
 				perm.Selector = &trust.ResourceSelector{All: &all}

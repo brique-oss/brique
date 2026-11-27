@@ -56,6 +56,9 @@ type Source struct {
 	// Secrets says which wrappers may be given which secret, by the name of the secret. The
 	// value of a secret is never here: it stays on the machine (secrets.go).
 	Secrets map[string]*SecretGrant `json:"secrets,omitempty"`
+	// Protected lists the user capacities that a caller with no admission may not run, as
+	// targets ("/ctx/**", "/ctx/capacity/name"). They compile into the signed policy (protected.go).
+	Protected []string `json:"protected,omitempty"`
 }
 
 // Values of Principal.Encryption.

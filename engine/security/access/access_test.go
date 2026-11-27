@@ -83,10 +83,18 @@ func TestNormalizeRejectsAmbiguousResourceCoordinates(t *testing.T) {
 	valid := []access.ResourceAccess{
 		{Kind: "matter", Context: "/root/catalog", ID: "conversation", Action: "append"},
 		{Kind: "context", Context: "/root/catalog", Action: "start"},
+		{Kind: "matter", Context: "/root/catalog", ID: "commande_cmd-1042", Action: "read"},
 	}
 	for _, item := range valid {
 		if got, err := access.Normalize(item); err != nil || got != item {
 			t.Fatalf("Normalize(%#v) = %#v, %v", item, got, err)
+		}
+	}
+	// An element id is decided under the name the element is stored under: folded to lowercase.
+	for raw, want := range map[string]string{"Conversation": "conversation", "commande_CMD-1042": "commande_cmd-1042"} {
+		got, err := access.Normalize(access.ResourceAccess{Kind: "matter", Context: "/root/catalog", ID: raw, Action: "read"})
+		if err != nil || got.ID != want {
+			t.Fatalf("Normalize(%q) = %#v, %v; want id %q", raw, got, err, want)
 		}
 	}
 	invalid := []access.ResourceAccess{
@@ -94,8 +102,15 @@ func TestNormalizeRejectsAmbiguousResourceCoordinates(t *testing.T) {
 		{Kind: "matter", Context: "/root//catalog", ID: "conversation", Action: "read"},
 		{Kind: "matter", Context: "/root/catalog", ID: "", Action: "read"},
 		{Kind: "context", Context: "/root/catalog", ID: "catalog", Action: "start"},
-		{Kind: "matter", Context: "/root/catalog", ID: "Conversation", Action: "read"},
 		{Kind: "matter", Context: "/root/catalog", ID: "conversation", Action: ""},
+		{Kind: "matter", Context: "/root/catalog", ID: "a/b", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "..", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "x..y", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "a\\b", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "bad\x00name", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "mon document", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "été", Action: "read"},
+		{Kind: "matter", Context: "/root/catalog", ID: "con", Action: "read"},
 	}
 	for _, item := range invalid {
 		if _, err := access.Normalize(item); err == nil {

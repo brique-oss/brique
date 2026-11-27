@@ -85,6 +85,9 @@ export type StructureNode = {
   functional?: FunctionalDescriptor;
   brique?: Record<string, unknown>;
   children?: StructureNode[];
+  /** Set when max_nodes cut the children of this node; children_total stays the real number. */
+  children_truncated?: boolean;
+  children_total?: number;
 };
 
 export type StructurePatch = {
@@ -387,11 +390,21 @@ export type ReadStructureParams = {
   scope?: string;
   depth?: number;
   max_per_path?: number;
+  /** Nodes in the whole answer (engine default 150, at most 5000); the editor asks for the most, it shows the whole tree. */
+  max_nodes?: number;
+  format?: "full" | "compact";
 };
 export type ReadStructurePayload = {
   root: StructureNode;
   params?: Record<string, unknown>;
+  nodes_total?: number;
+  nodes_returned?: number;
+  /** True when the answer was cut at max_nodes: then a missing element proves nothing. */
+  truncated?: boolean;
 };
+
+/** The editor shows whole trees: it asks read.structure for the most nodes the engine allows. */
+export const STRUCTURE_MAX_NODES = 5000;
 
 // --- trace ---
 
@@ -688,7 +701,7 @@ export function createCapabilityClient(substrate: BriqueSubstrate): CapabilityCl
       document: (ctx, p) => call(ctx, "read.document", p as Record<string, unknown>),
       meaning: (ctx, p) => call(ctx, "read.meaning", p as Record<string, unknown>),
       state: (ctx, p) => call(ctx, "read.state", p as Record<string, unknown>),
-      structure: (ctx, p) => call(ctx, "read.structure", p as Record<string, unknown>),
+      structure: (ctx, p) => call(ctx, "read.structure", { max_nodes: STRUCTURE_MAX_NODES, ...(p ?? {}) } as Record<string, unknown>),
     },
     trace: {
       inspect: (ctx, p) => call(ctx, "trace.inspect", p as Record<string, unknown>),

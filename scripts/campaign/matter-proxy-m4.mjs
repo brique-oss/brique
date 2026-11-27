@@ -5,8 +5,8 @@
 
 // M4 qualification driver: a real engine, brique-web and Caddy on a real
 // (non-loopback) LAN address with a TLS certificate issued by Caddy's local CA,
-// then the Matter proxy probe and the mandatory failure checks of
-// root/document/recette_m4_proxy_matter_sans_docker.md.
+// then the Matter proxy probe and the mandatory failure checks of the M4
+// qualification (Matter proxy without Docker).
 //
 //   node scripts/campaign/matter-proxy-m4.mjs --runtime <runtime-package> [--keep]
 //

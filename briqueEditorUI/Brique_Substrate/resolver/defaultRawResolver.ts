@@ -177,6 +177,7 @@ function defaultParamsForCapability(
       return {
         depth: DEFAULT_STRUCTURE_DEPTH,
         max_per_path: DEFAULT_STRUCTURE_MAX_PER_PATH,
+        max_nodes: 5000,          // the whole tree: the engine's default (150) is the size meant for a pilot
       };
 
     // --- trace ---

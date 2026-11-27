@@ -17,6 +17,7 @@
 package policysrc
 
 import (
+	"regexp"
 	"strings"
 
 	"brique_engine/engine/security/trust"
@@ -53,7 +54,7 @@ func covers(verb string, t Target, ctx, kind, id string) bool {
 		return false
 	}
 	if t.Genre != "" {
-		return kind == t.Genre && (t.Name == "*" || t.Name == id)
+		return kind == t.Genre && (t.Name == "*" || referenceNameMatch(t.Name, id))
 	}
 	switch kind {
 	case "trace":
@@ -347,4 +348,15 @@ func (s *Source) OwnerOf(principal, actor, ctx, name string) string {
 		}
 	}
 	return best
+}
+
+// referenceNameMatch is the reference reading of a name in a target, written independently of the engine's matcher
+// (trust/names.go) so that the property tests compare two implementations: a case-insensitive regular expression in
+// which each "*" stands for any sequence.
+func referenceNameMatch(pattern, name string) bool {
+	parts := strings.Split(pattern, "*")
+	for index, part := range parts {
+		parts[index] = regexp.QuoteMeta(part)
+	}
+	return regexp.MustCompile("(?is)^" + strings.Join(parts, ".*") + "$").MatchString(name)
 }

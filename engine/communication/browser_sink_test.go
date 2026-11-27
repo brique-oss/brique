@@ -586,7 +586,7 @@ func TestBoundedBridgePayloadAnswersAnOversizedResponseWithAnError(t *testing.T)
 	}
 	var back circulation.Message
 	if err := json.Unmarshal(payload, &back); err != nil || back.Response.IntentionID != "i1" ||
-		back.Response.Status != circulation.ValueStatusError || back.Response.Error == nil || back.Response.Error.Code != "response_too_large" {
+		back.Response.Status != circulation.ValueStatusError || back.Response.Error == nil || back.Response.Error.Code != circulation.ValueCodeRefused || back.Response.Error.Details[circulation.KeyReason] != circulation.ValueReasonResponseTooLarge {
 		t.Fatalf("an oversized response must come back as an error of the same intention: %#v, %v", back.Response, err)
 	}
 	small := circulation.Message{Kind: circulation.ValueKindResponse, Response: circulation.Response{IntentionID: "i2", Status: circulation.ValueStatusOK}}

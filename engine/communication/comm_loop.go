@@ -1029,6 +1029,15 @@ func (l *CommLoop) handleInterfaceIngress(it IngressItem) {
 			if errors.Is(err, junction.ErrDerivedCapabilityDenied) {
 				l.refuseDelegatedWrapperCall(it, refusal.CapabilityDenied(circulation.ValueOriginCommunication))
 			}
+			if errors.Is(err, junction.ErrWrapperDelegationExpired) || errors.Is(err, junction.ErrWrapperDelegationExhausted) ||
+				errors.Is(err, junction.ErrWrapperDelegationInvalid) {
+				// The handle the call came in on is no longer usable (its request was answered, it expired or it was used up).
+				// Without an answer the wrapper would wait for its whole timeout for a response that never comes.
+				l.refuseDelegatedWrapperCall(it, &circulation.ResponseProblem{
+					Origin: circulation.ValueOriginCommunication, Code: circulation.ValueCodeUnavailable,
+					Message: "wrapper delegation is no longer valid: it expired, was used up, or its request was answered",
+				})
+			}
 			if errors.Is(err, junction.ErrChainBudget) {
 				// Not the canonical refusal: the wrapper is looping or fanning out, and it is told
 				// so, since nothing about the capacity is being hidden from it.

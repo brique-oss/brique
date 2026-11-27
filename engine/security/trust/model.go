@@ -66,6 +66,10 @@ type Policy struct {
 	// WrapperSecrets says which wrappers may be given which secret (wrapper_secrets.go). Absent
 	// from a policy that grants none, so such a policy is what it was before secrets existed.
 	WrapperSecrets []WrapperSecret `json:"wrapper_secrets,omitempty"`
+	// ProtectedCapacities lists the user capacities that a caller with no admission may not run
+	// (protected_capacities.go). Absent from a policy that protects none, so such a policy is what
+	// it was before the list existed.
+	ProtectedCapacities []ProtectedCapacity `json:"protected_capacities,omitempty"`
 }
 
 // ExternalPeer binds a principal to the remote instance it answers for: the audience
@@ -239,6 +243,10 @@ type ResourcePermission struct {
 type ResourceSelector struct {
 	IDs []string `json:"ids,omitempty"`
 	All *bool    `json:"all,omitempty"`
+	// Patterns are names in which "*" stands for any sequence (names.go), compared without regard to letter case.
+	// A name that is not an identifier is also given here, as a pattern without star. An engine that does not know
+	// this field refuses the policy instead of reading it more loosely.
+	Patterns []string `json:"patterns,omitempty"`
 }
 
 type Authority struct {

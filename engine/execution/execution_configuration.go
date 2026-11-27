@@ -106,6 +106,9 @@ type RunCfg struct {
 	// Secrets are the secrets the wrapper needs, each given in one environment variable at launch
 	// if the policy grants it (execution_wrapper_secrets.go).
 	Secrets []WrapperSecretNeed
+	// Store asks for a private directory of the wrapper under the machine's protected directory,
+	// outside the instance, for state that changes at runtime (execution_wrapper_store.go).
+	Store bool
 }
 
 // WrapperSecretNeed is one secret a wrapper declares it needs: the name of the secret the machine
@@ -113,6 +116,10 @@ type RunCfg struct {
 type WrapperSecretNeed struct {
 	Name string
 	Env  string
+	// Optional says the wrapper can run without this secret: when the policy does not grant it or the machine
+	// holds no value for it, the wrapper starts without the variable. It is what lets one context declare every
+	// provider it can use while each owner sets up only the ones they use.
+	Optional bool
 }
 
 // CtxRegistry binds capName => CapEntry.
@@ -302,8 +309,12 @@ func ParseExecutionCfg(engineCfg map[string]any) ExecutionCfg {
 						entry, _ := item.(map[string]any)
 						name, _ := entry[configuration.KeyWrpSecretName].(string)
 						env, _ := entry[configuration.KeyWrpSecretEnv].(string)
-						r.Secrets = append(r.Secrets, WrapperSecretNeed{Name: name, Env: env})
+						optional, _ := entry[configuration.KeyWrpSecretOptional].(bool)
+						r.Secrets = append(r.Secrets, WrapperSecretNeed{Name: name, Env: env, Optional: optional})
 					}
+				}
+				if store, ok := rm[configuration.KeyWrpStore].(bool); ok {
+					r.Store = store
 				}
 				w.Run = r
 			}

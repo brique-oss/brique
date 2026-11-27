@@ -493,7 +493,7 @@ test("default resolver maps canonical keys and contains no cache policy", () => 
   assert.deepEqual(resolveDefaultRawRead(key), {
     context: "/root",
     capability: "read.structure",
-    params: { depth: 1, max_per_path: 50 },
+    params: { depth: 1, max_per_path: 50, max_nodes: 5000 },
   });
 });
 

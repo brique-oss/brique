@@ -18,7 +18,6 @@ package reflexive
 
 import (
 	"brique_engine/engine/configuration"
-	"strings"
 	"time"
 )
 
@@ -26,8 +25,8 @@ import (
 // Config (Reflexive)
 // -----------------------------
 
-// ReflexiveCfg is the parsed, immutable reflexive configuration for the context.
-// only repository binding metadata (no git operations here).
+// ReflexiveCfg is the parsed, immutable reflexive configuration for the context: the meaning projection
+// auto-sync settings and the limits of the family.
 //
 // Expected shape (in context.json):
 //
@@ -35,8 +34,7 @@ import (
 //	  "brique": {
 //	    "engine_config": {
 //	      "reflexive": {
-//	        "root_repo": true,
-//	        "repo_name": "my-repo"
+//	        "projection_sync_on_edit": true
 //	      }
 //	    }
 //	  }
@@ -51,9 +49,6 @@ const (
 )
 
 type ReflexiveCfg struct {
-	RootRepo bool
-	RepoName string
-
 	// ProjectionSyncInterval > 0 makes the root keep the meaning projection
 	// up to date by itself: every interval it applies the changes found on
 	// disk (see syncProjection). 0 (default) leaves the projection to explicit
@@ -80,8 +75,7 @@ type ReflexiveCfg struct {
 // - >sequence:
 //   - initialize empty `ReflexiveCfg`
 //   - >if engineCfg is nil: return defaults
-//   - read `root_repo` boolean flag
-//   - read and trim `repo_name`
+//   - read the projection sync settings and the limits
 //   - return materialized reflexive config
 //
 //
@@ -130,8 +124,7 @@ type ReflexiveCfg struct {
 // - Returns exactly one `ReflexiveCfg`.
 // - Emits no response, trace, or outbound message.
 // - When `engineCfg` is nil, returns the zero-value `ReflexiveCfg`.
-// - Reads `configuration.KeyRootRepo` only as a `bool`.
-// - Reads `configuration.KeyRepoName` only as a `string` and trims surrounding whitespace.
+// - Reads each setting only as the type it expects; a value of another type is ignored.
 
 func ParseReflexiveCfg(engineCfg map[string]any) ReflexiveCfg {
 	cfg := ReflexiveCfg{}
@@ -139,12 +132,6 @@ func ParseReflexiveCfg(engineCfg map[string]any) ReflexiveCfg {
 		return cfg
 	}
 
-	if v, ok := engineCfg[configuration.KeyRootRepo].(bool); ok {
-		cfg.RootRepo = v
-	}
-	if v, ok := engineCfg[configuration.KeyRepoName].(string); ok {
-		cfg.RepoName = strings.TrimSpace(v)
-	}
 	if v, ok := engineCfg[configuration.KeyProjectionSyncIntervalMs].(float64); ok && v > 0 {
 		cfg.ProjectionSyncInterval = time.Duration(v) * time.Millisecond
 	}

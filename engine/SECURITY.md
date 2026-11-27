@@ -138,13 +138,47 @@ of one another (none implies another):
 | `read` | any | read the covered genres; `read_recursive` (whole subtree) only from a subtree target `/ctx/**` |
 | `write` | matter, structure | modify, append, truncate, delete data |
 | `create` | matter, structure | create data (also by clone and derive); creating gives no right on the result |
-| `call` | context, subtree, `#capacity:name`, `#capacity:*` | execute **user** capacities (resource `capacity/execute`) |
+| `call` | context, subtree, `/ctx/capacity/name`, `/ctx/capacity/pattern*`, `/ctx/capacity/*` | execute **user** capacities (resource `capacity/execute`) |
 | `define` | capacity, schema, document, context | create, change, delete definitions |
 | `control` | whole contexts | lifecycle of a context and maintenance of its projection |
 
-**Target.** `/ctx` (that context alone), `/ctx/**` (its subtree), `/ctx#genre:name` (one named
-element), `/ctx#genre:*` (every element of a genre). Genres: `capacity`, `schema`, `document`,
-`matter`, `structure`. Elements created later inside a granted subtree are covered.
+**Target.** A target is written as the path of what it designates, the way it lies on disk:
+
+| Target | Designates |
+|---|---|
+| `/ctx` | that context alone |
+| `/ctx/**` | the context and its whole subtree |
+| `/ctx/<genre>/<name>` | one element of that context |
+| `/ctx/<genre>/<pattern>` | the elements whose name matches the pattern: `*` stands for any sequence, empty included (`commande_*`, `*_archive`, `a*b`) |
+| `/ctx/<genre>/*` | every element of a genre in that context |
+| `/ctx/**/<genre>/*` | every element of a genre in the subtree |
+
+Genres: `capacity`, `schema`, `document`, `matter`, `structure`. They are the reserved folders of a
+context, so a context may not be named like one of them. Elements created later inside a granted
+subtree are covered. A name or a pattern belongs to one context: it cannot be combined with `/**`.
+
+**Element names are portable, and letter case does not count.** The name of a capacity, a schema, a
+document, a matter or a structure is a file name of its context, and an instance must behave the same
+on every file system: Linux tells `A` from `a`, macOS and Windows do not, and Windows forbids some
+characters and device names. So a name is stored in the portable set only (`shared.ElementName`):
+
+* lowercase ASCII letters, digits, `.`, `_` and `-`, at most 128 bytes;
+* it starts with a letter or a digit and does not end with `.`; no `..`;
+* not a name Windows reserves (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`), even
+  with an extension (`con.matter.json` is refused by Windows too).
+
+What a caller writes is folded to lowercase first, where the request enters Matter and Reflexive and
+where the door normalizes a resource: `Commande_CMD-1042` creates `commande_cmd-1042`, and
+`COMMANDE_cmd-1042` reads it. Two elements can never differ only by case, an accent or a space, so
+no file system sees two names where another sees one. A target is read folded the same way:
+`/root/shop/matter/Commande_CMD-1042` and `/ROOT/shop/matter/commande_cmd-1042` are one target, and a
+rule can never be bypassed by writing a name with other letters. A pattern is such a name with `*`.
+
+The earlier form `/ctx#genre:name` (and `/ctx/**#genre:*`) is still read and means the same target;
+`brique-sec` always writes the path form. Named elements compile into the signed selector `ids`,
+patterns into `patterns` (folded, at most 64 per selector, never reduced to `*`, which is `all`). An
+engine that predates `patterns` refuses a policy that carries one (strict decoding), so a pattern
+never silently widens or narrows an older engine.
 
 **Grant and exception.** A grant gives one verb over targets and may carry `except` targets. An
 exception removes the access whatever other grant would give it.
@@ -157,7 +191,7 @@ verb opens its door, and the resources it touches are checked next (§4, §5). A
 
 **Resource.** `kind/action` on a context, optionally with an id: `matter/read`, `capacity/execute`,
 `context/read_recursive`, `trace/payloads`, … The set of kinds and actions is closed and lives in
-`trust.EngineResourceActions()`.
+`trust.EngineResourceActions()`. The id of an element is valid exactly when it is valid as the name the element is stored under (a single file name: no separator, no `..`, no control character), so an element the engine stores can always be authorized. A target of the access source names an element with the narrower identifier grammar `[a-z][a-z0-9._-]{0,63}`: an element whose name falls outside it (capitals, for example `commande_CMD-1042`) cannot be named one by one, and is decided by the rules that cover its context, its subtree or its whole genre.
 
 **Policy generation.** A signed policy plus the bootstrap it runs with, installed as a directory
 `generations/g<revision>/`. A policy has an exact-successor revision chain and a previous-policy
@@ -188,9 +222,9 @@ resource actions of each kind.
       "keys": [{"public_key": "<base64url Ed25519>"}],
       "grants": [
         {"read":   "/root/catalog/**", "except": ["/root/catalog/secrets/**"]},
-        {"write":  "/root/catalog/inbox#matter:orders"},
-        {"create": "/root/catalog/inbox#matter:*"},
-        {"call":   "/root/catalog#capacity:price.quote"}
+        {"write":  "/root/catalog/inbox/matter/orders"},
+        {"create": "/root/catalog/inbox/matter/*"},
+        {"call":   "/root/catalog/capacity/price.quote"}
       ]
     }
   }
@@ -297,7 +331,7 @@ engine walks it only for principals that declare actors.
 ### 3.5 Façades: `as_owner`
 
 ```json
-{"call": "/root/reports#capacity:report.generate", "as_owner": "local.reports"}
+{"call": "/root/reports/capacity/report.generate", "as_owner": "local.reports"}
 ```
 
 The capacity's own sub-calls run with the rights of the local principal `local.reports`, bounded to
@@ -308,7 +342,7 @@ what the capacity reads.
   `kind: "local"` principal of the source by its full id.
 * An owner cannot itself use `as_owner` (no chain of façades).
 * When several grants open the same capacity, the most specific names the owner: the deepest
-  context, then a named capacity over `#capacity:*`, then source order.
+  context, then a named capacity over a pattern, and a pattern over `/capacity/*`, then source order.
 * The owner is re-evaluated against the current policy at every use: disabling or removing it cuts
   the façade at its next action. The caller's right to call the façade is checked at the door, not
   again while the call runs.
@@ -385,6 +419,32 @@ It is part of the signed policy (`wrapper_secrets`, absent when there is nothing
 byte for byte what it was before, and no format version changes), so `apply` signs it and `diff` shows it
 as `+ secret <name>: <wrapper>` / `- secret <name>: <wrapper>`. It does not make a wrapper a restricted one
 (§8.2): the two are independent. `brique-sec secret allow <name> <wrapper>` and `secret deny <name> <wrapper>` edit it; then `apply --reload`.
+
+### 3.10 `protected`
+
+Which user capacities a caller with **no admission** may not run:
+
+```json
+"protected": ["/root/mcp/client/**", "/root/llm/capacity/infer"]
+```
+
+A message that carries no admission (a wrapper the policy does not restrict, an engine-internal caller) runs with the
+local authority of its context and passes no door (§1.4). For a protected capacity that authority is not enough: the
+execution loop refuses the call before dispatch, answers the canonical `unauthorized` / `"not authorized"` /
+`{"reason":"capability_denied"}` to a caller that awaits a response, and journals it (`channel: local`, reason
+`capability_denied`, marked untrusted since there is no principal). An admitted caller (a signed peer, a restricted
+`local.<name>` wrapper, a delegated call, a DSL step derived under an admitted request) is decided by its grants as
+before. A target is a context (`/ctx`, every capacity of it), a subtree (`/ctx/**`), one capacity (`/ctx/capacity/name`),
+the capacities whose name matches a pattern (`/ctx/capacity/admin_*`), or every capacity of a context or subtree
+(`/ctx/capacity/*`, `/ctx/**/capacity/*`); other genres are refused, and two ways of writing the same target are one
+target. Capacity names are compared folded, like every name (§2).
+
+It is part of the signed policy (`protected_capacities`, absent when the list is empty: such a policy is byte for byte
+what it was before, and no format version changes), so `apply` signs it and `diff` shows `+ protected: <target>` /
+`- protected: <target>`. `brique-sec protect add|remove|list <target>` edits it. The compiler warns for every `call`
+grant that reaches a protected capacity through a wildcard without an exception covering it; a grant that names the
+capacity is taken as deliberate. Remember that an exception beats every grant of the same principal (§2): a principal
+that must reach a protected capacity cannot carry an exception that covers it.
 
 ## 4. How a request is decided
 
@@ -1037,7 +1097,11 @@ A provider key or any other secret reaches a wrapper's environment if and only i
 | **a value** | `~/.brique/<name>/secrets/<secret>` (0600), written by `brique-sec secret add` | the machine holds it |
 
 Nothing less is enough: a value with no right gives nothing, a right with no need gives nothing, and a
-declaration the policy does not grant stops the wrapper from starting. A wrapper that declares no secret
+declaration the policy does not grant stops the wrapper from starting, unless that need is declared
+`"optional": true`: then a need that the policy does not grant, or for which the machine holds no value, is left
+out and the wrapper starts without that variable (a value that exists but is unsafe to read, and a malformed
+declaration, are still refused). A context that supports several providers declares each as optional, so that
+every owner sets up only the providers they use. A wrapper that declares no secret
 is launched as before, with the environment it inherits; nothing is removed from it.
 
 **At launch**, in `startWrapperProcess` and never at build time, the engine checks the declaration (a
@@ -1059,6 +1123,22 @@ runs under the account that can read the secret file (§1.4). Withdrawing a righ
 does not reach a wrapper already running: it keeps the environment it was given, and the next launch is
 refused. A secret that is still in the environment of the engine's own process, or in a file such as
 `.env`, is still inherited by every wrapper: the mechanism protects only once the value is kept in one place.
+
+### 8.7 The private directory of a wrapper
+
+A wrapper that declares `"store": true` in `run` gets, at launch, a directory of its own under the machine's
+directory, `~/.brique/<name>/wrappers/<wrapper>` (`0700`, the folder `wrappers` too), and its path in
+`BRIQUE_WRAPPER_STORE`. It is for state that changes while the wrapper runs and must not live in the instance or in a
+Matter, which principals with `read` or `write` on `/root` could reach: tokens the wrapper refreshes, files the operator
+installs for it. With no machine directory the launch is refused with a message that names the store, and like a
+secret the refusal is not remembered. A wrapper is told the path of its own directory only: the engine removes
+`BRIQUE_SECURITY_DIR` from the environment of every wrapper, so an exported value does not reach it. This narrows what
+a wrapper is told, not what it could read: it runs under the account that owns the machine directory (§1.4).
+
+`brique-sec wrapper-file install|show|remove|list` puts operator files there (`install <wrapper> <name> <file>`):
+JSON of at most 1 MiB, written atomically, owner-only, through the same no-follow path as the keys. The command does
+not know what a file means; the wrapper validates it. Unlike the access source, an installed file takes effect when
+the wrapper reads it, with no `apply`.
 
 ---
 
@@ -1294,7 +1374,7 @@ the template runs locally only.
 
    ```sh
    brique-sec --root $ROOT principal add alice --kind instance --key <alice's public key>
-   brique-sec --root $ROOT grant add alice call '/root/tools#capacity:*'
+   brique-sec --root $ROOT grant add alice call '/root/tools/capacity/*'
    brique-sec --root $ROOT grant add alice read '/root/docs/**' --except '/root/docs/private/**'
    brique-sec --root $ROOT peer add alice --audience <alice's instance name> --interface outerCtx --target https://alice.example:8443/brique
    brique-sec --root $ROOT apply --reload
@@ -1302,7 +1382,7 @@ the template runs locally only.
 
    `--interface` is the name of the local HTTPS interface of step 1. The peer is needed in both
    directions: it is where answers to Alice are sent and where calls to her go. Check a right before
-   applying with `brique-sec --root $ROOT simulate alice call '/root/tools#capacity:echo'`.
+   applying with `brique-sec --root $ROOT simulate alice call '/root/tools/capacity/echo'`.
 3. Alice does the same with your name, key and address. An external address is
    `@ext_<principal name>:/path`, with the name each side chose for the other: you call her as
    `@ext_alice:/root/tools`, she calls you under the name she registered for you.
@@ -1353,7 +1433,7 @@ public key.
 **Restrict a wrapper.** `principal add local.worker --kind local`, then `grant add local.worker …`.
 
 **A façade.** `principal add local.reports --kind local`; give it its `read`/`write`; then
-`grant add partner-a call '/root/reports#capacity:report.generate' --as-owner local.reports`.
+`grant add partner-a call '/root/reports/capacity/report.generate' --as-owner local.reports`.
 
 **Give a wrapper a secret** (a provider key, say). The value is kept on this machine, the right in the
 access source, the need in the wrapper's `context.json` (§8.6):
@@ -1436,6 +1516,15 @@ broken (most were checked by deliberately breaking it).
 | A principal that babbles is slowed to its budget and told so (the excess is answered `unavailable`, the burst is honored, a principal with no setting is limited, `unlimited` lifts it); a neighbour keeps its own budget; a lowered rate applies at once; memory stays bounded under a flood of keys; the policy and command validate the numbers | `TestABurstThenTheSustainedRate`, `TestOneCallerBabblingDoesNotTakeTheOthersTokens`, `TestALoweredRateAppliesAtOnce`, `TestInvalidRatesAllowNothingAndMemoryIsBounded`, `TestRateLimitDefaultsExplicitAndUnlimited`, `TestTheOperatorSetsLiftsAndResetsAPrincipalsRate`, `TestEngine_N5_RATE_01`/`_02` (over signed HTTPS between two engines) |
 | One admitted request cannot set off more derived calls than its budget or nest them deeper; the call over is cut with `ErrChainBudget`, the budget belongs to the request, and the operator sets it with `principal limits <id> chain` without touching the rate | `TestOneRequestCannotSetOffMoreCallsThanItsBudget`, `TestOneRequestCannotNestCallsDeeperThanItsBudget`, `TestTheBudgetBelongsToTheRequest`, `TestTheOperatorBoundsWhatOneRequestSetsOff` |
 | A principal on two machines is reached by key and by name: the default machine is the one of the most recent key, a named machine is reached with `~name`, an unknown one is refused, a key that starts later is not chosen, and the answer to a request goes to the machine of the key that signed it; a message is sealed to the key of the machine it goes to; an answer signed by another machine's key is refused; the signed policy refuses a key that is not the principal's, a key on two machines and a target together with endpoints | `TestAPeerOnTwoMachinesIsResolvedByKeyAndByName`, `TestRotationOnOneMachineSealsToTheMostRecentKey`, `TestAPeerWithOneTargetKeepsWorkingForEveryKey`, `TestEndpointsAndKeysAreCheckedBeforeAnythingIsWritten`, `TestKeysOfAPrincipalAreAddedAndRemovedWithTheirDate`, `TestPeerEndpointsAreSignedAndChecked`, `TestActiveKeysAreTheValidOnesMostRecentFirst`, `TestBeginResponseChecksEveryBinding`, `TestEngine_N5_MACH_01` to `_03`, `TestRealProcesses_APeerOnSeveralMachinesIsConfiguredWithTheCommandLine` (the command line alone configures the machines of a peer) |
+| A wrapper that declares a store gets an owner-only directory of its own and its path, never the machine directory, even when `BRIQUE_SECURITY_DIR` is exported; a wrapper that declares none gets nothing; without a machine directory the launch is refused and not remembered; `wrapper-file` installs JSON owner-only, shows, lists and removes it, and refuses anything else | `execution/execution_wrapper_store_test.go`, `cmd/brique-sec/wrapper_file_test.go` |
+| A resource id is decided under the name the element is stored under: folded to lowercase, then valid in the portable set; a separator, `..`, a control character, a space, an accent or a Windows device name is refused | `access/access_test.go` (`TestNormalizeRejectsAmbiguousResourceCoordinates`) |
+| An element name is portable: what a caller writes is folded to lowercase, stored so, read back in any case, and a name that would differ from one file system to another (case, accent, space, Windows character or device name) is refused, for matters, structures, capacities, schemas and documents | `shared/element_name_test.go`, `TestEngine_N6_MatterIdentifiersArePortable`, `TestEngine_N6_ReflexiveNamesArePortable` |
+| Letter case never changes a decision: a rule written in any case decides the id written in any other, at the door, in resource checks and in owner selection | `trust/names_test.go` (`TestPatternRulesDecideResources`), `policysrc/property_test.go` (requests in upper and lower case against targets in any case) |
+| A pattern decides exactly the names it matches, a deny pattern wins over an allow, and the compiled policy agrees with an independent reference matcher on random sources | `trust/names_test.go` (`TestMatchNameIgnoresCaseAndReadsStars`, `FuzzGlobMatchAgreesWithRegexp`), `policysrc/property_test.go` |
+| A target has one canonical text: the path form and the earlier `#genre:name` form, in any case, parse to the same target; a genre folder used as a context, a name outside the portable set, a pattern under `/**` are refused | `policysrc/target_test.go` (`TestParseTargetValid`, `TestParseTargetInvalid`, `FuzzParseTarget`) |
+| A protected capacity is refused to a caller with no admission with the canonical refusal, answered only when awaited, and journaled; its coverage (subtree, one capacity, every capacity of one context) is exact; nothing is protected without a policy, for another type, or for a response; the list is validated, compiled sorted, absent when empty, shown by `diff`, and edited by `protect` | `execution/execution_protected_test.go`, `trust/protected_capacities_test.go`, `policysrc/protected_test.go`, `cmd/brique-sec/protect_test.go` |
+| A call that carries an expired, exhausted or unknown delegation is answered `unavailable` with the canonical refusal instead of being left without an answer, so a caller never waits for its whole timeout | `communication/comm_wrapper_delegation_test.go` (`TestACallOnAnInvalidDelegationIsAnsweredUnavailable`) |
+| `doctor`, given the instance, reports a protected target whose context does not exist and a private directory of a wrapper that no context declares with `run.store`, and never takes a pattern target for a missing capacity | `secadmin/doctor_stores_test.go` |
 | `brique-sec key show` prints the public key a peer registers, derived from the key the engine signs with, and no private material | `TestIdentityGivesThePeerTheKeyTheInstanceSignsWith`, `TestKeyShowGivesTheOtherInstanceWhatItNeeds` |
 | Every engine capacity has exactly one class; a new capacity is unreachable until classified | `TestEveryClassifiedCapacityHasExactlyOneKnownClass`, `access.NewFamilyRegistry` |
 | No family has a bare-message inbox; the only route in is the delivery channel | `TestNoFamilyLoopOwnsABareMessageInbox` |

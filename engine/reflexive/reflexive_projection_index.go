@@ -398,6 +398,7 @@ func resolveDescriptorAbsFromRoot(rootCtxDir, ctxID, elementType, id string) (st
 		if name == "" {
 			return "", fmt.Errorf("missing name")
 		}
+		name = shared.FoldElementName(name)
 		if err := validElementName(name); err != nil {
 			return "", err
 		}
@@ -406,6 +407,7 @@ func resolveDescriptorAbsFromRoot(rootCtxDir, ctxID, elementType, id string) (st
 		if name == "" {
 			return "", fmt.Errorf("missing name")
 		}
+		name = shared.FoldElementName(name)
 		if err := validElementName(name); err != nil {
 			return "", err
 		}
@@ -414,6 +416,7 @@ func resolveDescriptorAbsFromRoot(rootCtxDir, ctxID, elementType, id string) (st
 		if name == "" {
 			return "", fmt.Errorf("missing name")
 		}
+		name = shared.FoldElementName(name)
 		if err := validElementName(name); err != nil {
 			return "", err
 		}

@@ -222,7 +222,9 @@ const (
 	ValueReasonInvalidPayload  = "payload is invalid"
 	ValueReasonMissingPayload  = "payload is missing"
 	ValueReasonPayloadTooLarge = "payload_too_large"
-	ValueReasonRecoveryPending = "recovery_pending"
+	// ValueReasonResponseTooLarge answers a response that the browser bridge cannot carry (its size limit), instead of dropping it.
+	ValueReasonResponseTooLarge = "response_too_large"
+	ValueReasonRecoveryPending  = "recovery_pending"
 
 	ValueReasonMissingMatterID    = "matter id is missing"
 	ValueReasonMissingMatterIDs   = "matter ids are missing"

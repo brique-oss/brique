@@ -84,7 +84,30 @@ type contextNode struct {
 	children     map[string]*contextNode
 	capabilities map[capabilityKey]*ruleScopes
 	resources    map[resourceKey]*ruleScopes
-	verbs        map[string]*ruleScopes
+	// patterns are the rules that name elements by a pattern (names.go), by kind and action, in policy order.
+	patterns map[resourceActionKey][]*patternRules
+	verbs    map[string]*ruleScopes
+}
+
+// patternRules are the rules of one name pattern of one kind and action at one context.
+type patternRules struct {
+	pattern string
+	rules   *ruleScopes
+}
+
+// patternRulesFor returns the rules of the pattern, created at the end of the list when new.
+func (node *contextNode) patternRulesFor(key resourceActionKey, pattern string) *ruleScopes {
+	for _, existing := range node.patterns[key] {
+		if existing.pattern == pattern {
+			return existing.rules
+		}
+	}
+	if node.patterns == nil {
+		node.patterns = make(map[resourceActionKey][]*patternRules)
+	}
+	rules := &ruleScopes{}
+	node.patterns[key] = append(node.patterns[key], &patternRules{pattern: pattern, rules: rules})
+	return rules
 }
 
 type capabilityKey struct {
@@ -563,12 +586,23 @@ func (snapshot *Snapshot) AuthorizeResource(admission Admission, contextPath, ki
 	if kind == "context" {
 		id = ""
 	}
+	id = FoldName(id)
 	exactKey := resourceKey{kind: kind, action: action, id: id}
 	allKey := resourceKey{kind: kind, action: action, all: true}
+	patternKey := resourceActionKey{kind: kind, action: action}
 	return snapshot.decide(admission, contextPath, func(node *contextNode, exact bool, scopes bitset) (bool, bool) {
 		denied, allowed := node.resources[exactKey].match(scopes, exact)
 		allDenied, allAllowed := node.resources[allKey].match(scopes, exact)
-		return denied || allDenied, allowed || allAllowed
+		denied, allowed = denied || allDenied, allowed || allAllowed
+		if id != "" {
+			for _, candidate := range node.patterns[patternKey] {
+				if globMatch(candidate.pattern, id) {
+					patternDenied, patternAllowed := candidate.rules.match(scopes, exact)
+					denied, allowed = denied || patternDenied, allowed || patternAllowed
+				}
+			}
+		}
+		return denied, allowed
 	})
 }
 
@@ -588,16 +622,26 @@ func (snapshot *Snapshot) OwnerFor(admission Admission, contextPath, capacity st
 	if err != nil {
 		return "", false
 	}
+	capacity = FoldName(capacity)
 	exactKey := resourceKey{kind: "capacity", action: "execute", id: capacity}
 	allKey := resourceKey{kind: "capacity", action: "execute", all: true}
+	patternKey := resourceActionKey{kind: "capacity", action: "execute"}
 	owner := ""
 	node := snapshot.root
 	for depth := 0; ; depth++ {
 		exact := depth == len(segments)
 		// Deeper nodes override shallower ones; within a node, a named capacity
 		// overrides "all".
-		for _, key := range []resourceKey{allKey, exactKey} {
-			if rules := node.resources[key]; rules != nil {
+		// all, then the patterns that match, then the exact name: the most specific rule that names an owner wins
+		candidates := []*ruleScopes{node.resources[allKey]}
+		for _, candidate := range node.patterns[patternKey] {
+			if globMatch(candidate.pattern, capacity) {
+				candidates = append(candidates, candidate.rules)
+			}
+		}
+		candidates = append(candidates, node.resources[exactKey])
+		for _, rules := range candidates {
+			if rules != nil {
 				for _, rule := range rules.owners {
 					if (exact || rule.descendants) && principal.scopes.has(rule.scope) {
 						owner = rule.owner
@@ -691,6 +735,7 @@ func (snapshot *Snapshot) compilePermissionSet(set PermissionSet, scopeIndex int
 				return fmt.Errorf("permission %q names unknown %s action %q", permission.PermissionID, permission.Kind, action)
 			}
 			keys := []resourceKey{{kind: permission.Kind, action: action, all: true}}
+			var patterns []string
 			if permission.Kind == "context" {
 				keys = []resourceKey{{kind: permission.Kind, action: action}}
 			} else if permission.Selector.All == nil {
@@ -698,14 +743,22 @@ func (snapshot *Snapshot) compilePermissionSet(set PermissionSet, scopeIndex int
 				for index, id := range permission.Selector.IDs {
 					keys[index] = resourceKey{kind: permission.Kind, action: action, id: id}
 				}
+				patterns = permission.Selector.Patterns
 			}
 			node := snapshot.contextNode(permission.Context.Path)
+			all := make([]*ruleScopes, 0, len(keys)+len(patterns))
 			for _, key := range keys {
 				rules := node.resources[key]
 				if rules == nil {
 					rules = &ruleScopes{}
 					node.resources[key] = rules
 				}
+				all = append(all, rules)
+			}
+			for _, pattern := range patterns {
+				all = append(all, node.patternRulesFor(resourceActionKey{kind: permission.Kind, action: action}, pattern))
+			}
+			for _, rules := range all {
 				rules.add(scopeIndex, deny, *permission.Context.IncludeDescendants, words)
 				if permission.AsOwner != "" && !deny {
 					rules.owners = append(rules.owners, ownerRule{scope: scopeIndex, descendants: *permission.Context.IncludeDescendants, owner: permission.AsOwner})

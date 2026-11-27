@@ -18,6 +18,7 @@ package secadmin
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 
 	"brique_engine/engine/security/policysrc"
 	"brique_engine/engine/security/trust"
+	"brique_engine/engine/shared"
 	"brique_engine/platform/protectedfile"
 )
 
@@ -109,6 +111,8 @@ func (d *Dir) Doctor(instanceRoot string) []Finding {
 	}
 	if instanceRoot != "" {
 		checkTargets(src, instanceRoot, add)
+		checkProtected(src, instanceRoot, add)
+		d.checkWrapperStores(instanceRoot, add)
 	}
 	return sortFindings(findings)
 }
@@ -209,12 +213,91 @@ func checkTargets(src *policysrc.Source, root string, add func(Severity, string,
 					add(SeverityWarning, "principal %q grant %d (%s %s): context %s does not exist in the instance", id, rank+1, verb, raw, t.Path)
 					continue
 				}
-				if verb == policysrc.VerbCall && t.Named() {
+				if verb == policysrc.VerbCall && t.Named() && !t.IsPattern() {
 					if _, err := os.Stat(filepath.Join(contextDir(t.Path), "capacity", t.Name+".json")); err != nil {
 						add(SeverityWarning, "principal %q grant %d (call %s): capacity %q does not exist in %s", id, rank+1, raw, t.Name, t.Path)
 					}
 				}
 			}
+		}
+	}
+}
+
+// contextDirOf is the directory of a context path: /root/a/b is <root>/a/b.
+func contextDirOf(root, contextPath string) string {
+	if contextPath == "/root" {
+		return root
+	}
+	return filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(contextPath, "/root/")))
+}
+
+// checkProtected warns about a protected target whose context does not exist: it protects nothing yet, and a context
+// created later under that path is protected from its first call.
+func checkProtected(src *policysrc.Source, root string, add func(Severity, string, ...any)) {
+	for _, raw := range src.Protected {
+		t, err := policysrc.ParseProtectedTarget(raw)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(contextDirOf(root, t.Path)); err != nil || !info.IsDir() {
+			add(SeverityWarning, "protected target %s: context %s does not exist in the instance", raw, t.Path)
+		}
+	}
+}
+
+// storeWalkSkips are folders of a context that hold no context.json of a child.
+var storeWalkSkips = map[string]bool{".git": true, "node_modules": true, "build": true, "tmp": true, "trace": true, "matter": true,
+	"code": true, "capacity": true, "schema": true, "document": true, "structure": true, "ui": true}
+
+// checkWrapperStores warns about the private directory of a wrapper that no context of the instance declares with
+// run.store: what is left in it (tokens, a journal, an installed file) belongs to a wrapper that no longer runs.
+func (d *Dir) checkWrapperStores(root string, add func(Severity, string, ...any)) {
+	entries, err := os.ReadDir(d.abs(shared.WrappersDir))
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	declared := map[string]bool{}
+	_ = filepath.WalkDir(root, func(p string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() && p != root && storeWalkSkips[entry.Name()] {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || entry.Name() != "context.json" {
+			return nil
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil || len(raw) > 4<<20 {
+			return nil
+		}
+		var context struct {
+			Brique struct {
+				EngineConfig struct {
+					Execution struct {
+						Wrappers []struct {
+							Name string `json:"wrapper_name"`
+							Run  struct {
+								Store bool `json:"store"`
+							} `json:"run"`
+						} `json:"wrappers"`
+					} `json:"execution"`
+				} `json:"engine_config"`
+			} `json:"brique"`
+		}
+		if json.Unmarshal(raw, &context) == nil {
+			for _, wrapper := range context.Brique.EngineConfig.Execution.Wrappers {
+				if wrapper.Run.Store {
+					declared[wrapper.Name] = true
+				}
+			}
+		}
+		return nil
+	})
+	for _, entry := range entries {
+		if entry.IsDir() && !declared[entry.Name()] {
+			add(SeverityWarning, "%s/%s: no context of the instance declares wrapper %q with run.store (what it holds belongs to a wrapper that no longer runs)",
+				shared.WrappersDir, entry.Name(), entry.Name())
 		}
 	}
 }

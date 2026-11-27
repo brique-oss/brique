@@ -19,6 +19,7 @@ package reflexive_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"brique_engine/engine/circulation"
@@ -71,5 +72,47 @@ func TestEngine_N6_ReflexiveNamesCannotReachOtherFolders(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(marker); string(raw) != "{}" {
 		t.Fatalf("the security folder changed: %q", raw)
+	}
+}
+
+// A definition is stored under its name folded to lowercase, in the portable set: the caller writes the case it
+// likes, and a name that would differ from one file system to another is refused.
+func TestEngine_N6_ReflexiveNamesArePortable(t *testing.T) {
+	h := newEngineN6Harness(t)
+	for _, kind := range []string{circulation.ValueCapacity, circulation.ValueSchema, circulation.ValueDocument} {
+		resp := callN6Reflexive(t, h, shared.RootContextID, "n6-portable-"+kind, "edit.create", map[string]any{
+			circulation.KeyItems: []any{map[string]any{circulation.KeyType: kind, circulation.KeyName: "Price.Quote_" + kind, "content": map[string]any{"x": 1}}},
+		})
+		if ok, _ := mustResultItems(t, resp)[0].(map[string]any)[circulation.KeyOK].(bool); !ok {
+			t.Fatalf("%s Price.Quote_%s was not created: %v", kind, kind, resp)
+		}
+		entries, err := os.ReadDir(filepath.Join(h.rootDir, kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := false
+		for _, entry := range entries {
+			if entry.Name() != strings.ToLower(entry.Name()) {
+				t.Errorf("a file of the %s folder keeps capitals: %s", kind, entry.Name())
+			}
+			stored = stored || strings.HasPrefix(entry.Name(), "price.quote_"+kind+".")
+		}
+		if !stored {
+			t.Errorf("the %s is not stored under its lowercase name", kind)
+		}
+		for _, name := range []string{"été", "mon nom", "con", "aux.x", "a:b", "a*b", ".cache", "fin."} {
+			resp := callN6Reflexive(t, h, shared.RootContextID, "n6-portable-bad", "edit.create", map[string]any{
+				circulation.KeyItems: []any{map[string]any{circulation.KeyType: kind, circulation.KeyName: name, "content": map[string]any{"x": 1}}},
+			})
+			if ok, _ := mustResultItems(t, resp)[0].(map[string]any)[circulation.KeyOK].(bool); ok {
+				t.Errorf("%s %q was created", kind, name)
+			}
+		}
+	}
+	resp := callN6Reflexive(t, h, shared.RootContextID, "n6-portable-read", "read.document", map[string]any{
+		circulation.KeyItems: []any{map[string]any{circulation.KeyName: "PRICE.QUOTE_document"}},
+	})
+	if errMap, _ := mustResultItems(t, resp)[0].(map[string]any)[circulation.KeyError].(map[string]any); errMap["code"] != nil {
+		t.Errorf("read.document in another case was refused: %v", errMap)
 	}
 }

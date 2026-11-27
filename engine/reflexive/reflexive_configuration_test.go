@@ -24,31 +24,27 @@ import (
 
 func TestParseReflexiveCfg_N0_RCFG_01_NilConfig(t *testing.T) {
 	cfg := ParseReflexiveCfg(nil)
-	if cfg.RootRepo || cfg.RepoName != "" {
+	if cfg != (ReflexiveCfg{}) {
 		t.Fatalf("nil config should return zero-value cfg, got %#v", cfg)
 	}
 }
 
 func TestParseReflexiveCfg_N0_RCFG_02_ValidConfig(t *testing.T) {
 	cfg := ParseReflexiveCfg(map[string]any{
-		configuration.KeyRootRepo: true,
-		configuration.KeyRepoName: "brique-repo",
+		configuration.KeyProjectionSyncOnEdit: true,
 	})
-	if !cfg.RootRepo || cfg.RepoName != "brique-repo" {
+	if !cfg.ProjectionSyncOnEdit {
 		t.Fatalf("valid config parse mismatch, got %#v", cfg)
 	}
 }
 
-func TestParseReflexiveCfg_N0_RCFG_03_InvalidTypesAndTrim(t *testing.T) {
+func TestParseReflexiveCfg_N0_RCFG_03_InvalidTypesAndUnknownKeys(t *testing.T) {
 	cfg := ParseReflexiveCfg(map[string]any{
-		configuration.KeyRootRepo: "true",
-		configuration.KeyRepoName: "  my-repo  ",
+		configuration.KeyProjectionSyncOnEdit: "true",
+		"root_repo":                           true, // a key the engine no longer knows is ignored
 	})
-	if cfg.RootRepo {
-		t.Fatalf("invalid bool type should be ignored, got %#v", cfg)
-	}
-	if cfg.RepoName != "my-repo" {
-		t.Fatalf("repo name should be trimmed, got %q", cfg.RepoName)
+	if cfg != (ReflexiveCfg{}) {
+		t.Fatalf("invalid types and unknown keys should be ignored, got %#v", cfg)
 	}
 }
 

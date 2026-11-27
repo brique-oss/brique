@@ -40,37 +40,45 @@ func (l *CommLoop) answerPanic(msg circulation.Message) func(string) {
 		if msg.Kind != circulation.ValueKindIntention || !msg.Intention.AwaitResponse {
 			return
 		}
-		ctxID := ""
-		if l.frame != nil {
-			ctxID = l.frame.CtxId
-		}
-		ack := circulation.Message{
-			Kind: circulation.ValueKindResponse,
-			Response: circulation.Response{
-				IntentionID: msg.Intention.IntentionID,
-				Status:      circulation.ValueStatusError,
-				To:          msg.Intention.From,
-				From: circulation.Address{
-					Context: circulation.ContextID(ctxID),
-					Type:    circulation.ValueTypeCommunication,
-					Cap:     msg.Intention.To.Cap,
-				},
-				Identity: msg.Intention.Identity,
-				Error: &circulation.ResponseProblem{
-					Origin:  circulation.ValueOriginCommunication,
-					Code:    circulation.ValueCodeInternal,
-					Message: "internal error",
-					Details: map[string]any{circulation.KeyReason: "handler_panic"},
-				},
-			},
-		}
-		// The answer goes through the code that just panicked: it must not take the
-		// loop down a second time.
-		func() {
-			defer shared.Recover(func(string) {})
-			l.routeEgress(ack)
-		}()
+		l.answerIntentionError(msg, circulation.ValueCodeInternal, "handler_panic", "internal error")
 	}
+}
+
+// answerIntentionError answers an intention with an error from the communication
+// family, so that its sender does not wait for its timeout. Anything else gets no answer. The answer must not take the loop down: a panic while sending
+// it is swallowed (it may run from the code that just panicked).
+func (l *CommLoop) answerIntentionError(msg circulation.Message, code, reason, text string) {
+	if msg.Kind != circulation.ValueKindIntention {
+		return
+	}
+	ctxID := ""
+	if l.frame != nil {
+		ctxID = l.frame.CtxId
+	}
+	ack := circulation.Message{
+		Kind: circulation.ValueKindResponse,
+		Response: circulation.Response{
+			IntentionID: msg.Intention.IntentionID,
+			Status:      circulation.ValueStatusError,
+			To:          msg.Intention.From,
+			From: circulation.Address{
+				Context: circulation.ContextID(ctxID),
+				Type:    circulation.ValueTypeCommunication,
+				Cap:     msg.Intention.To.Cap,
+			},
+			Identity: msg.Intention.Identity,
+			Error: &circulation.ResponseProblem{
+				Origin:  circulation.ValueOriginCommunication,
+				Code:    code,
+				Message: text,
+				Details: map[string]any{circulation.KeyReason: reason},
+			},
+		},
+	}
+	func() {
+		defer shared.Recover(func(string) {})
+		l.routeEgress(ack)
+	}()
 }
 
 // tracePanic is the handler for work that has no sender to answer.

@@ -429,14 +429,12 @@ func TestProjectionSyncLoop_AppliesChangesPeriodically(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if _, err := os.Stat(dbPath(s.root)); err == nil {
-				if fmt.Sprint(s.elements()) == want {
-					return
-				}
+			if s.tryElements() == want { // the file exists before its tables while a sync creates it
+				return
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		t.Fatalf("projection never reached %s (has %v)", want, s.elements())
+		t.Fatalf("projection never reached %s (has %v)", want, s.tryElements())
 	}
 	waitRows("[/root:capacity:a]")
 	s.write("capacity/b.json", capDoc("b", "v1"))

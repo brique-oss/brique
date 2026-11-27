@@ -15,8 +15,8 @@ import (
 
 // The architecture test reads the import graph of the module and refuses the
 // edges that the repository organisation forbids. It states only rules that hold
-// today; each reorganisation step tightens it until it applies the target
-// dependency rule of plan_reorganisation_depot_brique.md (section 2.2).
+// today; the reorganisation of the repository tightened it step by step until it
+// applied the target dependency rule.
 
 const modulePrefix = "brique_engine"
 

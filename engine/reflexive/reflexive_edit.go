@@ -300,14 +300,15 @@ func parseItems(params map[string]any) ([]editItem, error) {
 		if v, ok := m[circulation.KeyType].(string); ok {
 			e.Type = strings.TrimSpace(strings.ToLower(v))
 		}
+		// A name is the element's stored name: folded to lowercase (shared.ElementName), whatever case the caller wrote.
 		if v, ok := m[circulation.KeyName].(string); ok {
-			e.Name = strings.TrimSpace(v)
+			e.Name = shared.FoldElementName(v)
 		}
 		if v, ok := m[circulation.KeySourceName].(string); ok {
-			e.SourceName = strings.TrimSpace(v)
+			e.SourceName = shared.FoldElementName(v)
 		}
 		if v, ok := m[circulation.KeyTargetName].(string); ok {
-			e.TargetName = strings.TrimSpace(v)
+			e.TargetName = shared.FoldElementName(v)
 		}
 		if v, ok := m[circulation.KeyDestinationCtxId].(string); ok {
 			e.DestinationCtxID = strings.TrimSpace(v)
@@ -633,6 +634,7 @@ func meaningPathFor(ctxDir, t, id string) (diskPath string, navPath string, err 
 		if id == "" {
 			return "", "", fmt.Errorf("capacity name is required")
 		}
+		id = shared.FoldElementName(id)
 		if err := validElementName(id); err != nil {
 			return "", "", err
 		}
@@ -643,6 +645,7 @@ func meaningPathFor(ctxDir, t, id string) (diskPath string, navPath string, err 
 		if id == "" {
 			return "", "", fmt.Errorf("schema name is required")
 		}
+		id = shared.FoldElementName(id)
 		if err := validElementName(id); err != nil {
 			return "", "", err
 		}
@@ -653,6 +656,7 @@ func meaningPathFor(ctxDir, t, id string) (diskPath string, navPath string, err 
 		if id == "" {
 			return "", "", fmt.Errorf("document name is required")
 		}
+		id = shared.FoldElementName(id)
 		if err := validElementName(id); err != nil {
 			return "", "", err
 		}

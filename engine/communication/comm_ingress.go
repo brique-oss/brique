@@ -586,7 +586,10 @@ func (l *CommLoop) routeIngressLocal(msg circulation.Message, endpoint string, i
 	// --------------------------------------
 	if t == circulation.ValueTypeUser {
 		if l.frame != nil && shared.IsRootContext(l.frame.CtxId) {
+			// The root declares no user capacity: the call is answered as one to an unknown
+			// capacity, as a child context would, so that its sender does not wait for its timeout.
 			l.sendToTrace(msg, circulation.ValueTraceCommReject, circulation.ValueReasonInvalidCapacityType, "no user capacity available in root")
+			l.answerIntentionError(msg, circulation.ValueCodeInvalid, circulation.ValueReasonUnknownCap, "capacity is unknown")
 			return
 		}
 		execCh, ok := l.frame.LookupFamily(shared.FamilyExecution)

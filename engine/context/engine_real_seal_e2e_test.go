@@ -154,7 +154,7 @@ func TestRealProcesses_AnInterceptingRelayReadsNothingOfASealedExchange(t *testi
 		pair.self.sec(t, "grant", "add", pair.peer.id, "call", "/root/back#capacity:e2e.echo")
 		pair.self.apply(t)
 	}
-	if out := a.sec(t, "principal", "list"); !strings.Contains(out, "chiffré") {
+	if out := a.sec(t, "principal", "list"); !strings.Contains(out, "encrypted") {
 		t.Fatalf("an instance principal is not sealed by default:\n%s", out)
 	}
 

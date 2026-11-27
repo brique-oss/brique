@@ -54,17 +54,17 @@ func SimulateSourceAs(src *policysrc.Source, principal, actor, verb, target stri
 	if err != nil {
 		return policysrc.Decision{}, err
 	}
-	if t.Subtree || t.Name == "*" {
-		return policysrc.Decision{}, fmt.Errorf("simulate asks about one resource: give a context or <context>#<genre>:<name>, not %q", target)
+	if t.Subtree || t.Name == "*" || t.IsPattern() {
+		return policysrc.Decision{}, fmt.Errorf("simulate asks about one resource: give a context or <context>/<genre>/<name>, not %q", target)
 	}
 	kind, id := t.Genre, t.Name
 	switch {
 	case verb == policysrc.VerbCall && t.Genre != "capacity":
-		return policysrc.Decision{}, fmt.Errorf("call applies to a capacity: <context>#capacity:<name>")
+		return policysrc.Decision{}, fmt.Errorf("call applies to a capacity: <context>/capacity/<name>")
 	case t.Genre == "" && (verb == policysrc.VerbRead || verb == policysrc.VerbDefine || verb == policysrc.VerbControl):
 		kind, id = "context", ""
 	case t.Genre == "":
-		return policysrc.Decision{}, fmt.Errorf("%s applies to elements: <context>#<genre>:<name>", verb)
+		return policysrc.Decision{}, fmt.Errorf("%s applies to elements: <context>/<genre>/<name>", verb)
 	}
 	switch verb {
 	case policysrc.VerbRead, policysrc.VerbWrite, policysrc.VerbCreate, policysrc.VerbCall, policysrc.VerbDefine, policysrc.VerbControl:

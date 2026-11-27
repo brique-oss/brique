@@ -106,7 +106,6 @@ const (
 	KeyWrpStopTO            = "stop_timeout_ms"
 	KeyWrpSourceCheckMs     = "source_check_interval_ms"
 	KeyWrpBuild             = "build"
-	KeyWrpCWD               = "cwd"
 	KeyWrpShell             = "shell"
 	KeyWrpTO                = "timeout_ms"
 	KeyWrpArti              = "artifact"
@@ -118,6 +117,8 @@ const (
 	KeyWrpSecrets           = "secrets"
 	KeyWrpSecretName        = "name"
 	KeyWrpSecretEnv         = "env"
+	KeyWrpSecretOptional    = "optional"
+	KeyWrpStore             = "store"
 	KeyWrpEnvName           = "env_name"
 	KeyWrpLog               = "log"
 	KeyWrpLogEnabled        = "enabled"
@@ -143,10 +144,6 @@ const (
 	KeyTraceSegMax   = "segment_max_bytes"
 	KeyTraceMaxSegs  = "max_segments"
 	KeyTraceMaxTotal = "max_total_bytes"
-
-	// reflexive loop
-	KeyRootRepo = "root_repo"
-	KeyRepoName = "repo_name"
 
 	// Reflexive projection auto-sync (root only; 0 disables).
 	KeyProjectionSyncIntervalMs   = "projection_sync_interval_ms"

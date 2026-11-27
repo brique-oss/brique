@@ -58,7 +58,7 @@
           "allowed_prefixes": [],
           "max_addresses": 8,
           "open_timeout_ms": 15000,
-          "_note": "Root context only. Enables the owner-only native-host IPC endpoint. It requires an active Brique Sec runtime. Public Internet, cleartext loopback and every LAN/private CIDR are separate explicit local choices; a signed remote endpoint never enables them. Unknown or malformed keys fail engine startup when this block is declared."
+          "_note": "Root context only. Enables the owner-only native-host IPC endpoint. It requires an active Brique Sec runtime. Public Internet, cleartext loopback and every LAN/private CIDR are separate explicit local choices; a signed remote endpoint never enables them. Unknown or malformed keys fail engine startup when this block is declared. max_addresses is an integer from 1 to 64 (default 8); open_timeout_ms an integer from 1 to 60000 (default 15000)."
         },
 
         "interfaces": [
@@ -85,6 +85,8 @@
               "_origin_note": "Optional. CORS allow-any-origin, only meaningful for 'http'/'https' interfaces.",
               "read_limit": 0,
               "_read_limit_note": "Optional. Maximum serialized control-message size in bytes for this interface, inbound and outbound. It may lower but never raise the global 4 MiB control-plane ceiling. 0 means that ceiling. Voluminous or binary business payloads must travel through Matter substance leases.",
+              "ping_interval_ms": 0,
+              "_ping_interval_note": "Optional, 'ws' interfaces. Milliseconds between the WebSocket pings the engine sends to keep the connection alive and to notice a peer that is gone. 0 (or absent) means the engine default of 20000 (20 s).",
               "address_rate": 0,
               "_address_rate_note": "Optional, 'https' interfaces that receive signed messages. Requests a second one remote address may send; the burst is twice that. 0 means 2000. It only has to stop a flood: an authenticated peer sends the answers to this instance's own calls at the rate they were made, and a request over the budget is refused with HTTP 429 (a refused answer is never retried).",
               "request_timeout_ms": 0,
@@ -129,6 +131,9 @@
         "default_invoke_timeout_ms": 0,
         "_timeout_note": "Optional. Default timeout in ms applied to DSL invoke nodes that don't declare their own timeout. 0 means the built-in default of 30000 (30 s).",
 
+        "max_concurrent_jobs": 0,
+        "_max_concurrent_jobs_note": "Optional. How many user capacity jobs this context runs at once. 0 (or absent) means the engine default of 1024; a negative number means no limit.",
+
         "wrappers": [
           {
             "_comment": "This whole array is optional. Only needed if this context manages a wrapper process. Omit entirely (or leave []) if this context has no wrapper. If present, engine_config.communication.wrapper_boundary above must list this same wrapper_name, AND engine_config.communication.interfaces above must contain a matching entry with type='wrapper' and the same name (see interfaces[]._type_note) — all three declarations are required together, or wrapper.start times out with a generic 'wrapper readiness timeout' instead of naming the missing piece.",
@@ -140,10 +145,15 @@
             "_mode_note": "Required. 'interpreted' (a running process that receives intentions over its lifetime) or 'compiled' (same communication model, for a compiled artifact).",
 
             "ready_timeout_ms": 2000,
-            "_ready_timeout_note": "Optional. Max ms to wait for the wrapper to signal readiness after process start.",
+            "_ready_timeout_note": "Optional. Max ms to wait for the wrapper to signal readiness after process start. 0 or absent: wait without limit (the start only ends when the wrapper is ready or the context stops).",
 
             "stop_timeout_ms": 1000,
-            "_stop_timeout_note": "Optional. Ms to wait for graceful stop before force-killing the process.",
+            "_stop_timeout_note": "Optional. Ms to wait for graceful stop before force-killing the process. 0 or absent: no force-kill timer, the engine waits for the process to exit by itself.",
+
+            "source_check_interval_ms": 0,
+            "_source_check_interval_note": "Optional. Turns on source-change detection and sets its pace. 0 or absent (the default): the wrapper is built or started once, and an edit is only noticed after it is stopped and started again. A positive value: the source folder (code/<wrapper_name>, plus 'watch') is scanned at most once per interval, and a newer source makes the engine rebuild a compiled wrapper or restart an interpreted one.",
+            "watch": [],
+            "_watch_note": "Optional. Extra source trees, relative to the wrapper source folder or absolute, whose changes also make the wrapper stale (only looked at when source_check_interval_ms > 0). Typically the wrapper library shared by the instance, for example ['../../../../wrapper/go/lib']. build.watch is added to this list.",
 
             "build": {
               "_comment": "Optional. Build step run once before the wrapper process is first started. Omit if the wrapper needs no build (e.g. a plain script).",
@@ -153,6 +163,8 @@
               "_artifact_note": "Path to the build output artifact, if any.",
               "artifact_kind": "file",
               "cmd": [],
+              "watch": [],
+              "_watch_note": "Optional. Extra source trees, relative to the wrapper source folder or absolute, whose changes also make the build stale. A wrapper compiled against a library shared by the instance lists that library here.",
               "_cmd_note": "Write the build command as if always on macOS/Linux — never type '.exe'. When mode is 'compiled', the engine locates the path right after a '-o' flag (if any) and appends the platform's executable suffix itself ('.exe' on Windows, nothing elsewhere) before running the command, so 'go build -o code/wrapper/bin/wrapper .' produces the right file on every OS unchanged. A build command with no '-o' flag is left untouched — the engine only corrects a path it can identify."
             },
 
@@ -162,8 +174,7 @@
               "_shell_note": "When true, cmd is joined and run through the shell. When false, cmd[0] is the executable and cmd[1:] are args.",
               "cmd": ["python3", "main.py"],
               "_cmd_note": "For mode 'compiled', write cmd[0] as the macOS/Linux binary path (no '.exe') — the engine appends the platform's executable suffix to cmd[0] itself, the same way and using the same path it corrected in build.cmd (see build.cmd._cmd_note), so the same config launches the file the build step actually produced on every OS. Not applied to mode 'interpreted' (e.g. the python3/python rewrite below).",
-              "cwd": "",
-              "_cwd_note": "Optional. Working directory for the process. Defaults to the context directory.",
+              "_working_directory_note": "The engine always starts an 'interpreted' wrapper in its source folder (<context>/code/<wrapper_name>) and a 'compiled' one in its build folder (<context>/build/<wrapper_name>), and runs the build command in the source folder. This is not configurable. The wrapper also gets BRIQUE_CTX_DIR, BRIQUE_WRAPPER_SRC_DIR, BRIQUE_WRAPPER_BUILD_DIR and BRIQUE_WORKDIR in its environment.",
               "env_name": "",
               "_env_name_note": "Optional. Name of a shared Python virtualenv to run this wrapper under, hand-maintained (pip install -r requirements.txt) outside the engine. When cmd[0] is 'python3' or 'python', the engine rewrites it to that venv's interpreter. Empty => <instance_root_parent>/venv/<bin-dir>/<python-exe> (single default env, if it exists). Non-empty (e.g. 'data_science') => <instance_root_parent>/envs/data_science/venv/<bin-dir>/<python-exe> (named env, for wrappers whose dependencies conflict with the default env). <bin-dir> is 'Scripts' and <python-exe> is 'python.exe' on Windows; <bin-dir> is 'bin' and <python-exe> is 'python3' on macOS/Linux. instance_root_parent is the directory sibling to the context whose brique.ctx_type == \"root\", found by walking up from this context. If the resolved venv bin directory does not exist, the engine falls back to the system interpreter unchanged.",
               "log": {
@@ -176,7 +187,7 @@
                 "_env_note": "Free-form environment variables injected into the wrapper process, in addition to BRIQUE_WS_ADDR/BRIQUE_WS_URL which the engine always injects automatically."
               },
               "secrets": [],
-              "_secrets_note": "Optional. The secrets this wrapper needs, one entry each, {\"name\": \"<secret>\", \"env\": \"<VARIABLE>\"}: name is the secret kept on this machine (brique-sec secret add <name>), env the environment variable the wrapper reads it from (not BRIQUE_*, not a key of run.env). A secret is given only if the access source also grants it to this wrapper (\"secrets\" in security/access.json); otherwise the wrapper does not start and the error names the secret. Leave the list empty when the wrapper needs none. Never write a value here."
+              "_secrets_note": "Optional. The secrets this wrapper needs, one entry each, {\"name\": \"<secret>\", \"env\": \"<VARIABLE>\", \"optional\": false}: name is the secret kept on this machine (brique-sec secret add <name>), env the environment variable the wrapper reads it from (not BRIQUE_*, not a key of run.env). A secret is given only if the access source also grants it to this wrapper (\"secrets\" in security/access.json); otherwise the wrapper does not start and the error names the secret. \"optional\": true (default false) changes that for one entry: when the policy does not grant it or the machine holds no value for it, the wrapper starts without that variable. Use it for what a wrapper can run without, for example one entry for each model provider it supports, so that each owner sets up only the providers they use; a value that exists but is unsafe to read (wrong mode, too large) and a malformed entry are still refused. Leave the list empty when the wrapper needs none. Never write a value here."
             }
           }
         ]
@@ -186,11 +197,11 @@
         "inline_max_bytes": 262144,
         "_inline_max_bytes_note": "Optional. Maximum local brique substance size returned inline by matter.read. Larger substances use a one-shot HTTP read lease. Default: 262144 (256 KiB).",
         "max_upload_bytes": 268435456,
-        "_max_upload_bytes_note": "Optional. Maximum body accepted by a matter HTTP upload lease. Default: 268435456 (256 MiB).",
+        "_max_upload_bytes_note": "Root only. Maximum body accepted by a matter HTTP upload lease. Default: 268435456 (256 MiB).",
         "max_handlers": 512,
         "_max_handlers_note": "Optional. Matter operations that may run at once. Past it the Matter loop answers 'busy' at once (reason loop busy). A pilot makes several operations per step: a few dozen active continuities reached the former limit of 64. Default: 512.",
         "lease_ttl_ms": 30000,
-        "_lease_ttl_note": "Optional. Sliding idle lifetime of a leased GET or PUT. Each authenticated request renews it, but never past lease_max_life_ms. A claimed upload may finish after this idle deadline, while still remaining bounded by the absolute lifetime. Default: 30000.",
+        "_lease_ttl_note": "Root only. Sliding idle lifetime of a leased GET or PUT. Each authenticated request renews it, but never past lease_max_life_ms. A claimed upload may finish after this idle deadline, while still remaining bounded by the absolute lifetime. Default: 30000.",
         "lease_max_transfers": 32,
         "_lease_max_transfers_note": "Root only. Maximum simultaneous GET/PUT transfers on the instance-wide Matter data plane. Excess authenticated transfers receive 503 with Retry-After. Default: 32.",
         "lease_max_life_ms": 600000,
@@ -200,28 +211,46 @@
         "lease_listen": "127.0.0.1:0",
         "_lease_listen_note": "Root only. Private listener used directly in local mode or behind the reverse proxy. Non-loopback requires public_url.",
         "public_url": "",
-        "_public_url_note": "Root only. Exact HTTPS base exposed by the instance proxy, for example https://engine.example/brique. Empty keeps the generated loopback URL."
+        "_public_url_note": "Root only. Exact HTTPS base exposed by the instance proxy, for example https://engine.example/brique. Empty keeps the generated loopback URL.",
+        "owner_bytes_burst_mib": 2048,
+        "_owner_bytes_burst_note": "Root only. Per-owner budget for the bytes an external caller moves through the Matter data plane: the size of the allowance an owner starts with, in MiB. Default: 2048. 0 turns the budget off.",
+        "owner_bytes_per_minute_mib": 1024,
+        "_owner_bytes_per_minute_note": "Root only. How fast that allowance refills, in MiB per minute and per owner. Default: 1024. A transfer that does not fit in what is left is refused until it refills.",
+        "heavy_per_second": 20,
+        "_heavy_per_second_note": "Root only. Per-owner rate of 'heavy' Matter operations asked by external callers, per second. Default: 20.",
+        "heavy_burst": 40,
+        "_heavy_burst_note": "Root only. How many heavy operations an external owner may do in a burst before heavy_per_second applies. Default: 40. 0 turns the limit off.",
+        "min_free_disk_mib": 256,
+        "_min_free_disk_note": "Optional, any context. Free space in MiB under which the instance refuses every Matter write, whoever asks: a net against a runaway loop, not a defence against an attacker. Default: 256. 0 turns the guard off. When the free space cannot be measured the guard refuses.",
+        "outbox_ttl_hours": 168,
+        "_outbox_ttl_note": "Optional, any context. How long, in hours, a durable event may wait for a subscriber that never acknowledges it before it is dropped and traced. Default: 168 (7 days). 0 keeps the events for ever."
       },
-      "_matter_note": "Optional Matter data-plane limits. Omit the block or individual positive integer fields to retain their defaults.",
+      "_matter_note": "Optional Matter data-plane limits. Omit the block or individual fields to retain their defaults. Unless a field says otherwise, a value that is not a positive integer is ignored. Fields marked 'Root only' are read from the root context only.",
 
       "trace": {
         "_comment": "Read by TraceLoop. Key presence required (empty {} is enough to start — every field below has a safe default if omitted, and 'enabled' defaults to false, meaning tracing is off unless you explicitly turn it on).",
-        "enabled": true,
-        "_enabled_note": "Whether this context records trace events at all.",
+        "enabled": false,
+        "_enabled_note": "Whether this context records trace events at all. Default: false (tracing is off).",
         "level": "normal",
-        "_level_note": "'minimal', 'normal', or 'debug'.",
-        "ring_capacity": 64,
-        "_ring_note": "In-memory ring buffer size (number of trace events kept before older ones are evicted).",
-        "flush_every_n": 8,
-        "_flush_n_note": "Flush to disk every N events.",
-        "flush_every_interval": 20,
-        "_flush_interval_note": "Flush to disk every N seconds regardless of event count.",
-        "segment_max_bytes": 1048576,
-        "_segment_note": "Max size in bytes of one JSONL trace segment file before rotation."
+        "_level_note": "'minimal', 'normal', or 'debug'. Default: 'normal'. Empty or absent keeps the default.",
+        "inchan_capacity": 1024,
+        "_inchan_note": "Number of places of the channel through which the other families hand their events to the trace loop. Default: 1024. A value that is not a positive integer is ignored.",
+        "ring_capacity": 8192,
+        "_ring_note": "In-memory ring buffer size (number of trace events kept before older ones are evicted). Default: 8192.",
+        "flush_every_n": 256,
+        "_flush_n_note": "Flush to disk every N events. Default: 256.",
+        "flush_every_interval": 1000,
+        "_flush_interval_note": "Flush to disk every N MILLISECONDS regardless of event count. Default: 1000 (1 s).",
+        "segment_max_bytes": 16777216,
+        "_segment_note": "Max size in bytes of one JSONL trace segment file before rotation. Default: 16777216 (16 MiB).",
+        "max_segments": 0,
+        "_max_segments_note": "Retention: the most trace segment files kept; the oldest are removed when a new segment starts. 0 or absent: no limit on the number of segments.",
+        "max_total_bytes": 0,
+        "_max_total_bytes_note": "Retention: the most bytes the segments may take together; the oldest are removed when a new segment starts. The segment being written is never removed, even if it alone exceeds the limit. 0 or absent: no limit. When both retention fields are 0 nothing is ever removed."
       },
 
       "reflexive": {},
-      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Optional, root only: 'projection_sync_interval_ms' (>0) keeps the meaning projection up to date by itself, applying new/changed/deleted descriptors found on disk (cost follows the change, not the instance size); 'projection_verify_interval_ms' (>0) adds a slower pass that also catches in-place edits; 'projection_sync_on_edit' (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. All default to off; meaning.update {sync:true} does the same pass on demand. Limits (optional, any context that runs the family): 'max_handlers' (default 64) is how many reflexive requests run at once, past it the answer is 'busy'; 'inbox_capacity' (default 16) is the size of the family's input channel. A busy instance serving many users can raise both."
+      "_reflexive_note": "Read by ReflexiveLoop. Key presence required (empty {} is enough to start). Optional, root only: 'projection_sync_interval_ms' (>0) keeps the meaning projection up to date by itself, applying new/changed/deleted descriptors found on disk (cost follows the change, not the instance size); 'projection_verify_interval_ms' (>0) adds a slower pass that also catches in-place edits; 'projection_sync_on_edit' (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. All default to off; meaning.update {sync:true} does the same pass on demand. Limits (optional, any context that runs the family): 'max_handlers' (default 64) is how many reflexive requests run at once, past it the answer is 'busy'; 'inbox_capacity' (default 16) is the size of the family's input channel; 'projection_max_conns' (default 16) is the size of the pool of connections to the meaning projection (the SQLite file projection/meaning.sqlite) that concurrent searches share. A busy instance serving many users can raise all three."
     }
   },
 

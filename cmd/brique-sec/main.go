@@ -63,6 +63,13 @@ Usage: brique-sec [--root <instance root/ folder>] [--dir <machine directory>] <
   secret allow <name> <wrapper>                               (the wrapper may receive that secret; the value is added with secret add)
   secret deny <name> <wrapper>
   secret list
+  protect add <target>                                        (a caller with no admission may not run these capacities: /ctx/**, /ctx/capacity/<name>)
+  protect remove <target>
+  protect list
+  wrapper-file install <wrapper> <name> <file>                (a JSON file the wrapper reads from its private directory)
+  wrapper-file show <wrapper> <name>
+  wrapper-file remove <wrapper> <name>
+  wrapper-file list <wrapper>
   grant remove <principal> <rank> [--actor <actor>]
   grant list <principal> [--actor <actor>]
   compile [--out <file>]
@@ -192,7 +199,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		dir.Carry = hostdir.CarriesGenerations(instanceRoot) || (command == "init" && global.has("strict"))
 	}
 	rest := global.positional[1:]
-	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "secret" || command == "apply" || command == "tls" {
+	if command == "init" || command == "principal" || command == "grant" || command == "peer" || command == "secret" || command == "protect" || command == "wrapper-file" || command == "apply" || command == "tls" {
 		unlock, lockErr := dir.Lock()
 		if lockErr != nil {
 			return fail("administrative lock unavailable: %v", lockErr)
@@ -235,6 +242,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return peerCommand(dir, rest, global, stdout, fail)
 	case "secret":
 		return secretCommand(dir, rest, stdout, stderr, fail)
+	case "protect":
+		return protectCommand(dir, rest, stdout, fail)
+	case "wrapper-file":
+		return wrapperFileCommand(dir, rest, stdout, fail)
 	case "compile":
 		compiled, err := dir.Compile()
 		if err != nil {

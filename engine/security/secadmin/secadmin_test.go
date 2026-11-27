@@ -231,7 +231,7 @@ func TestInvalidChangesLeaveTheSourceUntouched(t *testing.T) {
 	}
 	before, _ := os.ReadFile(d.abs(SourceFile))
 	for name, run := range map[string]func() error{
-		"bad target":        func() error { _, err := d.GrantAdd("p", "read", []string{"/root/A"}, nil); return err },
+		"bad target":        func() error { _, err := d.GrantAdd("p", "read", []string{"/root/a b"}, nil); return err },
 		"bad verb":          func() error { _, err := d.GrantAdd("p", "admin", []string{"/root"}, nil); return err },
 		"unknown principal": func() error { _, err := d.GrantAdd("ghost", "read", []string{"/root"}, nil); return err },
 		"duplicate":         func() error { return d.PrincipalAdd("p", "service", public) },
@@ -367,7 +367,7 @@ func TestSimulateNamesTheRuleAndItsRank(t *testing.T) {
 			t.Errorf("%s %s = %+v, want allowed=%v rank=%d excepted=%v", test.verb, test.target, decision, test.allowed, test.rank, test.excepted)
 		}
 	}
-	for _, bad := range [][2]string{{"read", "/root/a/**"}, {"write", "/root/a"}, {"call", "/root/a"}, {"fly", "/root/a"}, {"read", "root"}} {
+	for _, bad := range [][2]string{{"read", "/root/a/**"}, {"write", "/root/a"}, {"call", "/root/a"}, {"fly", "/root/a"}, {"read", "root"}, {"read", "/root/a/matter/*"}, {"read", "/root/a/matter/order_*"}} {
 		if _, err := d.Simulate("p", bad[0], bad[1]); err == nil {
 			t.Errorf("simulate %v accepted", bad)
 		}

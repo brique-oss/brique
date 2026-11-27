@@ -108,7 +108,10 @@ func Validate(src *Source) error {
 	if err := validatePeers(src); err != nil {
 		return err
 	}
-	return validateSecrets(src)
+	if err := validateSecrets(src); err != nil {
+		return err
+	}
+	return validateProtected(src)
 }
 
 // validatePeers checks that every peer is a principal of the source that has a key to

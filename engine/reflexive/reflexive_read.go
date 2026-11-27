@@ -1065,6 +1065,7 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 			err = fmt.Errorf("capacity elementname is required")
 			return
 		}
+		name = shared.FoldElementName(name)
 		if err = validElementName(name); err != nil {
 			return
 		}
@@ -1077,6 +1078,7 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 			err = fmt.Errorf("schema elementname is required")
 			return
 		}
+		name = shared.FoldElementName(name)
 		if err = validElementName(name); err != nil {
 			return
 		}
@@ -1089,6 +1091,7 @@ func resolveMeaningByKind(ctxDir, kind, name string) (diskPath, navPath, outKind
 			err = fmt.Errorf("document elementname is required")
 			return
 		}
+		name = shared.FoldElementName(name)
 		if err = validElementName(name); err != nil {
 			return
 		}
@@ -1461,7 +1464,7 @@ func (l *ReflexiveLoop) capReadDocument(msg circulation.Message) {
 					continue
 				}
 				name, _ := m[circulation.KeyName].(string)
-				items = append(items, reqItem{Name: strings.TrimSpace(name)})
+				items = append(items, reqItem{Name: shared.FoldElementName(name)})
 			}
 		}
 	}
@@ -1530,6 +1533,7 @@ func (l *ReflexiveLoop) capReadDocument(msg circulation.Message) {
 		if reqName == "" {
 			return outTarget{}, false, "missing_name"
 		}
+		reqName = shared.FoldElementName(reqName)
 		if validElementName(reqName) != nil {
 			return outTarget{}, false, "invalid_name"
 		}

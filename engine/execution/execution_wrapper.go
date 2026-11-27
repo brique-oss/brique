@@ -712,6 +712,10 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	if err != nil {
 		return 0, err
 	}
+	storeEnv, err := l.wrapperStoreEnv(cfg)
+	if err != nil {
+		return 0, err
+	}
 	sourceDir, ok := l.wrapperSourceDir(cfg.Name)
 	if !ok {
 		return 0, fmt.Errorf("wrapper %s: missing context dir", cfg.Name)
@@ -764,7 +768,10 @@ func (l *ExecutionLoop) startWrapperProcess(cfg WrapperRuntimeCfg) (pid int, err
 	for name, value := range secretEnv {
 		launchEnv[name] = value
 	}
-	cmd.Env = mergeEnv(os.Environ(), launchEnv)
+	for name, value := range storeEnv {
+		launchEnv[name] = value
+	}
+	cmd.Env = mergeEnv(withoutMachineDirectory(os.Environ()), launchEnv)
 
 	// Wrapper runtimes are long-lived child processes. Do not inherit the test
 	// process stdout/stderr directly, otherwise lingering wrapper shutdown can

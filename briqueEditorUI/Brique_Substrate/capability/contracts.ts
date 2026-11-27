@@ -154,7 +154,7 @@ const CONTRACTS: CapabilityContract[] = [
   contract("read.document", ["items"], ["total", "result"]),
   contract("read.meaning", ["input"], ["result"]),
   contract("read.state", ["include"], ["context", "trace", "wrappers", "families", "interfaces"]),
-  contract("read.structure", ["scope", "depth", "max_per_path"], ["root", "params"]),
+  contract("read.structure", ["scope", "depth", "max_per_path", "max_nodes", "format"], ["root", "params", "nodes_total", "nodes_returned", "truncated"]),
   contract(
     "trace.inspect",
     ["limit", "offset", "order_by", "mode", "include_payloads", "filters", "time_range"],

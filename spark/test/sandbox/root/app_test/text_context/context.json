@@ -87,8 +87,6 @@
         "segment_max_bytes": 1048576
       },
       "reflexive": {
-        "root_repo": false,
-        "repo_name": "spark-pulse-sandbox-text"
       }
     }
   },

@@ -27,7 +27,7 @@
   },
 
   "status": "ok",
-  "_status_note": "Required. Always 'ok' or 'error'. Check this field first before reading payload or error.",
+  "_status_note": "Required. 'ok' or 'error' is the FINAL answer of the intention: exactly one of them comes back. 'running' is an intermediate answer, not final: a capacity that works for a long time says so zero, one or many times (the wrapper libraries' notify_running or keepalive), with the same intention_id and no payload, and its final 'ok' or 'error' follows. A caller that awaits an answer keeps waiting on 'running' (it also renews the silence budget of a call to a peer instance) and never treats it as the result. Check this field first before reading payload or error.",
 
   "payload": {
     "_comment": "Present when status='ok'. Shape is capacity-specific — see the capacity descriptor outputs.payload for the exact fields. Absent or null when status='error'.",
@@ -43,13 +43,14 @@
     "message": "Human-readable error description.",
     "details": {
       "_comment": "Optional. Free-form key-value pairs providing structured error context. Common keys: 'reason' (short machine-readable cause string).",
+      "_reason_note": "Some stable reasons, among others, with what to do. REFUSED BEFORE ANY EFFECT, safe to send again after a pause: 'loop busy' or 'busy' (the family or wrapper had no free place), 'rate_limited' (the heavy-operation rate of the caller is spent), 'byte_budget_exceeded' (the Matter byte budget of the caller is spent and refills over time). REFUSED, change the request: 'payload_too_large' (over the message size limit; move big content through a Matter substance lease), 'response_too_large' (the answer does not fit the browser bridge: ask for less, a shorter range or fewer nodes), 'quota_reached' (too many leases or transfers), 'disk_space_low' (the instance is under min_free_disk_mib and refuses every Matter write), 'revision_mismatch' (the element changed since it was read: read it again, then retry), 'wrapper_not_configured' (the wrapper is not declared in this capacity's own context). OUTCOME UNKNOWN, the call may have run: 'connection_lost' (the connection of the call went away), 'timeout_waiting_answer', 'context_stopped', 'context_unreachable'. SECURITY: for an external caller (a restricted local principal, a peer, a browser) an element it may not touch is indistinguishable from one that does not exist: code 'not_found' with reason 'not_found'; a capacity it is not granted answers code 'unauthorized', reason 'capability_denied', message 'not authorized'. The rule that refused it is only in the denial journal of the instance (brique-sec denials), never in the response.",
       "reason": "<machine_readable_reason>"
     }
   },
 
   "_reading_a_response": {
     "_comment": "Decision tree for reading a response.",
-    "step_1": "Check status. If 'error', read error.code and error.message. Do not read payload.",
+    "step_1": "Check status. 'running' is not an answer: keep waiting for the final one. If 'error', read error.code, error.details.reason and error.message, and do not repeat the call before understanding why: an error whose reason says the outcome is unknown may already have had effects. Do not read payload.",
     "step_2": "If status='ok', read payload fields as declared in the capacity descriptor outputs.payload.",
     "step_3": "Some payload fields are conditionally present (e.g. data in matter.read only when 'data' was in read_mode). Check the capacity descriptor invariants and success conditions."
   },

@@ -51,6 +51,12 @@ func (r secretsCommReg) MachineDirectory() string     { return r.machine }
 // nothing else, the way the engine adopts one.
 func activeSecretsRuntime(t *testing.T, secrets []trust.WrapperSecret) *trust.Runtime {
 	t.Helper()
+	return activePolicyRuntime(t, func(policy *trust.Policy) { policy.WrapperSecrets = secrets })
+}
+
+// activePolicyRuntime builds a trust runtime whose signed policy has no principal and whatever mutate sets, the way the engine adopts one.
+func activePolicyRuntime(t *testing.T, mutate func(*trust.Policy)) *trust.Runtime {
+	t.Helper()
 	authorityPublic, authorityPrivate, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +68,9 @@ func activeSecretsRuntime(t *testing.T, secrets []trust.WrapperSecret) *trust.Ru
 	policy := trust.Policy{
 		Format: trust.PolicyFormat, FormatVersion: trust.PolicyFormatVersionV2,
 		PolicyID: "main", InstanceID: "execution-instance", Revision: "1", IssuedAt: "2026-10-24T12:00:00Z",
-		Principals: []trust.Principal{}, Scopes: []trust.Scope{}, WrapperSecrets: secrets,
+		Principals: []trust.Principal{}, Scopes: []trust.Scope{},
 	}
+	mutate(&policy)
 	policyJSON, err := json.Marshal(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -345,5 +352,73 @@ func TestWrapperSecrets_OtherFailuresAreStillRemembered(t *testing.T) {
 	answer := recvExecMsg(t, commCh, "the remembered failure")
 	if answer.Response.Error == nil || !strings.Contains(answer.Response.Error.Message, "failed to be ready") {
 		t.Fatalf("unexpected answer: %#v", answer.Response)
+	}
+}
+
+func optionalNeed(name, env string) map[string]any {
+	n := need(name, env)
+	n[configuration.KeyWrpSecretOptional] = true
+	return n
+}
+
+// One context can declare every provider it can use, each as an optional need: the owner sets up only the ones they use.
+func TestWrapperSecrets_AnOptionalNeedThatIsNotMetIsLeftOut(t *testing.T) {
+	granted := activeSecretsRuntime(t, grantW1("anthropic", "openai"))
+	for _, c := range []struct {
+		label  string
+		policy *trust.Runtime
+		stored []string // secrets that have a value
+		want   map[string]string
+	}{
+		{"nothing set up", granted, nil, map[string]string{}},
+		{"one of two has a value", granted, []string{"anthropic"}, map[string]string{"A_KEY": secretTestValue}},
+		{"both have a value", granted, []string{"anthropic", "openai"}, map[string]string{"A_KEY": secretTestValue, "O_KEY": secretTestValue}},
+		{"a value but no right", activeSecretsRuntime(t, grantW1("anthropic")), []string{"anthropic", "openai"}, map[string]string{"A_KEY": secretTestValue}},
+		{"no policy at all", nil, []string{"anthropic"}, map[string]string{}},
+	} {
+		t.Run(c.label, func(t *testing.T) {
+			l, _, machine, _ := secretsLoop(t, 0, []any{optionalNeed("anthropic", "A_KEY"), optionalNeed("openai", "O_KEY")}, c.policy)
+			for _, name := range c.stored {
+				storeSecret(t, machine, name, secretTestValue)
+			}
+			cfg, _ := l.getWrapperCfg("w1")
+			got, err := l.wrapperSecretEnv(cfg)
+			if err != nil || len(got) != len(c.want) {
+				t.Fatalf("env = %v, %v; want %v", got, err, c.want)
+			}
+			for k, v := range c.want {
+				if got[k] != v {
+					t.Fatalf("env = %v; want %v", got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// A mandatory need still stops the wrapper, even beside optional ones that are met.
+func TestWrapperSecrets_AMandatoryNeedStillStopsTheWrapperBesideOptionalOnes(t *testing.T) {
+	l, _, machine, _ := secretsLoop(t, 0, []any{need("anthropic", "A_KEY"), optionalNeed("openai", "O_KEY")}, activeSecretsRuntime(t, grantW1("anthropic", "openai")))
+	storeSecret(t, machine, "openai", secretTestValue) // the mandatory one has no value
+	cfg, _ := l.getWrapperCfg("w1")
+	if _, err := l.wrapperSecretEnv(cfg); err == nil || !isWrapperSecretError(err) {
+		t.Fatalf("a missing mandatory secret did not stop the wrapper: %v", err)
+	}
+}
+
+// Optional is not a way to hide a mistake: a value that exists but cannot be read safely is refused, and so is an unusable declaration.
+func TestWrapperSecrets_AnOptionalNeedWithAnUnusableValueOrDeclarationIsStillRefused(t *testing.T) {
+	l, _, machine, _ := secretsLoop(t, 0, []any{optionalNeed("anthropic", "A_KEY")}, activeSecretsRuntime(t, grantW1("anthropic")))
+	storeSecret(t, machine, "anthropic", secretTestValue)
+	if err := os.Chmod(filepath.Join(machine, shared.SecretsDir, "anthropic"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := l.getWrapperCfg("w1")
+	if _, err := l.wrapperSecretEnv(cfg); err == nil || !isWrapperSecretError(err) {
+		t.Fatalf("a value readable by others was given or ignored in silence: %v", err)
+	}
+	bad, _, _, _ := secretsLoop(t, 0, []any{optionalNeed("Bad Name", "A_KEY")}, activeSecretsRuntime(t, grantW1("anthropic")))
+	badCfg, _ := bad.getWrapperCfg("w1")
+	if _, err := bad.wrapperSecretEnv(badCfg); err == nil || !isWrapperSecretError(err) {
+		t.Fatalf("an unusable optional declaration was accepted: %v", err)
 	}
 }

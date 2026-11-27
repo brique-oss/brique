@@ -60,6 +60,9 @@ func validatePolicy(policy *Policy) error {
 	if err := validateWrapperSecrets(policy); err != nil {
 		return err
 	}
+	if err := validateProtectedCapacities(policy); err != nil {
+		return err
+	}
 	if policy.PreviousPolicyHash != "" && !validDigestID(policy.PreviousPolicyHash, "bp1_") {
 		return fmt.Errorf("previous_policy_hash is not a canonical policy hash")
 	}
@@ -390,7 +393,7 @@ func validatePermissionSet(version, scopeID, label string, set *PermissionSet, p
 		}
 		resourceCount := 1
 		if permission.Selector != nil && permission.Selector.All == nil {
-			resourceCount = len(permission.Selector.IDs)
+			resourceCount = len(permission.Selector.IDs) + len(permission.Selector.Patterns)
 		}
 		atomic += resourceCount * len(permission.Actions)
 		if permission.AsOwner != "" {
@@ -414,12 +417,34 @@ func validateResourceSelector(permissionID string, selector *ResourceSelector) e
 	}
 	hasIDs := selector.IDs != nil
 	hasAll := selector.All != nil
-	if hasIDs == hasAll || (hasAll && !*selector.All) {
-		return fmt.Errorf("permission %q selector must contain exactly ids or all=true", permissionID)
+	hasPatterns := selector.Patterns != nil
+	count := 0
+	for _, present := range []bool{hasIDs, hasAll, hasPatterns} {
+		if present {
+			count++
+		}
+	}
+	if count != 1 || (hasAll && !*selector.All) {
+		return fmt.Errorf("permission %q selector must contain exactly ids, patterns or all=true", permissionID)
 	}
 	if hasIDs {
 		if err := validateIdentifierList("ids", selector.IDs, false); err != nil {
 			return fmt.Errorf("permission %q: %w", permissionID, err)
+		}
+	}
+	if hasPatterns {
+		if len(selector.Patterns) == 0 || len(selector.Patterns) > MaxNamePatterns {
+			return fmt.Errorf("permission %q: patterns must contain between 1 and %d entries", permissionID, MaxNamePatterns)
+		}
+		seen := make(map[string]struct{}, len(selector.Patterns))
+		for _, pattern := range selector.Patterns {
+			if err := validateNamePattern(pattern); err != nil {
+				return fmt.Errorf("permission %q: %w", permissionID, err)
+			}
+			if _, duplicate := seen[pattern]; duplicate {
+				return fmt.Errorf("permission %q: duplicate pattern %q", permissionID, pattern)
+			}
+			seen[pattern] = struct{}{}
 		}
 	}
 	return nil
