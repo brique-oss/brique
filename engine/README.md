@@ -190,6 +190,9 @@ packages. These four browsers are the complete extension support perimeter. Nati
 installation deliberately requires the default launcher data directory: Chrome cannot pass a custom
 `--data-dir` back to the host it starts.
 
+Load the runtime's `lib/browser-extension` in a Chromium-family browser, or `lib/browser-extension-firefox` in Firefox, and copy the
+32-character ID shown by the Chromium-family browser before installing the native host:
+
 ```sh
 brique-launcher browser gateway set packaged
 brique-launcher browser host install --browser brave --extension-id <32-character-id>
@@ -286,6 +289,22 @@ authorized to `public.web` through a same-origin proxy; `brique-web` owns neithe
 An extension bridge may replace that authority after trusted activation. A standalone host without
 `-public_web_backend` remains static-only. The publication never embeds the historical engine WebSocket.
 
+To associate a publication with a launcher-managed instance instead of starting the host by hand, pass
+`--publication` to `instance add` (see [Launcher registry](#launcher-registry)): the host then starts after
+engine readiness and stops before the engine.
+
+For a server without Docker, `deploy/Caddyfile.example` gives the same-origin split between the private
+web host and the private Matter data plane; keep both upstreams on loopback and expose only the proxy.
+After obtaining real read/write lease handles through Brique Intentions, qualify the proxy from a second
+host:
+
+```sh
+npm run qualify:matter-proxy -- --read-handle ... --read-expected ... --write-handle ... --write-input ...
+```
+
+The probe verifies TLS, range resume, ETag binding, Bearer placement and the upload digest without
+printing either bearer token. `npm run test:deployment` tests the probe contract locally.
+
 ## Security in short
 
 An instance talks to other instances over signed HTTPS only once it has been given a name and keys:
@@ -296,7 +315,7 @@ brique-sec --root <instance>/root key show                                # what
 brique-sec --root <instance>/root tls init --host <name or address> --addr 0.0.0.0:8443   # HTTPS certificate + interface
 brique-sec --root <instance>/root tls trust <peer's certificate.pem>
 brique-sec --root <instance>/root principal add <peer> --kind instance --key <its public key>
-brique-sec --root <instance>/root grant add <peer> call '/root/tools#capacity:*'
+brique-sec --root <instance>/root grant add <peer> call '/root/tools/capacity/*'
 brique-sec --root <instance>/root peer add <peer> --audience <its name> --interface outerCtx --target https://host:8443/brique
 brique-sec --root <instance>/root apply --reload                          # nothing is active before this
 ```
