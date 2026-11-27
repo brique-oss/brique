@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -193,6 +194,8 @@ func (ui *WebUI) runPublish(instance Instance, tools PublishTools) {
 		return
 	}
 
+	// the MCP profiles the operator runs now: a restart stops their wrappers, and they are started again after it
+	profiles := ui.runningMCPProfiles(alias)
 	ui.publisher.set(alias, "stop", "running", "")
 	wasRunning, err := ui.stopForPublication(alias)
 	if err != nil {
@@ -201,7 +204,9 @@ func (ui *WebUI) runPublish(instance Instance, tools PublishTools) {
 	}
 	restart := func() {
 		if wasRunning {
-			_, _ = ui.call(LauncherControlRequest{Operation: "start", Alias: alias})
+			if _, err := ui.call(LauncherControlRequest{Operation: "start", Alias: alias}); err == nil {
+				ui.restoreMCPProfiles(alias, profiles)
+			}
 		}
 	}
 
@@ -235,6 +240,13 @@ func (ui *WebUI) runPublish(instance Instance, tools PublishTools) {
 		if _, err := ui.call(LauncherControlRequest{Operation: "start", Alias: alias}); err != nil {
 			failed("start", fmt.Errorf("published, but the instance did not restart: %w", err))
 			return
+		}
+		if len(profiles) > 0 {
+			ui.publisher.set(alias, "mcp", "running", "")
+			if missing := ui.restoreMCPProfiles(alias, profiles); len(missing) > 0 {
+				failed("mcp", fmt.Errorf("published and restarted, but these MCP profiles did not start again: %s", strings.Join(missing, ", ")))
+				return
+			}
 		}
 	}
 	ui.publisher.set(alias, "", "done", "")
@@ -281,6 +293,71 @@ func (ui *WebUI) buildPublication(tools PublishTools, instance Instance, output,
 // stopForPublication stops the engine of the instance when it runs (associating a publication needs
 // a stopped instance) and says whether it was running. An engine started outside the launcher is not
 // the launcher's to stop.
+// runningMCPProfiles names the MCP profiles the engine of the instance runs now; none when it does not run or does not answer.
+func (ui *WebUI) runningMCPProfiles(alias string) []string {
+	instance, address, err := ui.mcpTarget(alias)
+	if err != nil {
+		return nil
+	}
+	ui.engineMu.Lock()
+	defer ui.engineMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	states, err := ReadMCPStates(ctx, instance, address)
+	if err != nil {
+		return nil
+	}
+	return runningProfiles(states)
+}
+
+// runningProfiles are the profiles whose wrapper runs or is starting.
+func runningProfiles(states []MCPState) []string {
+	var running []string
+	for _, state := range states {
+		if state.State == "running" || state.State == "starting" {
+			running = append(running, state.Name)
+		}
+	}
+	return running
+}
+
+// restoreMCPProfiles starts again, once the restarted instance is ready, the MCP profiles that ran before the restart: the operator
+// had started them, and confirmed the architect profile, so the publication does not take them away. It returns those that did not start.
+func (ui *WebUI) restoreMCPProfiles(alias string, profiles []string) []string {
+	return restoreProfiles(profiles, func() (Instance, string, error) { return ui.mcpTarget(alias) }, &ui.engineMu, 60*time.Second)
+}
+
+// restoreProfiles waits, at most wait, for target to name a ready instance, then starts each profile.
+func restoreProfiles(profiles []string, target func() (Instance, string, error), engine *sync.Mutex, wait time.Duration) []string {
+	if len(profiles) == 0 {
+		return nil
+	}
+	var instance Instance
+	var address string
+	deadline := time.Now().Add(wait)
+	for {
+		var err error
+		if instance, address, err = target(); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return profiles
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	engine.Lock()
+	defer engine.Unlock()
+	var missing []string
+	for _, name := range profiles {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if err := SetMCP(ctx, instance, address, name, "start", true); err != nil {
+			missing = append(missing, name)
+		}
+		cancel()
+	}
+	return missing
+}
+
 func (ui *WebUI) stopForPublication(alias string) (bool, error) {
 	response, err := ui.call(LauncherControlRequest{Operation: "status", Alias: alias})
 	if err != nil || response.Status == nil {

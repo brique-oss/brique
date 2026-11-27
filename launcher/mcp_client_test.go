@@ -8,11 +8,13 @@ package launcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,5 +155,35 @@ func TestMCPNeedsTheLauncherRoute(t *testing.T) {
 	}
 	if _, err := ReadMCPStates(context.Background(), instanceWithRoute(t, true), ""); err == nil {
 		t.Fatal("stopped instance accepted")
+	}
+}
+
+// A publication restarts the instance: the MCP profiles that ran before are started again once it is ready, the architect one
+// included (the operator confirmed it when starting it), and those that ran not are left alone.
+func TestThePublicationRestartStartsAgainTheProfilesThatRan(t *testing.T) {
+	running := runningProfiles([]MCPState{{MCPProfile: MCPProfiles[0], State: "stopped"}, {MCPProfile: MCPProfiles[1], State: "running"}})
+	if strings.Join(running, ",") != "architect" {
+		t.Fatalf("running = %v", running)
+	}
+	address, asked, closes := fakeEngine(t, `[]`)
+	instance := instanceWithRoute(t, true)
+	tries := 0
+	target := func() (Instance, string, error) { // the instance becomes ready on the third look
+		tries++
+		if tries < 3 {
+			return Instance{}, "", errors.New("the instance is not ready")
+		}
+		return instance, address, nil
+	}
+	var engine sync.Mutex
+	if missing := restoreProfiles(running, target, &engine, 5*time.Second); len(missing) != 0 {
+		t.Fatalf("missing = %v", missing)
+	}
+	expectNormalClose(t, closes, 1)
+	if strings.Join(*asked, "|") != "wrapper.start /root/mcp execution|name=mcp_server_go" {
+		t.Fatalf("asked: %v", *asked)
+	}
+	if missing := restoreProfiles([]string{"reader"}, func() (Instance, string, error) { return Instance{}, "", errors.New("down") }, &engine, 300*time.Millisecond); strings.Join(missing, ",") != "reader" {
+		t.Fatalf("an instance that never got ready: %v", missing)
 	}
 }
