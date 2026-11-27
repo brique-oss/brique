@@ -1,7 +1,5 @@
 # Brique
 
-**A flow traverses a structure of nested Contexts, whose elements are immersed in a semantic field.**
-
 Brique is an open-source executable architecture framework. It provides a world in which responsibilities, substance, meanings and possibilities of transformation can be expressed, understood and operated by humans, software and language models.
 
 Think of workshops nested within workshops: each has its own responsibility, materials and possible gestures. Their relationships allow a larger work to take shape.
