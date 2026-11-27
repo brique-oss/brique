@@ -1,0 +1,108 @@
+{
+ "brique": {
+  "cap_name": "call",
+  "kind": "compiled",
+  "lang": "go",
+  "rel_ctx": "",
+  "wrapper": "client_mcp_gateway"
+ },
+ "objective": {
+  "name": "call",
+  "description": "Make one call to a tool of a registered MCP server, at most once per call_id, with a durable record of the attempt before anything is sent."
+ },
+ "functional": {
+  "#root": {
+   "role": "Admit the caller (an Agentic model-selected call with a valid authority envelope, or a registered deterministic plan), resolve the server and the remote tool from trusted state only, check the arguments and the disclosure rules, reserve the call_id in the gateway journal, record transmitting, send the tools/call request once, classify what is known of the outcome, bound the result and commit the terminal state.",
+   "inputs": {
+    "params": {
+     "call_id": {
+      "type": "string"
+     },
+     "origin": {
+      "type": "string"
+     },
+     "envelope": {
+      "type": "string"
+     },
+     "projection_id": {
+      "type": "string"
+     },
+     "tool": {
+      "type": "string"
+     },
+     "arguments_json": {
+      "type": "string"
+     },
+     "server": {
+      "type": "string"
+     },
+     "arguments": {
+      "type": "object"
+     }
+    }
+   },
+   "outputs": {
+    "payload": {
+     "call_id": {
+      "type": "string"
+     },
+     "attempt_id": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "transmission": {
+      "type": "string"
+     },
+     "result": {
+      "type": "object"
+     },
+     "registry_version": {
+      "type": "integer"
+     },
+     "catalog_fingerprint": {
+      "type": "string"
+     }
+    }
+   },
+   "transformation_contract": {
+    "morphing": "A requested tool call becomes one recorded attempt with a classified outcome and a bounded result.",
+    "invariants": [
+     "Exactly two kinds of caller are admitted. origin agentic: the envelope must verify with the registry's Ed25519 public key under the domain BRIQUE-MCP-AUTHORITY-V1, be unexpired, and its claims must equal call_id, projection_id, tool and the sha256 of arguments_json. origin plan: the address the engine set as the origin of the call (context and capacity) must be listed in the registry's plans. Anything else is refused, whatever it claims.",
+     "Server and remote tool come from trusted state only: for agentic, the persisted projection resolves tool (a model-visible name); for plan, server and tool (a remote name) are checked against the registry. A model-provided server, endpoint or credential is never used.",
+     "The current registry is checked again at every call: a server or tool removed or disabled since the projection fails closed.",
+     "If the tool's current fingerprint differs from the one in the projection, the call is refused as projection_stale and nothing is sent.",
+     "Arguments are at most 64 KiB, must validate against the projected input schema, must not contain a field the registry denies for the tool, and must not contain a secret value held by the gateway.",
+     "The call_id is reserved durably (written and flushed) before anything is sent, and transmitting is recorded durably before the request is written. At most one tools/call is sent per call_id.",
+     "The same call_id with the same envelope (or the same plan request) returns the existing attempt and its outcome; the same call_id with a different envelope or request is refused.",
+     "A tools/call answered with isError true is remote_error, a definite tool result. A JSON-RPC error from the server is remote_error with reason protocol.",
+     "A transport failure is failed_before_transmission only when the transport proves that no request byte was written; otherwise it is outcome_unknown. A deadline after the request may have left is outcome_unknown with reason deadline.",
+     "No automatic retry of a call that may have been transmitted.",
+     "The result is bounded: at most 256 KiB inline; non-text content blocks are replaced by a description; beyond the limit the result is truncated with truncated true, never silently.",
+     "A panic in the handler commits the most conservative state it can prove (outcome_unknown once transmitting was recorded) before answering."
+    ],
+    "success": [
+     "The payload carries call_id, attempt_id, state among completed, remote_error, outcome_unknown, refused, failed_before_transmission, the reason when state is not completed, transmission among none, possible, complete, the bounded result when one was received, and the registry version used."
+    ],
+    "failure": [
+     "invalid: call_id missing or not [A-Za-z0-9_.-]{1,128}, origin missing or unknown, or the parameters of the origin missing.",
+     "A refusal decided by the gateway is not an error response: it is state refused with reason among policy_denied, disclosure_denied, invalid_arguments, projection_stale, overloaded, authentication_required."
+    ],
+    "notes": [
+     "For origin agentic: envelope, projection_id, tool (model-visible name) and arguments_json (the exact JSON text of the arguments the envelope hashes) are required; server and arguments are ignored.",
+     "For origin plan: server, tool (remote name) and arguments are required; envelope and projection_id are ignored.",
+     "Saturation of a server or of the gateway is refused at once with reason overloaded, before reservation; it is not the generic busy reason, so the wrapper library does not retry it."
+    ]
+   },
+   "effects": {
+    "private_store": "Appends the attempt's states to the gateway journal (reservation, transmitting, terminal).",
+    "remote_servers": "Sends at most one tools/call request for the call_id; its effect on the remote system is the remote tool's."
+   }
+  }
+ },
+ "subjective": {}
+}

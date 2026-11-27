@@ -11,7 +11,11 @@
       "format": [],
       "_format_comment": "Effective representation of the generated output.",
       "content": [],
-      "_content_comment": "Generated content. Its concrete representation follows the effective output format."
+      "_content_comment": "Generated content. Its concrete representation follows the effective output format. With native tools, content is null when the model called tools instead of answering.",
+      "tool_calls": [],
+      "_tool_calls_comment": "Present only when the model called native tools: a list of {id, name, arguments}, in the provider's order. It is a captured model decision, never an executable request: the arguments are untrusted until the MCP gateway validates them.",
+      "assistant_content": [],
+      "_assistant_content_comment": "Present for a request with native tools: the assistant turn as canonical blocks (text, tool_call, provider_block), exactly what must be sent back as the assistant message of the next request. An answer with neither text nor tool call, an unsupported block or a tool call cut by the token limit is an error, never empty content."
     },
     "resolved": {
       "provider": [],

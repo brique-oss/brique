@@ -10,6 +10,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .families import family_of
+from .mcp import CALL_CAPACITY, outcome_of
 
 MARKER = "\n\nLedger of the calls made so far (written by the runtime from the journal, exact; never repeat an effect listed here)"
 LIMIT = 40                 # entries kept, the most recent
@@ -37,6 +38,11 @@ def identifiers(payload: Any, depth: int = 0, out: Optional[List[Tuple[str, str]
 
 def line_of(intention: Dict[str, Any], answer: Optional[Dict[str, Any]]) -> str:
     ref = str(intention.get("target_capacity"))
+    if ref == CALL_CAPACITY:
+        # an MCP call: the tool and the outcome class, never an argument value nor a field of a remote result
+        parameters = intention.get("parameters") if isinstance(intention.get("parameters"), dict) else {}
+        head = f"- MCP tool {parameters.get('tool')} (call {parameters.get('call_id')}) -> "
+        return head + (outcome_of(answer) if answer is not None else "unanswered")
     head = f"- {ref} {compact(intention.get('parameters'), PARAMS_CHARS)} -> "
     if answer is None:
         return head + ("unanswered" if intention.get("await_response") else "sent, no answer awaited")

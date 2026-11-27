@@ -25,6 +25,11 @@ export const styles: Record<string, React.CSSProperties> = {
   bubbleLabel: { color: muted, fontSize: 11, marginBottom: 2 },
   toolCard: { alignSelf: "flex-start", maxWidth: "80%", border, borderRadius: 8, padding: "4px 9px", background: card, fontSize: 12 },
   toolSummary: { cursor: "pointer", color: muted },
+  // an MCP call: an external server, set apart from Brique capacities by a violet accent
+  mcpCard: { alignSelf: "flex-start", maxWidth: "80%", border: "1px solid var(--syn-accent-mcp-border, rgba(197,138,249,0.45))", borderLeft: "3px solid var(--syn-accent-mcp, #c58af9)", borderRadius: 8, padding: "4px 9px", background: "var(--syn-accent-mcp-bg, rgba(197,138,249,0.08))", fontSize: 12 },
+  mcpBadge: { background: "var(--syn-accent-mcp, #c58af9)", color: "var(--syn-text-inverse, #071014)", borderRadius: 4, padding: "0 5px", fontSize: 10, fontWeight: 700, letterSpacing: 0.5 },
+  mcpServer: { color: "var(--syn-accent-mcp, #c58af9)", fontWeight: 600 },
+  mcpFailed: { color: "var(--syn-feedback-warning, #fdd663)" },
   pre: { margin: "6px 0 2px", whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, maxHeight: 220, overflow: "auto" },
   separator: { alignSelf: "stretch", borderTop: border, color: muted, fontSize: 12, paddingTop: 4 },
   alert: { alignSelf: "stretch", color: "var(--syn-feedback-error, #f28b82)", background: "var(--syn-feedback-error-bg, rgba(242,139,130,0.12))", borderRadius: 6, padding: "5px 9px", fontSize: 12 },

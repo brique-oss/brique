@@ -1,0 +1,17 @@
+{
+ "brique": {
+  "file": "document/provider_qualification.md",
+  "kind": "document",
+  "ref": ""
+ },
+ "functional": {
+  "content_kind": "markdown",
+  "mime_type": "text/markdown",
+  "source_kind": "local"
+ },
+ "objective": {
+  "description": "Results of the real-API probes of native tool use per provider, with the consequences for the MCP design. Anthropic is qualified on Haiku 4.5; OpenAI, Mistral and Scaleway are not qualified.",
+  "name": "provider_qualification"
+ },
+ "subjective": {}
+}

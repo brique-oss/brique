@@ -3,6 +3,7 @@ import json
 import unittest
 
 from .harness import PILOT_ID, CapacityContract, covers, entry, message
+from .mcp_scenarios import McpScenarios
 from fake_engine import make_engine
 from substrate import continuity_store, inference_window, liveness, locks
 from substrate.errors import ConcurrencyError, ConsistencyError, InvalidRequest
@@ -123,7 +124,7 @@ class NormalizeOutput(unittest.TestCase):
         self.assertEqual(pilot_activate.normalize_output(self.PILOT, "text"), "text")
 
 
-class PilotActivateContract(CapacityContract):
+class PilotActivateContract(McpScenarios, CapacityContract):
     """pilot.activate is exercised with its collaborators (mailbox.*, continuity.project) wired in;
     the LLM and the tools it addresses are scripted."""
     CAP, MODULE = "pilot.activate", pilot_activate

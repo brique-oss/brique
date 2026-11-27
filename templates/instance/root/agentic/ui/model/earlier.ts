@@ -1,6 +1,6 @@
 // The whole conversation, not a window of it: the end of a journal is read live (a window in bytes), and the lines before that window are read
 // backwards, page by page, by ranges of lines. A page is one answer, and an answer has a size the engine's link to the browser limits: when the
-// engine says a page is too large (code response_too_large), the page is halved and read again; a single line that is too large is left out.
+// engine says a page is too large (reason response_too_large), the page is halved and read again; a single line that is too large is left out.
 import type { JournalLine } from "./journal.ts";
 
 export const EARLIER_PAGE_LINES = 20;                 // the first page: small, then it grows while the pages stay small

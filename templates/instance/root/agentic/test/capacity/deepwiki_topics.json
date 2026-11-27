@@ -1,0 +1,95 @@
+{
+ "brique": {
+  "cap_name": "deepwiki_topics",
+  "kind": "dsl",
+  "lang": "brique_dsl",
+  "rel_ctx": "",
+  "wrapper": ""
+ },
+ "objective": {
+  "name": "deepwiki_topics",
+  "description": "Capacity pilot of the real MCP tests: reads the documentation topics of a public GitHub repository from the public DeepWiki MCP server, through a deterministic call to the outbound gateway, with no inference.",
+  "agentic": {
+   "pilot": {
+    "subject": "test"
+   }
+  }
+ },
+ "functional": {
+  "#root": {
+   "role": "Call the tool read_wiki_structure of the registered MCP server deepwiki for the repository the message names, and answer the person with the gateway's account of the call.",
+   "inputs": {
+    "params": {
+     "continuity_id": {
+      "type": "string"
+     },
+     "run_id": {
+      "type": "string"
+     },
+     "message": {
+      "type": "object"
+     },
+     "stimulus": {
+      "type": "object"
+     },
+     "max_inferences": {
+      "type": "integer"
+     }
+    }
+   },
+   "outputs": {
+    "payload": {
+     "messages": {
+      "type": "array"
+     }
+    }
+   },
+   "transformation_contract": {
+    "morphing": "A message naming a repository and a call_id becomes one MCP call written in advance and a message to the person with its outcome.",
+    "invariants": [
+     "The server, the tool and the shape of the arguments are fixed by this plan; no model chooses them.",
+     "The call goes through /root/mcp/client/call with origin plan and the call_id of the message: the gateway admits it only because this plan is listed in the registry, and a repeated message with the same call_id gets the same attempt."
+    ],
+    "failure": [
+     "The message gives no repo or no call_id: the gateway refuses the call as invalid and the treatment fails."
+    ]
+   },
+   "resolution": {
+    ">sequence": {
+     "items": [
+      {
+       "invoke": {
+        "@capacity": "/root/mcp/client/call",
+        "as": "wiki",
+        "timeout": {
+         "ms": 150000
+        },
+        "with": {
+         "call_id": "$input.message.content.call_id",
+         "origin": "plan",
+         "server": "deepwiki",
+         "tool": "read_wiki_structure",
+         "arguments": {
+          "repoName": "$input.message.content.repo"
+         }
+        }
+       }
+      },
+      {
+       "output": {
+        "messages": [
+         {
+          "to": "user:1",
+          "kind": "user",
+          "content": "$wiki.payload"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ "subjective": {}
+}

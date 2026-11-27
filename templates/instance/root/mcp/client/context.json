@@ -1,0 +1,90 @@
+{
+  "brique": {
+    "children_list": [],
+    "ctx_ext_name": "",
+    "ctx_name": "client",
+    "ctx_version": "1",
+    "engine_version": "0.0.1",
+    "engine_config": {
+      "communication": {
+        "interfaces": [
+          {
+            "driver": "ws",
+            "name": "client_mcp_gateway",
+            "type": "wrapper",
+            "config": {
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/wrapper/client_mcp_gateway"
+            }
+          }
+        ],
+        "wrapper_boundary": [
+          "client_mcp_gateway"
+        ]
+      },
+      "execution": {
+        "default_invoke_timeout_ms": 0,
+        "max_concurrent_jobs": 0,
+        "wrappers": [
+          {
+            "wrapper_name": "client_mcp_gateway",
+            "mode": "compiled",
+            "ready_timeout_ms": 10000,
+            "stop_timeout_ms": 45000,
+            "build": {
+              "artifact": "build/client_mcp_gateway/client_mcp_gateway",
+              "artifact_kind": "file",
+              "cmd": [
+                "go",
+                "build",
+                "-o",
+                "../../build/client_mcp_gateway/client_mcp_gateway",
+                "."
+              ],
+              "shell": false,
+              "timeout_ms": 180000,
+              "watch": [
+                "../../../../../wrapper/go/lib"
+              ]
+            },
+            "run": {
+              "cmd": [
+                "./client_mcp_gateway"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "client_mcp_gateway"
+              },
+              "log": {
+                "enabled": true,
+                "max_bytes": 1048576
+              },
+              "secrets": [],
+              "shell": false,
+              "store": true
+            }
+          }
+        ]
+      },
+      "reflexive": {},
+      "trace": {
+        "enabled": false,
+        "flush_every_interval": 1000,
+        "flush_every_n": 256,
+        "level": "minimal",
+        "ring_capacity": 8192,
+        "segment_max_bytes": 16777216
+      }
+    }
+  },
+  "objective": {
+    "name": "client",
+    "description": "Outbound MCP gateway: the only client of Brique toward the registered external MCP servers, through the physical bindings tools, call and status."
+  },
+  "functional": {
+    "owns_wrappers": [
+      "client_mcp_gateway"
+    ]
+  },
+  "subjective": {}
+}

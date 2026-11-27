@@ -5,7 +5,7 @@ import unittest
 
 from .driver import AGENTIC, DriverError
 from .scenarios_base import SKIP, SKIP_REASON, Scenario, say
-from .test_scenarios_19 import awaited, intention
+from .scenarios_base import awaited, intention
 
 
 def input_events(journal, event):

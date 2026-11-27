@@ -1,0 +1,17 @@
+{
+ "brique": {
+  "file": "document/mcp_acceptance.md",
+  "kind": "document",
+  "ref": ""
+ },
+ "functional": {
+  "content_kind": "markdown",
+  "mime_type": "text/markdown",
+  "source_kind": "local"
+ },
+ "objective": {
+  "description": "Acceptance of the MCP realization: each scenario of the design mapped to the test that makes it true and its status (covered, partial, open), with the commands of the suites.",
+  "name": "mcp_acceptance"
+ },
+ "subjective": {}
+}

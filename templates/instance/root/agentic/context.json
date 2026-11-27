@@ -57,7 +57,6 @@
                 "python3",
                 "main.py"
               ],
-              "cwd": "code/agentic_core",
               "env": {
                 "BRIQUE_QUEUE_LIMIT": "4096",
                 "BRIQUE_WRAPPER_NAME": "agentic_core"
@@ -66,7 +65,14 @@
               "log": {
                 "enabled": false
               },
-              "shell": false
+              "shell": false,
+              "secrets": [
+                {
+                  "name": "mcp_authority_key",
+                  "env": "MCP_AUTHORITY_KEY",
+                  "optional": true
+                }
+              ]
             },
             "stop_timeout_ms": 1000,
             "watch": [
@@ -80,11 +86,11 @@
       "reflexive": {},
       "trace": {
         "enabled": false,
-        "flush_every_interval": 20,
-        "flush_every_n": 8,
+        "flush_every_interval": 1000,
+        "flush_every_n": 256,
         "level": "minimal",
-        "ring_capacity": 64,
-        "segment_max_bytes": 1048576
+        "ring_capacity": 8192,
+        "segment_max_bytes": 16777216
       }
     },
     "engine_version": "0.0.0",

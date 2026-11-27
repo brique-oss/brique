@@ -1,0 +1,25 @@
+{
+  "brique": {
+    "cap_name": "mcp.remote.response",
+    "kind": "compiled",
+    "wrapper": "mcp_remote",
+    "rel_ctx": "",
+    "lang": "go"
+  },
+  "objective": {
+    "name": "mcp.remote.response",
+    "description": "Routing anchor capacity — allows Brique to route outbound intention responses back to the mcp_remote wrapper boundary (the remote MCP endpoint, bearer tokens, reached through the instance's reverse proxy)."
+  },
+  "functional": {
+    "#root": {
+      "role": "Receive responses routed back to the wrapper from Brique engine families.",
+      "inputs": {
+        "params": {}
+      },
+      "outputs": {
+        "payload": {}
+      }
+    }
+  },
+  "subjective": {}
+}

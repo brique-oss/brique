@@ -1,0 +1,17 @@
+{
+ "brique": {
+  "file": "document/mcp_realization_plan.md",
+  "kind": "document",
+  "ref": ""
+ },
+ "functional": {
+  "content_kind": "markdown",
+  "mime_type": "text/markdown",
+  "source_kind": "local"
+ },
+ "objective": {
+  "description": "Execution plan of the new MCP realization: closed decisions, facts verified against the engine, wrapper libraries, Agentic, the LLM adapters and the Go SDK, and work packages with files, functions, tests, exit conditions and enablement gates.",
+  "name": "mcp_realization_plan"
+ },
+ "subjective": {}
+}

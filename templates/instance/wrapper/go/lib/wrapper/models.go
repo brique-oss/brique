@@ -17,6 +17,7 @@
 package wrapper
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 )
@@ -54,6 +55,35 @@ func (p *Params) Outbound() *OutboundAPI {
 }
 
 func (p *Params) Raw() map[string]any { return p.values }
+
+// Context is cancelled when the wrapper stops or loses its connection to the engine. A handler that waits on long external work
+// watches it so that it can stop before the engine's stop timeout forces the process down. It carries no deadline of its own.
+func (p *Params) Context() context.Context {
+	if p == nil || p.runtime == nil || p.runtime.work == nil {
+		return context.Background()
+	}
+	return p.runtime.work
+}
+
+// Yield gives the execution slot of this call back while it waits for something that is not the answer of the engine (an
+// admission queue, a lock of its own), and returns the function that takes it back. The library already does it for the answers
+// of outbound calls. Outside a scheduled call it does nothing.
+func (p *Params) Yield() (resume func()) {
+	if p == nil || p.runtime == nil || p.runtime.scheduler == nil || p.origin == nil {
+		return func() {}
+	}
+	return p.runtime.scheduler.LeaseOf(p.origin).Yield()
+}
+
+// Caller is the origin address of the intention being served, as the engine delivered it: for a restricted wrapper the engine
+// pins its context to that wrapper's boundary, and a step of a DSL plan carries the address of the plan. It is the zero Address
+// outside a call.
+func (p *Params) Caller() Address {
+	if p == nil || p.origin == nil {
+		return Address{}
+	}
+	return p.origin.From
+}
 
 func (p *Params) Get(key string) (any, bool) { v, ok := p.values[key]; return v, ok }
 
@@ -108,6 +138,9 @@ type BindingsFragment struct {
 	Capacities []CapacityBinding
 	Matters    []MatterBinding
 	Shutdown   []func()
+	// Cancel hooks run when the wrapper stops receiving, before it waits for the handlers still running, so that hosted code can
+	// cancel long external work (the Shutdown hooks run after that wait). Optional; a fragment without them behaves as before.
+	Cancel []func()
 }
 
 // Subscription holds a matter subscription registered by the engine.

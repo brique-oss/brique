@@ -8,7 +8,7 @@
   },
   "functional": {
     "messages": [],
-    "_messages_comment": "Ordered array of already-prepared messages forming the inference input. Each message carries a role and content. The LLM context receives the cognitive input already prepared. A message may carry cache: true, a provider-neutral hint that it ends a stable prefix reused across inferences; a provider without explicit caching ignores it.",
+    "_messages_comment": "Ordered array of already-prepared messages forming the inference input. Each message carries a role and content. The LLM context receives the cognitive input already prepared. A message may carry cache: true, a provider-neutral hint that it ends a stable prefix reused across inferences; a provider without explicit caching ignores it. The content of a message is a string, or a list of blocks when native tools are used: {type: text, text}; {type: tool_call, id, name, arguments} in an assistant message; {type: tool_result, call_id, content, is_error} in a user message, placed before any other block of that message, one for each tool_call of the preceding assistant message; {type: provider_block, provider, block}, an opaque block a provider returned (for example a thinking block), sent back unchanged to that provider only.",
     "metadata": [],
     "_metadata_comment": "Optional free object describing the request for whoever observes it (for example the continuity and the step that asked). No provider adapter reads it: it is never sent to a provider.",
     "parameters": {
@@ -36,7 +36,11 @@
       "_format_comment": "Requested representation of the generated output.",
       "schema": [],
       "_schema_comment": "Optional structured-output contract when constrained structured generation is required."
-    }
+    },
+    "tools": [],
+    "_tools_comment": "Optional native tools offered to the model: a list of {name, description, input_schema}. Names are provider-safe ([a-zA-Z0-9_-], at most 64 characters). Only a provider qualified for native tools accepts them (root/mcp/document/provider_qualification.md); the others refuse the request (reason tools_not_supported), never drop the tools.",
+    "tool_choice": [],
+    "_tool_choice_comment": "Optional, with tools or with a history of tool blocks: auto (default) lets the model call a tool; none forbids it, for a turn that must answer (a compaction) while keeping the same tools."
   },
   "subjective": {}
 }

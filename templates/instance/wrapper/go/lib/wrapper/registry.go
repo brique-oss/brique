@@ -32,6 +32,7 @@ type Registry struct {
 	capacities map[registryKey]*CapacityBinding
 	matters    map[registryKey]*MatterBinding
 	shutdown   []func()
+	cancel     []func()
 }
 
 func NewRegistry() *Registry {
@@ -72,6 +73,12 @@ func (r *Registry) Load(fragment BindingsFragment) error {
 		}
 	}
 	r.shutdown = append(r.shutdown, fragment.Shutdown...)
+	for i, hook := range fragment.Cancel {
+		if hook == nil {
+			return fmt.Errorf("invalid cancel hook at index %d", i)
+		}
+	}
+	r.cancel = append(r.cancel, fragment.Cancel...)
 	return nil
 }
 
@@ -91,6 +98,16 @@ func (r *Registry) ResolveMatter(relContext, name string) (*MatterBinding, error
 		return nil, fmt.Errorf("unknown matter (%q, %q)", relContext, name)
 	}
 	return b, nil
+}
+
+// RunCancel runs the cancel hooks, each protected from the panic of another.
+func (r *Registry) RunCancel() {
+	for _, fn := range r.cancel {
+		func() {
+			defer func() { _ = recover() }()
+			fn()
+		}()
+	}
 }
 
 func (r *Registry) RunShutdown() {

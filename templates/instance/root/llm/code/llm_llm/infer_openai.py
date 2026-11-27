@@ -6,12 +6,14 @@ import time
 
 import httpx
 
+from native_tools import refuse_native_tools
 from retry import post_with_retry
 
 API_URL = "https://api.openai.com/v1/responses"
 
 
 def _adapt_request(request: dict) -> dict:
+    refuse_native_tools(request, "openai")
     model = request.get("model")
     messages = request.get("messages", [])
     parameters = request.get("parameters") or {}

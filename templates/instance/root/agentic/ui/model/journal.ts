@@ -16,7 +16,7 @@ export type ViewItem =
   | { type: "user"; id: string; seq: number; text: string }
   | { type: "pilot"; id: string; seq: number; text: string; recipient: string | null }
   | { type: "daughter"; id: string; seq: number; from: string; text: string }
-  | { type: "tool"; id: string; seq: number; capacity: string; context: string; status: "running" | "ok" | "error" | "sent"; parameters: any; result?: any; error?: string }
+  | { type: "tool"; id: string; seq: number; capacity: string; context: string; status: "running" | "ok" | "error" | "sent"; parameters: any; result?: any; error?: string; mcp?: McpCall }
   | { type: "summary"; id: string; seq: number; text: string }
   | { type: "alert"; id: string; seq: number; event: string; text: string; messageId?: string; attempts?: number; parked?: boolean }
   | { type: "control"; id: string; seq: number; action: string }
@@ -27,6 +27,18 @@ export type InputItem = {
   type: "input"; id: string; seq: number; question: string; kind: "text" | "choice" | "confirm"; choices: string[];
   status: "open" | "answered" | "closed"; answer?: string; closedReason?: string; expiresAt?: string;
 };
+
+/** A call of a pilot to an external MCP server, through the outbound gateway (/root/mcp/client/call), told apart from an ordinary Brique call.
+ * state is the gateway's account: completed, remote_error, refused, failed_before_transmission, outcome_unknown. */
+export type McpCall = { server: string; tool: string; state?: string; reason?: string; texts?: string };
+
+export const MCP_GATEWAY_CALL = "/root/mcp/client/call";
+
+/** deepwiki__read_wiki_structure -> server deepwiki, tool read_wiki_structure (the gateway's model-visible name; a shortened name keeps its hash). */
+export function mcpNames(modelName: string): { server: string; tool: string } {
+  const at = modelName.indexOf("__");
+  return at < 0 ? { server: "", tool: modelName } : { server: modelName.slice(0, at), tool: modelName.slice(at + 2) };
+}
 
 const text = (value: any): string => (typeof value === "string" ? value : value === undefined || value === null ? "" : JSON.stringify(value));
 
@@ -64,6 +76,7 @@ export function toView(lines: JournalLine[]): ViewItem[] {
           type: "tool", id: String(content?.id ?? line.id), seq: line.seq, capacity, context,
           status: content?.await_response === false ? "sent" : "running", parameters: content?.parameters ?? {},
         };
+        if (content?.target_capacity === MCP_GATEWAY_CALL) card.mcp = mcpNames(String(content?.parameters?.tool ?? ""));
         tools.set(card.id, card);
         items.push(card);
         break;
@@ -75,6 +88,14 @@ export function toView(lines: JournalLine[]): ViewItem[] {
           card.status = response.status === "error" ? "error" : "ok";
           if (response.status === "error") card.error = text(response.error?.message ?? response.error);
           else card.result = response.payload;
+          if (card.mcp) {
+            // the gateway answers ok with the state of the call: only a completed call is a success
+            const payload = response.payload ?? {};
+            card.mcp.state = response.status === "error" || content?.unresolved ? "outcome_unknown" : String(payload.state ?? "");
+            card.mcp.reason = payload.reason ? String(payload.reason) : undefined;
+            card.mcp.texts = (payload.result?.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => String(b.text ?? "")).join("\n");
+            if (card.mcp.state !== "completed") card.status = "error";
+          }
         }
         break;
       }

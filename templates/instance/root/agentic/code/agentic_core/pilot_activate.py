@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from substrate import continuity_store, inference_window, liveness
+from substrate import mcp
 from substrate import pilot_ref as pilot_refs
 from substrate.cas import update_matter
 from substrate.controls import DELETED, apply_at_safe_point, parse_control
@@ -16,6 +17,7 @@ from substrate.families import ENGINE_FAMILIES, family_of          # noqa: F401 
 from substrate.kinds import EFFECT_KINDS
 from substrate.journal import append_trace, measure_line, usage_detail
 from substrate.locks import critical
+from substrate.authority import own_authority_when_self_called
 from substrate.port import BriquePort, resolve_params
 from substrate.policy import policy_of, refusal
 from substrate.pressure import estimate_tokens, pressure
@@ -66,12 +68,15 @@ class Ctx:
         self.refusals: int = 0                                  # outputs refused by the policy in a row, in the chain of the current message
         self.pilot_ref: Optional[Dict[str, Any]] = None         # the pilot_ref this run decides with
         self.absorbed: List[str] = []                           # user messages absorbed by the chain in progress, claimed until its end
+        self.mcp_projection: Optional[Dict[str, Any]] = None    # the MCP tools offered to this run (substrate/mcp.py), pinned for the run
+        self.last_tool_output: Optional[Dict[str, Any]] = None  # the output of the last inference when the model called native tools
 
 
 # =============================================================================
 async def run(port, params: Dict[str, Any]) -> Dict[str, Any]:
     """A wake answers at once; any other activation may last as long as the run it drives or waits for, so it
     acknowledges itself as long-running (`running`, then a heartbeat) before its single final answer."""
+    own_authority_when_self_called()          # a run that agentic_core started itself acts with its own principal, not on a time-bound delegation
     if params.get("wake") is True:
         return await _run(port, params)
     async with port.keepalive():
@@ -205,7 +210,7 @@ async def _drive(ctx: Ctx, *, recovered: bool) -> str:
         message_id = rt.get("current_message_id")
         # --- #absorb: a user message that arrived while a chain is in progress joins that chain (a pilot_definition only)
         absorbed_now: List[str] = []
-        if message_id is not None and ctx.capacity_ref is None:
+        if message_id is not None and ctx.capacity_ref is None and not mcp.tool_turn_open(rt["active_wait_groups"]):
             absorbed_now = await _absorb(ctx)
             if absorbed_now:
                 steps.pop(message_id, None)                  # a new demand renews the allowance of inferences of the chain
@@ -418,8 +423,8 @@ async def _wait_for_resumption(ctx: Ctx) -> str:
         mbx = (await port.matter_read(ids.mailbox)).content
         if any(e["status"] == "pending" and e["priority"] == "control" for e in mbx["entries"]):
             return "go"       # a control reached a safe point (the waiting state is one)
-        if ctx.capacity_ref is None and await _user_waiting(ctx, mbx):
-            return "go"       # a user message joins the chain in progress; the wait groups stay open
+        if ctx.capacity_ref is None and not mcp.tool_turn_open(rt["active_wait_groups"]) and await _user_waiting(ctx, mbx):
+            return "go"       # a user message joins the chain in progress; the wait groups stay open (never an open native tool turn: its results come first)
         if loop.time() - waiting_since >= wait_timeout_s(ctx):
             await _expire_waits(ctx, rt["active_wait_groups"])      # the answers that did not come become error answers: the wait ends
             waiting_since = loop.time()
@@ -537,6 +542,15 @@ async def _resolve_lost_awaits(ctx: Ctx, groups: List[Dict[str, Any]]) -> None:
                 continue
             if (ctx.cid, item["ref"]) in _inflight:
                 continue                       # still alive in this process: its Response will arrive
+            if str(item["ref"]).startswith("mcp_"):
+                known = await _mcp_status_answer(ctx, item["ref"])
+                if known is not None:          # the gateway holds the terminal state of the call: that is its answer
+                    try:
+                        await ctx.port.call_capacity(f"{CONTEXT}/mailbox.send", {"continuity_id": ctx.cid, "message": build_response_message(
+                            ctx.cid, {"id": item["ref"], "target_capacity": mcp.CALL_CAPACITY}, known)})
+                    except (Refused, ConsistencyError):
+                        pass
+                    continue
             response = {"status": "error", "error": {"origin": "agentic_core", "code": "unresolved",
                                                       "message": "the state of this intention is unknown: its invocation was interrupted and is never replayed"}}
             message = build_response_message(ctx.cid, {"id": item["ref"], "target_capacity": "unknown"}, response)
@@ -605,7 +619,9 @@ async def _compact(ctx: Ctx) -> str:
     view = await _project(ctx, {}, "merge", None)
     # the compaction is one more turn of the conversation, the biggest one: the same system text, the same history and the same schema as
     # every other turn, so the provider reads them from its cache; only the last message differs, and says what is asked
-    request = build_request(ctx.pilot, continuity, view, None, {"kind": "compaction", "instruction": COMPACTION_GUIDE})
+    tools = (ctx.mcp_projection or {}).get("tools") or None
+    request = build_request(ctx.pilot, continuity, view, None, {"kind": "compaction", "instruction": COMPACTION_GUIDE},
+                            tools=tools, tool_choice="none" if tools else None)
     try:
         answer = await _infer(ctx, request)
         summary = (answer.get("succession") or {}).get("summary") if isinstance(answer, dict) else None
@@ -653,20 +669,28 @@ async def _chain_step(ctx: Ctx, message_id: str, stimulus: Optional[Dict[str, An
     # --- #cognition: projection, context, inference, validation (one correction at most) -------
     # The inference window: from the reading of the journal to the writing of the decision nothing else enters the continuity and no other
     # inference runs for it; the request of a user that opened it for this run is taken over here. Applying the effects is outside it.
+    tools = await _mcp_tools(ctx)          # outside the window: the gateway may take seconds to list a server
     async with inference_window.hold(ctx.cid, adopt=[message_id] + list(absorbed or []), yielding=ctx.port.yielding):
         dynamic = stimulus.get("projection_view") if stimulus and stimulus.get("kind") == "projection" else None
         view = dynamic or await _project(ctx, {}, "merge", None)
-        request = build_request(ctx.pilot, continuity, view, current, stimulus, user_messages=absorbed)       # the model never sees the pressure of the context: compacting is a measured threshold, so code
+        request = build_request(ctx.pilot, continuity, view, current, stimulus, user_messages=absorbed, tools=tools,
+                                mcp_unavailable=(ctx.mcp_projection or {}).get("unavailable") or None)       # the model never sees the pressure of the context: compacting is a measured threshold, so code
         output, said = await _infer_valid(ctx, request, await _used_intention_ids(ctx))
-        output = declare_families(ctx.pilot, output)
-        await _record_context_tokens(ctx, message_id)
-        await _record_decision(ctx, message_id, said)
+        if output == mcp.TOOL_TURN:
+            await _record_context_tokens(ctx, message_id)
+            turn = await _record_tool_turn(ctx, message_id, said)
+        else:
+            output = declare_families(ctx.pilot, output)
+            await _record_context_tokens(ctx, message_id)
+            await _record_decision(ctx, message_id, said)
 
     # the active_wait_result was consumed by this inference: its group completes before the decision applies
     if group is not None:
         await _complete_group(ctx, group["id"], consume=group.get("received", []))
 
     # --- #apply_decision ------------------------------------------------------------------
+    if output == mcp.TOOL_TURN:
+        return await _apply_mcp(ctx, turn)
     return await _apply(ctx, continuity, output)
 
 
@@ -691,7 +715,10 @@ async def _capacity_step(ctx: Ctx, continuity: Dict[str, Any], current: Optional
     try:
         output = await ctx.port.call_capacity(f"{ref['context']}/{ref['capacity']}", params, timeout_s=pilot_refs.timeout_s(ref))
     except NotFound as exc:       # the Capacity is missing: this is not the continuity vanishing
-        raise ConsistencyError("the Capacity pilot referenced by pilot_ref does not exist", details={"pilot_ref": ref}) from exc
+        # An admitted caller gets one answer for "no such capacity", "not authorized" and "a Matter the call names does not exist":
+        # the engine does not reveal which (SECURITY.md, invariant 7), so the message says all that the answer can mean.
+        raise ConsistencyError("the Capacity pilot referenced by pilot_ref, or an element its call names, does not exist or may not be used: "
+                               + exc.message, details={"pilot_ref": ref}) from exc
     if isinstance(output, dict):
         output = decode_provider_output("pilot_output", output)       # a strict step schema carries free values as JSON text: same decoding as a pilot_definition's
     try:
@@ -756,7 +783,8 @@ def output_guide(style: str) -> str:
 
 def build_request(pilot: Dict[str, Any], continuity: Dict[str, Any], view: Dict[str, Any], current: Optional[Dict[str, Any]],
                   stimulus: Optional[Dict[str, Any]], correction: Optional[Dict[str, Any]] = None,
-                  user_messages: Optional[List[str]] = None) -> Dict[str, Any]:
+                  user_messages: Optional[List[str]] = None, tools: Optional[List[Dict[str, Any]]] = None,
+                  tool_choice: Optional[str] = None, mcp_unavailable: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The request is the conversation, in this order: the stable system text (cognitive frame, pilot_definition, rules, guide, stable
     capacities, initial intention), the journal as messages with their roles, then what is new (the current intention and message, the
     active stimulus, the context pressure). What was sent at the previous inference is the start of what is sent now."""
@@ -769,6 +797,8 @@ def build_request(pilot: Dict[str, Any], continuity: Dict[str, Any], view: Dict[
         system.append("Rules:\n" + "\n".join(f"- {r}" for r in rules))
     style = schema_style(pilot)
     system.append(output_guide(style))
+    if (mcp.section(pilot) or {}).get("servers"):                             # a pilot with MCP servers: stable, so in the cached prefix
+        system.append(mcp.REMOTE_RULE)
     # the stable capacities of the pilot_definition belong to the cached prefix: they grow with the pilot, not with the conversation
     capacities = [{"ref": c.get("ref"), "target_type": c.get("target_type") or "user", "description": c.get("description")} for c in (pilot.get("known_capacities") or [])]
     if capacities:
@@ -785,6 +815,10 @@ def build_request(pilot: Dict[str, Any], continuity: Dict[str, Any], view: Dict[
     news: Dict[str, Any] = {"continuity_id": continuity["id"], "current_intention": continuity["current_intention"], "current_message": designated}
     if stimulus is not None:
         news["active_stimulus"] = {k: v for k, v in stimulus.items() if k != "projection_view"}
+    if mcp_unavailable:
+        # the MCP servers of the pilot that could not be prepared now, and why: the model is told, so it neither invents a capacity for
+        # them nor promises what it cannot do (authentication_required: an operator must log in; nothing the model can do about it)
+        news["mcp_unavailable"] = [{"server": u.get("server"), "reason": u.get("reason")} for u in mcp_unavailable]
     if user_messages:                                  # separate from the stimulus, which may be pending at the same time
         block = {"message_ids": list(user_messages)}
         validate_value("user_message", block)
@@ -807,6 +841,10 @@ def build_request(pilot: Dict[str, Any], continuity: Dict[str, Any], view: Dict[
         # a strict-compatible projection of pilot_output: accepted by every provider adapter
         "output": {"format": "json_schema", "schema": provider_schema("pilot_output", style=style, describe_depth=0)},
     }
+    if tools:                       # the native MCP tools of a pilot that has some, in the gateway's fixed order (a stable cache prefix)
+        request["tools"] = tools
+        if tool_choice:
+            request["tool_choice"] = tool_choice
     return request
 
 
@@ -825,11 +863,14 @@ async def _infer(ctx: Ctx, request: Dict[str, Any]) -> Any:
     reported = ((payload.get("response") or {}).get("usage") or {}).get("input_tokens")
     # the provider reports the exact size of the context it received; an estimation stands in until it does
     ctx.measured_estimated = not (isinstance(reported, int) and reported > 0)
-    ctx.measured_tokens = estimate_tokens(request["messages"]) if ctx.measured_estimated else reported
+    measured = [request["messages"], request["tools"]] if request.get("tools") else request["messages"]      # the tools are part of the context
+    ctx.measured_tokens = estimate_tokens(measured) if ctx.measured_estimated else reported
     response = payload.get("response") or {}
     ctx.last_finish = response.get("finish_reason") if isinstance(response.get("finish_reason"), str) else None
     ctx.measured_detail = {} if ctx.measured_estimated else usage_detail(response.get("usage") or {}, response, _window_of(ctx))
-    content = ((payload.get("response") or {}).get("output") or {}).get("content")
+    output = response.get("output") or {}
+    ctx.last_tool_output = output if output.get("tool_calls") else None      # a native tool turn: no pilot_output to read
+    content = output.get("content")
     if isinstance(content, str):
         content = extract_json(content)
     if isinstance(content, dict):
@@ -1063,6 +1104,8 @@ async def _infer_valid(ctx: Ctx, request: Dict[str, Any], used_ids: Optional[set
     """(the validated output, the output as the model wrote it with its free values decoded)."""
     repairs: List[Dict[str, Any]] = []
     first = normalize_output(ctx.pilot, await _infer(ctx, request), used_ids, repairs)
+    if ctx.last_tool_output is not None:
+        return mcp.TOOL_TURN, ctx.last_tool_output          # the model called tools: a decision of its own kind, never validated as a pilot_output
     await _trace_repairs(ctx, repairs)
     try:
         return validate_output(first, used_ids), first
@@ -1074,6 +1117,8 @@ async def _infer_valid(ctx: Ctx, request: Dict[str, Any], used_ids: Optional[set
         corrected_request["messages"].append({"role": "user", "content": json.dumps({"validation_error": exc.details.get("errors", [exc.message])}, ensure_ascii=False)})
         repairs = []
         second = normalize_output(ctx.pilot, await _infer(ctx, corrected_request), used_ids, repairs)
+        if ctx.last_tool_output is not None:
+            return mcp.TOOL_TURN, ctx.last_tool_output
         await _trace_repairs(ctx, repairs)
         try:
             return validate_output(second, used_ids), second
@@ -1093,6 +1138,8 @@ def pilot_reference(pilot_ref: Any) -> Optional[str]:
 def _refusal_of(intention: Dict[str, Any], allowed, forbidden, allowed_contexts, forbidden_contexts) -> Optional[str]:
     """Why the policy refuses an intention: its target, and for a launch the pilot it names too."""
     target = intention.get("target_capacity")
+    if isinstance(target, str) and target.startswith(mcp.PROTECTED_PREFIX):
+        return "the MCP namespace is reached through native tools only, never by an intention"
     why = refusal(allowed, forbidden, target, allowed_contexts, forbidden_contexts)
     if why or not (isinstance(target, str) and target.endswith("/pilot.launch")):
         return why
@@ -1220,7 +1267,8 @@ async def _emit(ctx: Ctx, intention: Dict[str, Any]) -> None:
             and (intention.get("parameters") or {}).get("continuity_id") == ctx.cid and not (intention.get("parameters") or {}).get("wake")):
         raise InvalidRequest("a continuity cannot wait for its own activation")      # it would wait for the run that is asking
     await append_trace(ctx.port, ctx.cid, "capacity_intention",
-                       {"id": intention["id"], "target_capacity": intention["target_capacity"], "parameters": intention.get("parameters"),
+                       {"id": intention["id"], "target_capacity": intention["target_capacity"],
+                        "parameters": intention.get("journal_parameters", intention.get("parameters")),
                         "await_response": intention["await_response"]},
                        to=intention["target_capacity"], correlation={"intention_id": intention["id"]}, message_id=f"intention_{ctx.cid}_{intention['id']}")
     if not intention["await_response"]:
@@ -1246,6 +1294,10 @@ async def _awaited(ctx: Ctx, intention: Dict[str, Any], to_type: str) -> None:
         response = {"status": "error", "error": {"origin": "wrapper", "code": "internal", "message": f"no Response obtained: {exc}"}}
     finally:
         _inflight.discard((ctx.cid, intention["id"]))
+    if intention["target_capacity"] == mcp.CALL_CAPACITY and response.get("status") != "ok":
+        # the gateway answers every call it took with a state: an error answer (a lost connection, a timeout, a refusal of the engine) says nothing
+        # of the call itself, so the gateway is asked; what it cannot show terminal stays an error answer, read as an unknown outcome
+        response = await _mcp_status_answer(ctx, intention["id"]) or response
     message = build_response_message(ctx.cid, intention, response)         # written as is in the journal, whatever its size
     last: Optional[Exception] = None
     for attempt in range(DELIVERY_ATTEMPTS):
@@ -1292,3 +1344,110 @@ async def _send_message(ctx: Ctx, pilot_message: Dict[str, Any], current_message
         await ctx.port.call_capacity(f"{CONTEXT}/mailbox.send", {"continuity_id": target, "message": {
             "id": out_id, "from": f"continuity:{ctx.cid}", "to": target, "kind": "continuity",
             "content": pilot_message["content"], "correlation": correlation}})
+
+
+# =============================================================================
+# MCP tools of a Matter pilot (substrate/mcp.py)
+async def _mcp_tools(ctx: Ctx) -> Optional[List[Dict[str, Any]]]:
+    """The native tools offered to this inference: the gateway's projection for the pilot's servers, asked once per run and kept for it (the
+    same tools in the same order keep the provider's cache prefix). None for a pilot without an mcp section. An optional MCP that cannot be
+    prepared leaves the pilot without tools; a mandatory one fails the treatment."""
+    section = mcp.section(ctx.pilot)
+    if section is None or ctx.capacity_ref is not None:
+        return None
+    now = asyncio.get_running_loop().time()
+    if ctx.mcp_projection is not None and now - ctx.mcp_projection["at"] < mcp.PROJECTION_REFRESH_S:
+        return ctx.mcp_projection["tools"] or None
+    if ctx.mcp_projection is not None and mcp.tool_turn_open((await ctx.port.matter_read(ctx.ids.runtime)).content["active_wait_groups"]):
+        return ctx.mcp_projection["tools"] or None          # never a new projection while a tool turn waits for its results
+    try:
+        mcp.require_key()                                      # no key: no tool is offered, rather than tools that can never be called
+        payload = await ctx.port.call_capacity(mcp.TOOLS_CAPACITY, {"servers": list(section.get("servers") or []),
+                                                                    "mandatory": list(section.get("mandatory") or [])})
+    except (mcp.McpUnavailable, AgenticError, asyncio.TimeoutError) as exc:
+        await append_trace(ctx.port, ctx.cid, "error", {"event": "mcp_unavailable", "error": str(exc)})
+        if section.get("mandatory"):
+            raise AgenticError(f"a mandatory MCP server cannot be prepared: {exc}") from exc
+        ctx.mcp_projection = {"projection_id": None, "tools": [], "at": now,
+                              "unavailable": [{"server": alias, "reason": "gateway_unavailable"} for alias in section.get("servers") or []]}
+        return None
+    tools = [{"name": t["model_name"], "description": t.get("description") or "", "input_schema": t["input_schema"]} for t in payload.get("tools") or []]
+    ctx.mcp_projection = {"projection_id": payload.get("projection_id"), "tools": tools, "at": now, "unavailable": payload.get("unavailable") or []}
+    await append_trace(ctx.port, ctx.cid, "event", {"event": "mcp_projection", "projection_id": payload.get("projection_id"),
+                                                     "registry_version": payload.get("registry_version"), "tools": [t["name"] for t in tools],
+                                                     "unavailable": payload.get("unavailable") or []})
+    return tools or None
+
+
+async def _record_tool_turn(ctx: Ctx, message_id: Optional[str], output: Dict[str, Any]) -> Dict[str, Any]:
+    """The tool turn of the model is its decision line, written before any call: the exact assistant turn (sent back unchanged at the next
+    inference) and, for each call, the call_id it is executed under."""
+    calls = [{"id": c.get("id"), "call_id": mcp.call_id(ctx.cid, str(c.get("id"))), "name": c.get("name"), "arguments": c.get("arguments")}
+             for c in output.get("tool_calls") or []]
+    projection_id = (ctx.mcp_projection or {}).get("projection_id")
+    provider, model = _model_of(ctx.pilot)
+    await continuity_store.append(ctx.port, ctx.cid, [{
+        "kind": "completion", "id": new_id("decision"),
+        "content": {"step": mcp.TOOL_TURN, "assistant_content": output.get("assistant_content") or [], "projection_id": projection_id,
+                    "calls": [{k: c[k] for k in ("id", "call_id", "name")} for c in calls]},
+        "from": f"model:{provider}/{model}", "to": f"continuity:{ctx.cid}", "correlation": {"causation_id": message_id} if message_id else {}}])
+    return {"calls": calls, "projection_id": projection_id}
+
+
+async def _apply_mcp(ctx: Ctx, turn: Dict[str, Any]) -> Dict[str, Any]:
+    """The calls of a tool turn: the whole batch is checked first; then one wait group over all of them, created before the first is sent,
+    and one awaited intention to the gateway per call. A call that is not sent gets an explicit answer, so the turn always has one result
+    per call and the run resumes when all are there."""
+    calls = turn["calls"]
+    offered = {t["name"] for t in (ctx.mcp_projection or {}).get("tools") or []}
+    why = mcp.check_batch(calls, offered, mcp.max_calls(ctx.pilot))
+    envelopes: Dict[str, str] = {}
+    if why is None:
+        pilot = pilot_reference(ctx.pilot_ref) or ""
+        try:
+            for c in calls:
+                envelopes[c["call_id"]] = mcp.envelope(ctx.cid, c["call_id"], turn["projection_id"], c["name"], mcp.arguments_text(c["arguments"]), pilot)
+        except mcp.McpUnavailable as exc:
+            why = str(exc)
+    group = {"id": new_id("wg_mcp"), "condition": "all", "received": [], "status": "waiting",
+             "expected": [{"type": "intention", "ref": c["call_id"], "correlation": {"intention_id": c["call_id"]}} for c in calls]}
+    await _create_wait_group(ctx, group)
+    if why is not None:
+        await append_trace(ctx.port, ctx.cid, "error", {"event": "mcp_calls_not_sent", "reason": why, "call_ids": [c["call_id"] for c in calls]})
+        for c in calls:
+            await _deliver(ctx, c["call_id"], mcp.not_executed(c["call_id"], "not_sent: " + why))
+        return {"state": "waiting", "stimulus": None}
+    for index, c in enumerate(calls):
+        args_text = mcp.arguments_text(c["arguments"])
+        intention = {"id": c["call_id"], "target_capacity": mcp.CALL_CAPACITY, "target_type": "user", "await_response": True,
+                     "parameters": {"call_id": c["call_id"], "origin": "agentic", "envelope": envelopes[c["call_id"]],
+                                    "projection_id": turn["projection_id"], "tool": c["name"], "arguments_json": args_text},
+                     # the journal keeps what was called, never the envelope; the arguments are in the decision line already
+                     "journal_parameters": {"call_id": c["call_id"], "tool": c["name"], "projection_id": turn["projection_id"]}}
+        try:
+            await _emit(ctx, intention)
+        except Exception as exc:       # nothing of this call and of those after it was sent: each is answered as such
+            for rest in calls[index:]:
+                await _deliver(ctx, rest["call_id"], mcp.not_executed(rest["call_id"], f"not_sent: {exc}"))
+            break
+    return {"state": "waiting", "stimulus": None}
+
+
+async def _deliver(ctx: Ctx, call: str, response: Dict[str, Any]) -> None:
+    try:
+        await ctx.port.call_capacity(f"{CONTEXT}/mailbox.send", {"continuity_id": ctx.cid, "message": build_response_message(
+            ctx.cid, {"id": call, "target_capacity": mcp.CALL_CAPACITY}, response)})
+    except (Refused, ConsistencyError):
+        pass                 # already delivered under the same id
+
+
+async def _mcp_status_answer(ctx: Ctx, call: str) -> Optional[Dict[str, Any]]:
+    """The gateway's terminal state of a call, as the answer of its intention; None when the gateway cannot give one (unknown, still in progress,
+    or not reachable): the call then stays unresolved, never presented as unsent."""
+    try:
+        status = await ctx.port.call_capacity(mcp.STATUS_CAPACITY, {"call_id": call})
+    except Exception:
+        return None
+    if status.get("known") and status.get("state") in ("completed", "remote_error", "outcome_unknown", "failed_before_transmission"):
+        return {"status": "ok", "payload": status}
+    return None

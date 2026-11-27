@@ -7,6 +7,16 @@ SKIP = os.environ.get("BRIQUE_IT") != "1"
 SKIP_REASON = "integration scenarios need the running engine with the agentic and test contexts started (set BRIQUE_IT=1)"
 
 
+def intention(iid, target, parameters, target_type="reflexive"):
+    return {"id": iid, "target_capacity": target, "target_type": target_type,
+            "parameters": parameters, "await_response": True}
+
+
+def awaited(*intentions):
+    return {"intentions": list(intentions),
+            "wait_group": {"condition": "all", "expected": [{"type": "intention", "ref": i["id"]} for i in intentions]}}
+
+
 def say(text="ok"):
     return {"messages": [{"to": "user:1", "kind": "user", "content": text}]}
 

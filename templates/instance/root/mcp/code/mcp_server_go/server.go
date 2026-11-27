@@ -111,12 +111,17 @@ func (g guard) check(r *http.Request) (int, string) {
 	return 0, ""
 }
 
-func (s *MCPServer) Start() {
+// Handler is the HTTP handler of the legacy transport: /sse and /message.
+func (s *MCPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sse", s.handleSSE)
 	mux.HandleFunc("/message", s.handleMessage)
+	return mux
+}
+
+func (s *MCPServer) Start() {
 	// No WriteTimeout: an SSE stream lives as long as its client. A client that stops reading is dropped by the session buffer.
-	s.srv = &http.Server{Addr: s.addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+	s.srv = &http.Server{Addr: s.addr, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	go func() {
 		log.Printf("[mcp] HTTP server listening on %s", s.addr)

@@ -168,14 +168,17 @@ class S39PromptPartsFailBeforeAnyEffect(PartsScenario):
         self.assertEqual([c for c in calls if c.get("step") == "probe"], [])                       # the model was never asked
         # a Matter the engine does not know is refused by the engine itself, when it checks the Matters bound to the call; the
         # other cases are refused by pilot.infer
-        why = {missing: "not in the catalogue", blank: "the Matter is empty", noorder: "prompt_order is required",
-               emptytext: "non-empty texts"}
+        # a caller with local authority is told the Matter is not in the catalogue; an admitted caller (agentic_core restricted by the
+        # policy) gets the canonical refusal, which does not say whether the Matter or the plan is missing
+        why = {missing: ("not in the catalogue", "does not exist or may not be used"), blank: "the Matter is empty",
+               noorder: "prompt_order is required", emptytext: "non-empty texts"}
         for cid in cases:
             journal = await d.journal(cid)
             kinds = self.kinds(journal)
             failures = [m["content"]["error"] for m in journal if m["kind"] == "error" and m["content"].get("event") == "treatment_failed"]
             self.assertEqual(len(failures), 3, cid)                                               # three attempts in the run, each failing the same way
-            self.assertIn(why[cid], failures[0])                                                  # it stopped for the right reason
+            reasons = why[cid] if isinstance(why[cid], tuple) else (why[cid],)
+            self.assertTrue(any(reason in failures[0] for reason in reasons), (cid, failures[0]))   # it stopped for the right reason
             self.assertNotIn("prompt", kinds)
             self.assertNotIn("completion", kinds)
             self.assertNotIn("pilot", kinds)                                                       # nothing was answered

@@ -167,7 +167,7 @@ export function useEarlierLines(pulse: PulseRuntime, settings: BusySettings, con
           let timer: ReturnType<typeof setTimeout> | undefined;
           const silence = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("no answer"), { code: NO_ANSWER })), EARLIER_ANSWER_MS); });
           const response: any = await Promise.race([request, silence]).finally(() => clearTimeout(timer));
-          if (response.status === "error") throw Object.assign(new Error(response.error?.message ?? "read failed"), { code: response.error?.code });
+          if (response.status === "error") throw Object.assign(new Error(response.error?.message ?? "read failed"), { code: response.error?.details?.reason ?? response.error?.code });
           return journalTextOf(response.payload);
         };
         await readEarlier(read, firstSeq, lines, () => { if (!cancelled) bump(); }, () => cancelled);

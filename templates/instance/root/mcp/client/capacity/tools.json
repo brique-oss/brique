@@ -1,0 +1,77 @@
+{
+ "brique": {
+  "cap_name": "tools",
+  "kind": "compiled",
+  "lang": "go",
+  "rel_ctx": "",
+  "wrapper": "client_mcp_gateway"
+ },
+ "objective": {
+  "name": "tools",
+  "description": "Prepare a projection of the tools of registered MCP servers that a model may be offered: bounded, filtered by the registry, with model-visible names and fingerprints."
+ },
+ "functional": {
+  "#root": {
+   "role": "Read the current registry, list the tools of the requested enabled servers through the MCP SDK under bounded limits, keep those the registry allows, give each a provider-safe model-visible name and a fingerprint of its entry and input schema, and persist the projection that binds each model-visible name to its server, remote tool and schema.",
+   "inputs": {
+    "params": {
+     "servers": {
+      "type": "array"
+     },
+     "mandatory": {
+      "type": "array"
+     }
+    }
+   },
+   "outputs": {
+    "payload": {
+     "projection_id": {
+      "type": "string"
+     },
+     "registry_version": {
+      "type": "integer"
+     },
+     "tools": {
+      "type": "array"
+     },
+     "unavailable": {
+      "type": "array"
+     },
+     "expires_at": {
+      "type": "string"
+     }
+    }
+   },
+   "transformation_contract": {
+    "morphing": "A list of registered server aliases becomes a persisted, bounded projection of the tools a model may call, with the servers that could not be prepared.",
+    "invariants": [
+     "Only servers present and enabled in the registry installed on the machine are listed; an alias the registry does not know is reported unavailable, never contacted.",
+     "Only tools the registry allows for the server are projected (explicit mode: the listed names only); a remote annotation never widens or narrows that choice.",
+     "Each tool entry is { model_name, description, input_schema }; model_name matches [a-zA-Z0-9_-]{1,64}, is unique in the projection, and carries a stable hash suffix whenever sanitization or truncation could collide.",
+     "Listing is bounded per server: at most 5 pages, 200 tools, 512 KiB, and a deadline; a projection holds at most 40 tools.",
+     "Remote descriptions and schemas are external untrusted data: they are bounded and returned as data, never as instructions.",
+     "The projection is persisted in the private store before it is returned, so a gateway restart does not lose it; it records the registry version and the fingerprint of every projected tool.",
+     "Servers are prepared in parallel; one slow or failing optional server does not remove the others."
+    ],
+    "success": [
+     "The payload names a projection_id usable by call until expires_at, the registry version it was built from, the projected tools, and every requested server that could not be prepared with its reason."
+    ],
+    "failure": [
+     "invalid: servers is not a list of aliases.",
+     "refused (reason policy_denied): no registry is installed or it cannot be read; nothing is contacted.",
+     "refused (reason mandatory_unavailable): a server listed in mandatory could not be prepared."
+    ],
+    "notes": [
+     "servers absent or empty means every enabled server of the registry; mandatory is a subset of servers.",
+     "A projection grants nothing by itself: every call through it is checked again against the current registry. That is why tools carries no authority envelope.",
+     "unavailable entries are { server, reason } with reason among not_registered, disabled, authentication_required, deadline, transport, protocol, catalog_too_large."
+    ]
+   },
+   "effects": {
+    "private_store": "Writes one projection file in the wrapper's private store.",
+    "remote_servers": "Opens or reuses an MCP session with each requested server and sends tools/list requests."
+   }
+  }
+ },
+ "subjective": {}
+}

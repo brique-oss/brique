@@ -1,0 +1,17 @@
+{
+ "brique": {
+  "file": "document/mcp_operations.md",
+  "kind": "document",
+  "ref": ""
+ },
+ "functional": {
+  "content_kind": "markdown",
+  "mime_type": "text/markdown",
+  "source_kind": "local"
+ },
+ "objective": {
+  "description": "Runbook of the operator for MCP: registry install, secrets and the authority key, remote tokens, start and stop of the gateway, reading its journal and resolving an unknown outcome, checks.",
+  "name": "mcp_operations"
+ },
+ "subjective": {}
+}

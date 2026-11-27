@@ -12,7 +12,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 def _body_of(provider_request: dict) -> dict:
     """The counting endpoint takes what is read as input; the generation limits are not part of it."""
-    return {k: v for k, v in provider_request.items() if k in ("model", "messages", "system", "output_config")}
+    return {k: v for k, v in provider_request.items() if k in ("model", "messages", "system", "output_config", "tools", "tool_choice")}
 
 
 # <brique:capacity name="tokens.count">

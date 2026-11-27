@@ -128,6 +128,11 @@ No external dependencies beyond the standard library and `golang.org/x/net/webso
 - the payload of a response keeps an integer above 2^53 exact (`json.Number`), every other number is a `float64`: a Matter revision would not survive a `float64`
 - `SIGUSR1` writes `$TMPDIR/brique_wrapper_tasks_<pid>.txt` (slots, settings not at their default, every goroutine with its stack)
 - correlation and `intention.matters` are preserved by the message model
+- a stop or a lost connection runs the `Cancel` hooks of the bindings fragment and cancels `params.Context()` before the runtime waits for the handlers still running; the `Shutdown` hooks run after that wait. Order: stop requested, cancel hooks and context, wait for handlers, shutdown hooks. A handler that waits on long external work watches `params.Context()`; the engine force-kills the process at its `stop_timeout_ms`
+- a panic of a handler answers the caller with a bounded `internal` failure carrying an `error_id` (the panic value is not sent); without it the caller would wait for a response that never comes
+- `params.Yield()` gives the execution slot back while the call waits for something that is not an engine answer (an admission queue of its own), and returns the function that takes it back
+- `params.Caller()` is the origin address of the intention as the engine delivered it: the boundary of a restricted wrapper, or the address of a DSL plan for one of its steps
+- these four facilities (`Cancel`, `Context`, `Yield`, `Caller`) exist in the Go runtime only for now; they are additive, and a fragment that does not use them behaves as before
 
 Run validation with `go test -race ./...` from `lib/`.
 

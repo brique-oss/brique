@@ -73,20 +73,22 @@
         "wrappers": []
       },
       "reflexive": {
-        "_projection_note": "Optional automatic maintenance of the meaning projection (0 or absent = off): projection_sync_interval_ms applies new/changed/deleted descriptors found on disk every N ms; projection_verify_interval_ms adds a slower pass that also catches in-place edits; projection_sync_on_edit (true) refreshes it right after any reflexive edit.* that changed a descriptor, in any context. On demand: meaning.update with {sync:true}.",
+        "_projection_note": "Optional automatic maintenance of the meaning projection (0 or absent = off): projection_sync_interval_ms applies new/changed/deleted descriptors found on disk every N ms; projection_verify_interval_ms adds a slower pass that also catches in-place edits; projection_sync_on_edit (true) refreshes it right after any reflexive edit.* or matter.*/structure.* capacity that changed a descriptor, in any context. On demand: meaning.update with {sync:true}.",
         "projection_sync_interval_ms": 0,
         "projection_sync_on_edit": true,
-        "projection_verify_interval_ms": 0,
-        "repo_name": "my-brique-instance",
-        "root_repo": true
+        "projection_verify_interval_ms": 0
       },
       "trace": {
         "enabled": false,
-        "flush_every_interval": 20,
-        "flush_every_n": 8,
-        "level": "debug",
-        "ring_capacity": 64,
-        "segment_max_bytes": 1048576
+        "flush_every_interval": 1000,
+        "flush_every_n": 256,
+        "level": "minimal",
+        "ring_capacity": 8192,
+        "segment_max_bytes": 16777216
+      },
+      "matter": {
+        "heavy_per_second": 1000,
+        "heavy_burst": 2000
       }
     },
     "engine_version": "0.0.1",

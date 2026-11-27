@@ -43,7 +43,6 @@
                 "python3",
                 "main.py"
               ],
-              "cwd": "code/llm_llm",
               "env": {
                 "BRIQUE_MAX_CONCURRENCY": "64",
                 "BRIQUE_WRAPPER_NAME": "llm_llm"
@@ -54,10 +53,10 @@
               },
               "shell": false,
               "secrets": [
-                {
-                  "name": "anthropic",
-                  "env": "ANTHROPIC_API_KEY"
-                }
+                { "name": "anthropic", "env": "ANTHROPIC_API_KEY", "optional": true },
+                { "name": "openai", "env": "OPENAI_API_KEY", "optional": true },
+                { "name": "mistral", "env": "MISTRAL_API_KEY", "optional": true },
+                { "name": "scaleway", "env": "SCW_SECRET_KEY", "optional": true }
               ]
             },
             "stop_timeout_ms": 1000,
@@ -72,11 +71,11 @@
       "reflexive": {},
       "trace": {
         "enabled": false,
-        "flush_every_interval": 20,
-        "flush_every_n": 8,
+        "flush_every_interval": 1000,
+        "flush_every_n": 256,
         "level": "minimal",
-        "ring_capacity": 64,
-        "segment_max_bytes": 1048576
+        "ring_capacity": 8192,
+        "segment_max_bytes": 16777216
       }
     },
     "engine_version": "0.0.0"

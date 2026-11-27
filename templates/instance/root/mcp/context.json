@@ -1,6 +1,8 @@
 {
   "brique": {
-    "children_list": [],
+    "children_list": [
+      "client"
+    ],
     "ctx_ext_name": "mcp",
     "ctx_name": "mcp",
     "ctx_version": "1",
@@ -31,6 +33,17 @@
           },
           {
             "config": {
+              "_comment": "Logical wrapper route on the root shared listener. Wrapper code uses BRIQUE_WS_URL/BRIQUE_WS_ADDR injected by the engine plus this path.",
+              "egress_enabled": true,
+              "ingress_enabled": true,
+              "path": "/wrapper/mcp_remote"
+            },
+            "driver": "ws",
+            "name": "mcp_remote",
+            "type": "wrapper"
+          },
+          {
+            "config": {
               "_comment": "Logical UI route on the root shared listener. The physical address is resolved dynamically from the instance root's communication.websocket_listener.addr.",
               "egress_enabled": true,
               "ingress_enabled": true,
@@ -54,7 +67,8 @@
         },
         "wrapper_boundary": [
           "mcp_server_go",
-          "mcp_reader"
+          "mcp_reader",
+          "mcp_remote"
         ]
       },
       "execution": {
@@ -71,7 +85,7 @@
                 "."
               ],
               "shell": false,
-              "timeout_ms": 30000,
+              "timeout_ms": 180000,
               "watch": [
                 "../../../../wrapper/go/lib"
               ]
@@ -83,7 +97,8 @@
                 "./mcp_server_go"
               ],
               "env": {
-                "BRIQUE_WRAPPER_NAME": "mcp_server_go"
+                "BRIQUE_WRAPPER_NAME": "mcp_server_go",
+                "BRIQUE_MCP_SDK_ADDR": "127.0.0.1:18210"
               },
               "log": {
                 "enabled": false
@@ -105,7 +120,7 @@
                 "."
               ],
               "shell": false,
-              "timeout_ms": 30000,
+              "timeout_ms": 180000,
               "watch": [
                 "../../../../wrapper/go/lib"
               ]
@@ -119,7 +134,8 @@
               "env": {
                 "BRIQUE_MCP_ADDR": "127.0.0.1:18201",
                 "BRIQUE_MCP_RESPONSE_CAP": "mcp.reader.response",
-                "BRIQUE_WRAPPER_NAME": "mcp_reader"
+                "BRIQUE_WRAPPER_NAME": "mcp_reader",
+                "BRIQUE_MCP_SDK_ADDR": "127.0.0.1:18211"
               },
               "log": {
                 "enabled": false
@@ -128,20 +144,58 @@
             },
             "stop_timeout_ms": 500,
             "wrapper_name": "mcp_reader"
+          },
+          {
+            "build": {
+              "artifact": "build/mcp_remote/mcp_server_go",
+              "artifact_kind": "file",
+              "cmd": [
+                "go",
+                "build",
+                "-o",
+                "../../build/mcp_remote/mcp_server_go",
+                "."
+              ],
+              "shell": false,
+              "timeout_ms": 180000,
+              "watch": [
+                "../../../../wrapper/go/lib"
+              ]
+            },
+            "mode": "compiled",
+            "ready_timeout_ms": 5000,
+            "run": {
+              "cmd": [
+                "./mcp_server_go"
+              ],
+              "env": {
+                "BRIQUE_WRAPPER_NAME": "mcp_remote",
+                "BRIQUE_MCP_RESPONSE_CAP": "mcp.remote.response",
+                "BRIQUE_MCP_LEGACY": "off",
+                "BRIQUE_MCP_SDK_ADDR": "127.0.0.1:18220",
+                "BRIQUE_MCP_TRANSPORTS": "streamable",
+                "BRIQUE_MCP_AUTH": "bearer",
+                "BRIQUE_MCP_TOKEN_RATE": "10"
+              },
+              "log": {
+                "enabled": false
+              },
+              "shell": false,
+              "store": true
+            },
+            "stop_timeout_ms": 500,
+            "wrapper_name": "mcp_remote"
           }
         ]
       },
-      "reflexive": {
-        "repo_name": "spark-pulse-sandbox-mcp",
-        "root_repo": false
-      },
+      "reflexive": {},
       "trace": {
         "enabled": false,
-        "flush_every_interval": 20,
-        "flush_every_n": 8,
+        "flush_every_interval": 1000,
+        "flush_every_n": 256,
         "level": "minimal",
-        "ring_capacity": 64,
-        "segment_max_bytes": 1048576
+        "ring_capacity": 8192,
+        "segment_max_bytes": 16777216
       }
     },
     "engine_version": "0.0.1",

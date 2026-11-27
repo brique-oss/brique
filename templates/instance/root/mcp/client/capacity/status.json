@@ -1,0 +1,69 @@
+{
+ "brique": {
+  "cap_name": "status",
+  "kind": "compiled",
+  "lang": "go",
+  "rel_ctx": "",
+  "wrapper": "client_mcp_gateway"
+ },
+ "objective": {
+  "name": "status",
+  "description": "Tell what the gateway knows of a call_id: whether it was reserved, its state, and its result when it is terminal."
+ },
+ "functional": {
+  "#root": {
+   "role": "Read the gateway journal for one call_id and return its attempt identity, state, transmission and, for a terminal state, the bounded result.",
+   "inputs": {
+    "params": {
+     "call_id": {
+      "type": "string"
+     }
+    }
+   },
+   "outputs": {
+    "payload": {
+     "call_id": {
+      "type": "string"
+     },
+     "known": {
+      "type": "boolean"
+     },
+     "attempt_id": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "transmission": {
+      "type": "string"
+     },
+     "result": {
+      "type": "object"
+     }
+    }
+   },
+   "transformation_contract": {
+    "morphing": "A call_id becomes the gateway's authoritative account of that call.",
+    "invariants": [
+     "Read only: status never reserves, sends or changes an attempt.",
+     "known false means the gateway holds no reservation for the call_id: a call that may be attempted under the current policy.",
+     "A state reserved or transmitting found at startup has already been reconciled: reserved without transmitting becomes failed_before_transmission, transmitting becomes outcome_unknown. status never reports a possibly transmitted call as unsent."
+    ],
+    "success": [
+     "The payload says known, and when known the attempt_id, state, reason, transmission and, for a terminal state, the bounded result."
+    ],
+    "failure": [
+     "invalid: call_id missing or not [A-Za-z0-9_.-]{1,128}."
+    ],
+    "notes": [
+     "Agentic uses status after a lost connection or a restart, and to find attempts of which its journal has no record (orphan effects)."
+    ]
+   },
+   "effects": {}
+  }
+ },
+ "subjective": {}
+}

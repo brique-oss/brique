@@ -41,6 +41,11 @@ type Runtime struct {
 	router     *Router
 	scheduler  *WorkScheduler
 
+	// work is cancelled as soon as the wrapper stops receiving (a stop or a lost connection), before the scheduler waits for the
+	// handlers: a handler that waits on something long watches Params.Context and can end early.
+	work       context.Context
+	cancelWork context.CancelFunc
+
 	stopCh chan struct{}
 }
 
@@ -110,6 +115,9 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 	r.matters = NewMatterManager(r.registry, r.outbound)
 	r.router = NewRouter(r)
 
+	r.work, r.cancelWork = context.WithCancel(context.Background())
+	defer r.cancelWork()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -137,6 +145,9 @@ func (r *Runtime) Run(buildBindings func(*Runtime) BindingsFragment) error {
 		r.router.Route(raw)
 	})
 
+	// stop requested -> cancellation hooks and the work context -> wait for the handlers -> shutdown hooks
+	r.registry.RunCancel()
+	r.cancelWork()
 	r.scheduler.Close()
 	r.registry.RunShutdown()
 	r.correlator.CancelAll("wrapper stopped")

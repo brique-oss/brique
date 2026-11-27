@@ -125,7 +125,16 @@
           "A Capacity pilot absorbs nothing: no message is addressed to it but by its parent, and its plan is never interrupted.",
           "An intention to pilot.launch is checked against the policy of the pilot that asks for it on the pilot it names too: its pilot_ref is read as a reference (<context>/<capacity> or <context>/<matter_id>) and the whole output is refused before any effect when that reference is refused.",
           "Every message the pilot writes carries the message it answers (correlation.causation_id); the last message of a step that ends the chain (no intention, no wait group, nothing awaited) also carries ends_chain, which is the proof that the treatment of that message is complete.",
-          "A takeover does not answer again a message whose chain already ended: the interrupted run wrote the last message of the chain and died before acknowledging the message, so the takeover acknowledges it and records run_recovered with already_answered, instead of presenting it to the pilot again. A chain interrupted before its last message is presented again (a message may then be answered twice, never lost)."
+          "A takeover does not answer again a message whose chain already ended: the interrupted run wrote the last message of the chain and died before acknowledging the message, so the takeover acknowledges it and records run_recovered with already_answered, instead of presenting it to the pilot again. A chain interrupted before its last message is presented again (a message may then be answered twice, never lost).",
+          "An intention of a pilot addressed to /root/mcp/ is refused before any effect, whatever the pilot policy: a model reaches MCP through native tools only.",
+          "A pilot without an mcp section is offered no tool: its inference request is the one it always had and the MCP gateway is never asked.",
+          "The native tools of a pilot come from one projection of the MCP gateway (/root/mcp/client/tools), asked once per run, refreshed at most hourly and never while a tool turn waits for its results; without a granted authority key no tool is offered.",
+          "A native tool turn of the model is its decision line (a completion with step tool_turn), written before any call is sent: the exact assistant turn, and the call_id of each call, stable for one provider call of one continuity.",
+          "The whole batch of tool calls of one turn is checked before any of them is sent (tool offered to the pilot, arguments an object within bounds, ids distinct, at most max_calls_per_turn); a call that is not sent is answered explicitly as not executed, never left without a result.",
+          "Each MCP call is an awaited intention to /root/mcp/client/call with origin agentic and an authority envelope signed by agentic_core over the call_id, the projection, the tool and the SHA-256 of the exact JSON text of the arguments; the journal line of the intention keeps neither the envelope nor the arguments.",
+          "While a native tool turn waits for its results, a user message stays queued: it neither resumes the chain nor is absorbed by it, and comes after the results.",
+          "The next inference receives the tool turn followed at once by one message holding a result for every call of the turn, whatever the order of the journal; a result the view does not hold is said to be absent.",
+          "A lost answer of an MCP call (an error, a timeout, an interrupted run) is first asked to the gateway by call_id (/root/mcp/client/status): a terminal state of the gateway is the answer; otherwise the call stays unresolved and is never presented as unsent."
         ],
         "success": [
           "Exclusive ownership is established before cognition advances.",
@@ -148,7 +157,8 @@
           "Does not roll back already materialized effects.",
           "Does not silently replay uncertain effects after interruption or recovery.",
           "Fails explicitly with a concurrency failure when the bounded retries on revision conflict are exhausted.",
-          "Fails the treatment when the Capacity pilot referenced by pilot_ref does not exist."
+          "Fails the treatment when the Capacity pilot referenced by pilot_ref does not exist.",
+          "Fails the current treatment when a mandatory MCP server of the pilot cannot be prepared."
         ],
         "notes": [
           "Executed by the agentic_core Python wrapper.",

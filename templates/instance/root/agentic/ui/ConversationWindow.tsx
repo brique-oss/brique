@@ -46,6 +46,7 @@ function Item({ item }: { item: ViewItem }) {
         </div>
       );
     case "tool":
+      if (item.mcp) return <McpCard item={item} />;
       return (
         <details style={styles.toolCard}>
           <summary style={styles.toolSummary}>⚙ {item.capacity} · {TOOL_STATUS[item.status]}</summary>
@@ -74,6 +75,29 @@ function Item({ item }: { item: ViewItem }) {
     case "control":
       return <div style={styles.note}>{item.action === "suspend" ? "conversation suspended" : item.action === "resume" ? "conversation resumed" : item.action}</div>;
   }
+}
+
+// what the gateway says of an MCP call, in the person's words
+const MCP_STATES: Record<string, string> = {
+  completed: "completed", remote_error: "the server answered with an error", refused: "refused before sending",
+  failed_before_transmission: "not sent", outcome_unknown: "outcome unknown: it may have been executed",
+};
+
+/** An MCP call: an external server reached through the gateway, told apart from a Brique capacity by its own accent and badge. */
+function McpCard({ item }: { item: Extract<ViewItem, { type: "tool" }> }) {
+  const mcp = item.mcp!;
+  const state = mcp.state ? MCP_STATES[mcp.state] ?? mcp.state : "running";
+  const failed = !!mcp.state && mcp.state !== "completed";
+  return (
+    <details style={styles.mcpCard}>
+      <summary style={styles.toolSummary}>
+        <span style={styles.mcpBadge}>MCP</span> {mcp.server && <b style={styles.mcpServer}>{mcp.server}</b>} · {mcp.tool} · <span style={failed ? styles.mcpFailed : undefined}>{state}</span>
+      </summary>
+      {mcp.reason && <div style={styles.bubbleLabel}>{mcp.reason}</div>}
+      {mcp.texts ? <pre style={styles.pre}>{mcp.texts}</pre> : item.error && <pre style={{ ...styles.pre, ...styles.mcpFailed }}>{item.error}</pre>}
+      <div style={styles.bubbleLabel}>call {String(item.parameters?.call_id ?? item.id)}</div>
+    </details>
+  );
 }
 
 function Composer({ placeholder, disabled, note, onSend }: { placeholder: string; disabled?: boolean; note?: string; onSend: (text: string) => Promise<void> }) {

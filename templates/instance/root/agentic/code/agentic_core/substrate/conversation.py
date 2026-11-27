@@ -10,6 +10,8 @@ reads. The text of a line is written compactly with ordered keys, so the same li
   completion (the output of a step)          assistant
   pilot, capacity_intention                  assistant
   capacity_response                          user (with the id of the intention it answers)
+  completion of a native tool turn           assistant (its blocks), then ONE user message with the tool result of each of its calls,
+                                             whatever the order of the journal (substrate/mcp.py)
   event, projection, error, control          nothing: the follow-up of the machinery is not said to the model
 
 The conversation of a pilot_definition leaves out the lines of effects (skip_kinds: pilot, capacity_intention): its decision, a completion
@@ -21,6 +23,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from .frame import split_frame
+from .mcp import TOOL_TURN, tool_result
 
 
 def text_of(value: Any) -> str:
@@ -56,11 +59,49 @@ def message_of(line: Dict[str, Any]) -> Optional[Dict[str, str]]:
     return None
 
 
+def _is_tool_turn(line: Dict[str, Any]) -> bool:
+    content = line.get("content")
+    return line.get("kind") == "completion" and isinstance(content, dict) and content.get("step") == TOOL_TURN
+
+
+def _with_tool_turns(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The messages of the lines. A native tool turn is followed at once by the results of all its calls, each the first answer the journal
+    holds for its call_id; a result the view does not hold is said to be absent, so a provider always gets one result per call. Lines journaled
+    while the calls were pending (a user message) come after the results, in their order."""
+    if not any(_is_tool_turn(line) for line in lines):
+        return [m for m in (message_of(line) for line in lines) if m is not None]
+    answers: Dict[str, Dict[str, Any]] = {}
+    for line in lines:
+        if line.get("kind") == "capacity_response":
+            answers.setdefault((line.get("correlation") or {}).get("intention_id"), line)
+    used: set = set()
+    messages: List[Dict[str, Any]] = []
+    for line in lines:
+        if _is_tool_turn(line):
+            content = line["content"]
+            messages.append({"role": "assistant", "content": list(content.get("assistant_content") or [])})
+            results = []
+            for call in content.get("calls") or []:
+                answer = answers.get(call.get("call_id"))
+                if answer is not None:
+                    used.add(id(answer))
+                    text, is_error = tool_result(answer.get("content") if isinstance(answer.get("content"), dict) else {}, call.get("name"))
+                else:
+                    text, is_error = "The result of this call is not in this view of the history.", True
+                results.append({"type": "tool_result", "call_id": call.get("id"), "content": text, "is_error": is_error})
+            messages.append({"role": "user", "content": results})
+        elif id(line) not in used:
+            said = message_of(line)
+            if said is not None:
+                messages.append(said)
+    return messages
+
+
 def conversation(view: Dict[str, Any], skip_kinds: Tuple[str, ...] = ()) -> Tuple[List[str], List[Dict[str, str]]]:
     """(texts of the frame, messages of the conversation) of a projection view. Related continuities, when the projection asked for
     them, follow the own lines, each line tagged with its continuity. The lines of the kinds in skip_kinds are not messages."""
     frame, shown = split_frame(view)
-    messages = [m for m in (message_of(line) for line in shown.get("messages") or [] if line.get("kind") not in skip_kinds) if m is not None]
+    messages = _with_tool_turns([line for line in shown.get("messages") or [] if line.get("kind") not in skip_kinds])
     for group in shown.get("related") or []:
         for line in group.get("messages") or []:
             if line.get("kind") in ("framework", "event", "projection", "error", "control") + tuple(skip_kinds):

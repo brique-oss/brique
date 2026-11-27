@@ -41,7 +41,13 @@
     "allowed_contexts": [],
     "_allowed_contexts_note": "Optional. Absolute paths of contexts: a capacity addressed to one of them, or to a context nested in it, may be invoked. Combines with allowed_capacities (a listed capacity or a listed context is enough). forbidden_capacities and forbidden_contexts win.",
     "forbidden_contexts": [],
-    "_forbidden_contexts_note": "Optional. Absolute paths of contexts: no capacity addressed to one of them, or to a context nested in it, may be invoked, whatever the allowed lists say."
+    "_forbidden_contexts_note": "Optional. Absolute paths of contexts: no capacity addressed to one of them, or to a context nested in it, may be invoked, whatever the allowed lists say.",
+    "mcp": {
+      "servers": [],
+      "mandatory": [],
+      "max_calls_per_turn": []
+    },
+    "_mcp_note": "Optional. The MCP servers whose tools the model of this pilot may call natively. servers lists registered server aliases (empty: every enabled server of the registry); mandatory lists those without which the pilot cannot work (their absence fails the treatment, the absence of another only removes its tools); max_calls_per_turn (default 8, at most 32) bounds the tool calls of one model turn. Absent: the pilot sees no tool and its requests are unchanged. The tools come from the outbound MCP gateway (/root/mcp/client), which checks every call again; an intention of the pilot can never address /root/mcp/."
   },
   "subjective": {}
 }

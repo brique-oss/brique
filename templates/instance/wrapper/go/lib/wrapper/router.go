@@ -145,6 +145,13 @@ func incomingMatterParams(matters []map[string]any) map[string]any {
 }
 
 func (r *Router) handleIntention(msg *IntentionMsg, delegation string) {
+	// A panic of hosted code answers the caller with a bounded internal failure instead of leaving it waiting for a response that
+	// would never come; the scheduler's own recovery remains the last resort.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.sendFailure(msg, delegation, fmt.Errorf("handler panic: %T", recovered))
+		}
+	}()
 	switch msg.To.Type {
 	case TypeUser:
 		params := make(map[string]any, len(msg.Params)+1)
